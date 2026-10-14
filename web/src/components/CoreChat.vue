@@ -113,53 +113,55 @@ function showOpeners(fr: FeedRound): boolean {
 <template>
   <div class="core">
     <div ref="el" class="core__feed">
-      <p v-if="feed.length === 0" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
+      <div class="core__inner">
+        <p v-if="feed.length === 0" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
 
-      <template v-for="fr in feed" :key="fr.info.n">
-        <RoundDivider :info="fr.info" />
+        <template v-for="fr in feed" :key="fr.info.n">
+          <RoundDivider :info="fr.info" />
 
-        <template v-if="showOpeners(fr)">
-          <div v-for="(op, i) in openers" :key="`op-${i}`" class="core__msg" :class="`core__msg--${op.who}`">
-            <span v-if="op.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
-            <div class="core__bubble" :class="`core__bubble--${op.who}`">{{ op.text }}</div>
-          </div>
-        </template>
+          <template v-if="showOpeners(fr)">
+            <div v-for="(op, i) in openers" :key="`op-${i}`" class="core__msg" :class="`core__msg--${op.who}`">
+              <span v-if="op.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble" :class="`core__bubble--${op.who}`">{{ op.text }}</div>
+            </div>
+          </template>
 
-        <template v-for="card in fr.cards" :key="card.card_id">
-          <div v-if="cardIntro(card)" class="core__msg core__msg--core">
+          <template v-for="card in fr.cards" :key="card.card_id">
+            <div v-if="cardIntro(card)" class="core__msg core__msg--core">
+              <span class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble core__bubble--core">{{ cardIntro(card) }}</div>
+            </div>
+            <ApprovalCard
+              class="core__card"
+              :card="card"
+              :busy="cardBusy[card.card_id] ?? false"
+              :error="cardError[card.card_id] ?? ''"
+              @approve="emit('approve', card.card_id)"
+              @reject="emit('reject', card.card_id)"
+            />
+          </template>
+
+          <p
+            v-for="v in fr.versions"
+            :key="`${fr.info.n}-${v.block_id}-${v.version}`"
+            class="core__version"
+          >✓ 已生成版本 {{ v.version }}（{{ v.delta_summary ?? '—' }}），文档库已定格，可在「文档」里回看当时全貌</p>
+
+          <div v-for="(line, i) in [...packageLines(fr), ...receiptLines(fr), ...verdictLines(fr)]" :key="`l-${fr.info.n}-${i}`" class="core__msg core__msg--core">
             <span class="core__avatar" aria-hidden="true">核</span>
-            <div class="core__bubble core__bubble--core">{{ cardIntro(card) }}</div>
+            <div class="core__bubble core__bubble--core">{{ line.text }}</div>
           </div>
-          <ApprovalCard
-            class="core__card"
-            :card="card"
-            :busy="cardBusy[card.card_id] ?? false"
-            :error="cardError[card.card_id] ?? ''"
-            @approve="emit('approve', card.card_id)"
-            @reject="emit('reject', card.card_id)"
-          />
         </template>
 
-        <p
-          v-for="v in fr.versions"
-          :key="`${fr.info.n}-${v.block_id}-${v.version}`"
-          class="core__version"
-        >✓ 已生成版本 {{ v.version }}（{{ v.delta_summary ?? '—' }}），文档库已定格，可在右上「查看版本」回看当时全貌</p>
-
-        <div v-for="(line, i) in [...packageLines(fr), ...receiptLines(fr), ...verdictLines(fr)]" :key="`l-${fr.info.n}-${i}`" class="core__msg core__msg--core">
-          <span class="core__avatar" aria-hidden="true">核</span>
-          <div class="core__bubble core__bubble--core">{{ line.text }}</div>
+        <!-- 本次会话的即时对话（M1 mock；R-M2 接真实核心代理） -->
+        <div v-for="(msg, i) in chatMessages" :key="`x-${i}`" class="core__msg" :class="`core__msg--${msg.who}`">
+          <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+          <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
         </div>
-      </template>
-
-      <!-- 本次会话的即时对话（M1 mock；R-M2 接真实核心代理） -->
-      <div v-for="(msg, i) in chatMessages" :key="`x-${i}`" class="core__msg" :class="`core__msg--${msg.who}`">
-        <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
-        <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
-      </div>
-      <div v-if="thinking" class="core__msg core__msg--core">
-        <span class="core__avatar" aria-hidden="true">核</span>
-        <div class="core__bubble core__bubble--core core__bubble--typing">正在思考…</div>
+        <div v-if="thinking" class="core__msg core__msg--core">
+          <span class="core__avatar" aria-hidden="true">核</span>
+          <div class="core__bubble core__bubble--core core__bubble--typing">正在思考…</div>
+        </div>
       </div>
     </div>
 
@@ -189,13 +191,18 @@ function showOpeners(fr: FeedRound): boolean {
 .core__feed {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
+}
+
+/* 滚动容器占满整列（滚动条贴窗口最右），内容限宽只约束内部 */
+.core__inner {
+  max-width: 780px;
+  width: 100%;
+  margin: 0 auto;
   padding: var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  max-width: 780px;
-  width: 100%;
-  margin: 0 auto;
 }
 
 .core__empty {

@@ -208,6 +208,12 @@ function avatarText(name: string): string {
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  /* 侧栏滚动条隐藏（滚轮仍可滚）：页面唯一的纵向滚动条保持在窗口最右 */
+  scrollbar-width: none;
+}
+
+.sidebar::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar__brand {

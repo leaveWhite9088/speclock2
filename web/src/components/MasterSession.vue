@@ -54,40 +54,42 @@ watch(
     </header>
 
     <div class="msession__body">
-      <section class="msession__sec">
-        <h6 class="msession__sec-title">任务</h6>
-        <p v-if="myTasks.length === 0" class="msession__empty">暂无分配到的任务。</p>
-        <ul v-else class="msession__tasks">
-          <li v-for="{ pkg, task } in myTasks" :key="task.task_id" class="msession__task">
-            <code>{{ task.task_id }}</code>
-            <span class="msession__pkg">{{ pkg.package_id }}{{ pkg.origin === 'tech' ? ' · 技术单' : '' }}</span>
-            <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
-          </li>
-        </ul>
-      </section>
+      <div class="msession__inner">
+        <section class="msession__sec">
+          <h6 class="msession__sec-title">任务</h6>
+          <p v-if="myTasks.length === 0" class="msession__empty">暂无分配到的任务。</p>
+          <ul v-else class="msession__tasks">
+            <li v-for="{ pkg, task } in myTasks" :key="task.task_id" class="msession__task">
+              <code>{{ task.task_id }}</code>
+              <span class="msession__pkg">{{ pkg.package_id }}{{ pkg.origin === 'tech' ? ' · 技术单' : '' }}</span>
+              <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
+            </li>
+          </ul>
+        </section>
 
-      <section class="msession__sec">
-        <h6 class="msession__sec-title">过程流</h6>
-        <p v-if="activity.length === 0" class="msession__empty">
-          暂无过程记录（真实遥测 R-M2 接入；mock 模式下从「队列」一键开始即可看到模拟过程）。
-        </p>
-        <ul ref="el" class="msession__feed">
-          <li v-for="item in activity" :key="item.id" class="act" :class="`act--${item.kind}`">
-            <span class="act__ts">{{ item.ts.slice(11, 19) }}</span>
-            <span v-if="item.kind === 'thinking'" class="act__text act__text--dim">⏻ {{ item.text }}</span>
-            <span v-else-if="item.kind === 'tool'" class="act__text">
-              <span class="act__tool">{{ item.text }}</span>
-              <code class="act__meta">{{ item.meta }}</code>
-            </span>
-            <span v-else-if="item.kind === 'edit'" class="act__text">
-              <span class="act__file">{{ item.text }}</span>
-              <code class="act__meta">{{ item.meta }}</code>
-            </span>
-            <span v-else-if="item.kind === 'note'" class="act__text act__text--dim">{{ item.text }}</span>
-            <span v-else class="act__text act__text--msg">{{ item.text }}</span>
-          </li>
-        </ul>
-      </section>
+        <section class="msession__sec">
+          <h6 class="msession__sec-title">过程流</h6>
+          <p v-if="activity.length === 0" class="msession__empty">
+            暂无过程记录（真实遥测 R-M2 接入；mock 模式下从「队列」一键开始即可看到模拟过程）。
+          </p>
+          <ul ref="el" class="msession__feed">
+            <li v-for="item in activity" :key="item.id" class="act" :class="`act--${item.kind}`">
+              <span class="act__ts">{{ item.ts.slice(11, 19) }}</span>
+              <span v-if="item.kind === 'thinking'" class="act__text act__text--dim">⏻ {{ item.text }}</span>
+              <span v-else-if="item.kind === 'tool'" class="act__text">
+                <span class="act__tool">{{ item.text }}</span>
+                <code class="act__meta">{{ item.meta }}</code>
+              </span>
+              <span v-else-if="item.kind === 'edit'" class="act__text">
+                <span class="act__file">{{ item.text }}</span>
+                <code class="act__meta">{{ item.meta }}</code>
+              </span>
+              <span v-else-if="item.kind === 'note'" class="act__text act__text--dim">{{ item.text }}</span>
+              <span v-else class="act__text act__text--msg">{{ item.text }}</span>
+            </li>
+          </ul>
+        </section>
+      </div>
     </div>
   </div>
 </template>
@@ -147,12 +149,16 @@ watch(
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-4);
-  display: grid;
-  gap: var(--sp-4);
+}
+
+/* 滚动容器占满整列（滚动条贴窗口最右），内容限宽只约束内部 */
+.msession__inner {
   max-width: 780px;
   width: 100%;
   margin: 0 auto;
+  padding: var(--sp-4);
+  display: grid;
+  gap: var(--sp-4);
   align-content: start;
 }
 

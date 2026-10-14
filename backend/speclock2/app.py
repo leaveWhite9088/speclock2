@@ -8,7 +8,20 @@ from .config import Settings
 from .db import Database
 from .errors import register_error_handlers
 from .pi_runtime import PiManager
-from .routers import cards, chat, conventions, health, project, projects, queue, stats, timeline
+from .routers import (
+    cards,
+    chat,
+    cli_sessions,
+    conventions,
+    health,
+    masters,
+    model_registry,
+    project,
+    projects,
+    queue,
+    stats,
+    timeline,
+)
 
 
 def create_app() -> FastAPI:
@@ -33,11 +46,14 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(projects.router)
+    app.include_router(model_registry.router)
+    app.include_router(cli_sessions.router)
     app.include_router(project.router)
     app.include_router(cards.router)
     app.include_router(chat.router)
     app.include_router(timeline.router)
     app.include_router(queue.router)
+    app.include_router(masters.router)
     app.include_router(conventions.router)
     app.include_router(stats.router)
     return app

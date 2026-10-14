@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class RegistryBase(DeclarativeBase):
-    """全局注册表基类：只存项目清单，不存业务数据（DESIGN.md §14.1）。"""
+    """全局注册表基类：项目清单 + Harness×模型登记，不存业务数据（DESIGN.md §14.1）。"""
 
 
 class LedgerBase(DeclarativeBase):
@@ -28,6 +28,22 @@ class Project(RegistryBase):
     name: Mapped[str] = mapped_column(sa.Text)
     created_at: Mapped[str] = mapped_column(sa.Text)
     status: Mapped[str] = mapped_column(sa.Text, default="active")
+
+
+class ModelEntry(RegistryBase):
+    """Harness×模型登记：纯信息记录（工作台只唤醒 Harness，不替它配置模型）。
+
+    「这个 Harness 有哪些模型」由人工登记，添加主代理时 harness+model
+    只能从这里选（登记与选用的一致性由创建端点校验）。
+    """
+
+    __tablename__ = "model_entries"
+    __table_args__ = (sa.UniqueConstraint("harness", "model", name="uq_harness_model"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    harness: Mapped[str] = mapped_column(sa.Text)
+    model: Mapped[str] = mapped_column(sa.Text)
+    created_at: Mapped[str] = mapped_column(sa.Text)
 
 
 # ---------- 账本：文档系统（DESIGN.md §5） ----------

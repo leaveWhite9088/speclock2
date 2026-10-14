@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -24,6 +25,11 @@ def send(obj: dict) -> None:
 
 
 def main() -> None:
+    # 测试探针：SPECLOCK2_FAKE_RECORD_ARGV=path 时把收到的完整命令行落盘，供断言接续参数
+    record = os.environ.get("SPECLOCK2_FAKE_RECORD_ARGV")
+    if record:
+        Path(record).write_text(json.dumps(sys.argv), encoding="utf-8")
+
     args = sys.argv[1:]
     sleep_s, fail, positional = 0.0, False, []
     i = 0

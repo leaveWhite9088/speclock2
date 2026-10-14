@@ -175,6 +175,23 @@ def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request)
     return serialize.task_out(task)
 
 
+class LaunchPlanBody(BaseModel):
+    prompt: str = ""
+
+
+@router.post("/tasks/{task_id}/launch-plan")
+def launch_plan(slug: str, task_id: str, body: LaunchPlanBody, request: Request) -> dict:
+    """唤醒计划：真实 chief 的 dispatch 工具先问这里拿启动参数，再自己 spawn+监控。
+
+    工作台统一计算「怎么启动 Harness」（名册 harness×harness-map×会话接续），
+    被 spawn 的一方（TS 扩展 / mock 执行器）不再各自解析映射。
+    """
+    _project_or_404(request, slug)
+    from ..dispatcher import plan_task_launch
+
+    return plan_task_launch(request.app, slug, parse_prefixed_id(task_id, "T") or -1, body.prompt)
+
+
 @router.post("/tasks/{task_id}/receipt")
 def submit_receipt(slug: str, task_id: str, body: ReceiptBody, request: Request) -> dict:
     _project_or_404(request, slug)

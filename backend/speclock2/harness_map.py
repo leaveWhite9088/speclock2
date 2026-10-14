@@ -4,10 +4,15 @@
 {
   "watchdog_minutes_default": 60,
   "masters":   {"backend": "sl2-fake", "frontend": "sl2-fake"},
-  "harnesses": {"sl2-fake": {"command": "...", "args": [...], "prompt_mode": "arg"|"inline"}}
+  "harnesses": {"sl2-fake": {"command": "...", "args": [...], "prompt_mode": "arg"|"inline",
+                             "resume_args": ["--session-id", "{session_id}", ...]}}
 }
 - prompt_mode=arg：prompt 追加为最后一个参数；
-- prompt_mode=inline：args 中 "{prompt}" 占位符替换（pi/claude/codex 的官方 headless 形态）。
+- prompt_mode=inline：args 中 "{prompt}" 占位符替换（pi/claude/codex 的官方 headless 形态）；
+- resume_args：主代理绑定 CLI 会话时追加的接续参数模板，{session_id}/{session_dir} 占位。
+
+工作台不替 Harness 做模型选择（用户原则）：这里不出现任何 --model 注入，
+harness 用它自己配置的模型；「某 Harness 有哪些模型」只在 /api/models 登记。
 """
 
 from __future__ import annotations
@@ -22,20 +27,13 @@ from .pi_runtime import resolve_pi_command
 DEFAULT_MASTER_HARNESS = "sl2-fake"
 
 
-def master_model() -> str | None:
-    """主代理模型：优先 SPECLOCK2_MASTER_MODEL，否则沿用核心代理的 provider/model。"""
-    m = os.environ.get("SPECLOCK2_MASTER_MODEL")
-    if m:
-        return m
-    provider = os.environ.get("SPECLOCK2_CHIEF_PROVIDER", "")
-    model = os.environ.get("SPECLOCK2_CHIEF_MODEL", "")
-    if provider and model:
-        return f"{provider}/{model}"
-    return model or None
+def _chief_configured() -> bool:
+    """核心代理已配真模型 → 主代理默认唤醒真 pi（key 复用）；否则替身兜底。"""
+    return bool(os.environ.get("SPECLOCK2_CHIEF_PROVIDER") and os.environ.get("SPECLOCK2_CHIEF_MODEL"))
 
 
 def default_map() -> dict:
-    """默认映射：配置了真模型 → 主代理直接唤醒 pi（真 CLI，继承 provider key）；
+    """默认映射：核对了 provider key 的环境主代理直接唤醒 pi；
     未配置 → 落到零依赖替身，无 key 也能全链自测。"""
     backend_dir = Path(__file__).resolve().parent.parent
     fake = backend_dir / "scripts" / "fake_harness.py"
@@ -47,29 +45,28 @@ def default_map() -> dict:
             "note": "被派发 harness 替身：无 key 自测用；主代理默认走 pi，本条仅兜底",
         },
     }
-    model = master_model()
     pi_cmd = resolve_pi_command()
     if pi_cmd and pi_cmd[0].lower().endswith(("node", "node.exe")):  # node 直启 cli.js，避开 .cmd
-        pi_args = [*pi_cmd[1:], "--mode", "json", "-p", "{prompt}", "--no-session"]
-        if model:
-            pi_args += ["--model", model]
         harnesses["pi"] = {
             "command": pi_cmd[0],
-            "args": pi_args,
+            "args": [*pi_cmd[1:], "--mode", "json", "-p", "{prompt}", "--no-session"],
             "prompt_mode": "inline",
+            # 接续会话：按文件头 id 定位（--session-dir 传会话文件所在目录）
+            "resume_args": ["--session-id", "{session_id}", "--session-dir", "{session_dir}"],
         }
     harnesses["claude-code"] = {
         "command": "claude",
         "args": ["-p", "{prompt}", "--output-format", "stream-json", "--verbose"],
         "prompt_mode": "inline",
+        "resume_args": ["--resume", "{session_id}"],
     }
     harnesses["codex"] = {
         "command": "codex",
         "args": ["exec", "--json", "{prompt}"],
         "prompt_mode": "inline",
     }
-    # 有真模型 → 主代理默认真 CLI；否则替身（保证无 key 环境开箱可测）
-    default_master = "pi" if (model and "pi" in harnesses) else DEFAULT_MASTER_HARNESS
+    # 核心代理已配真模型 → 主代理默认真 CLI；否则替身（保证无 key 环境开箱可测）
+    default_master = "pi" if (_chief_configured() and "pi" in harnesses) else DEFAULT_MASTER_HARNESS
     return {
         "watchdog_minutes_default": 60,
         "masters": {"backend": default_master, "frontend": default_master},
@@ -87,14 +84,17 @@ def load_or_create(data_dir: Path) -> dict:
     return cfg
 
 
-def resolve_harness(cfg: dict, master: str | None) -> dict:
-    """master → harness 配置；未命中依次退到：默认替身 → 配置内第一个 harness。"""
+def resolve_harness_name(cfg: dict, master: str | None) -> str:
+    """master → harness 名；未命中依次退到：默认替身 → 配置内第一个 harness。"""
     harnesses = cfg.get("harnesses") or {}
     name = (cfg.get("masters") or {}).get(master or "") or DEFAULT_MASTER_HARNESS
-    resolved = harnesses.get(name) or harnesses.get(DEFAULT_MASTER_HARNESS)
-    if resolved is None and harnesses:
-        resolved = next(iter(harnesses.values()))
-    return resolved or {}
+    if name not in harnesses:
+        name = DEFAULT_MASTER_HARNESS if DEFAULT_MASTER_HARNESS in harnesses else (next(iter(harnesses), name))
+    return name
+
+
+def resolve_harness(cfg: dict, master: str | None) -> dict:
+    return (cfg.get("harnesses") or {}).get(resolve_harness_name(cfg, master)) or {}
 
 
 def build_argv(harness_cfg: dict, prompt: str) -> list[str]:
@@ -103,3 +103,16 @@ def build_argv(harness_cfg: dict, prompt: str) -> list[str]:
     if harness_cfg.get("prompt_mode", "arg") == "arg":
         args.append(prompt)
     return [harness_cfg["command"], *args]
+
+
+def build_resume_args(harness_cfg: dict, session_id: str, session_dir: str | None) -> list[str] | None:
+    """会话接续参数：模板含 {session_dir} 但目录没探到时返回 None（放弃接续，新会话照常）。"""
+    template = harness_cfg.get("resume_args") or []
+    if not template:
+        return None
+    if any("{session_dir}" in str(a) for a in template) and not session_dir:
+        return None
+    return [
+        str(a).replace("{session_id}", session_id).replace("{session_dir}", session_dir or "")
+        for a in template
+    ]

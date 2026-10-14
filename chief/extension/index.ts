@@ -11,12 +11,9 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
 
 const API = process.env.SPECLOCK2_API_BASE || "http://127.0.0.1:8000";
 const SLUG = process.env.SPECLOCK2_SLUG || "";
-const DATA_DIR = process.env.SPECLOCK2_DATA_DIR || "";
 const REPO_ROOT = process.env.SPECLOCK2_REPO_ROOT || process.cwd();
 
 /** 调工作台 REST；非 2xx 抛错（工具结果向模型暴露失败原因）。 */
@@ -120,31 +117,22 @@ export default function (pi: ExtensionAPI) {
 				watchdog_minutes: Type.Number({ default: 60, description: "看门狗超时（分钟）" }),
 			}),
 			async execute(_toolCallId, p) {
-				// 1. 查任务（master 决定 harness）
-				const pkgs = await api("GET", "/packages");
-				const pkg = pkgs.items.find((x: any) => x.tasks.some((t: any) => t.task_id === p.task_id));
-				const task = pkg?.tasks.find((t: any) => t.task_id === p.task_id);
-				if (!task) throw new Error(`任务 ${p.task_id} 不存在`);
-
-				// 2. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）
+				// 1. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）
 				const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
 				await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: watchdogMinutes });
 
-				// 3. harness 映射（与 mock 执行器共用同一配置文件）
-				const map = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "harness-map.json"), "utf-8"));
-				const harnessName = map.masters?.[task.master ?? ""] ?? "sl2-fake";
-				const harness = map.harnesses?.[harnessName] ?? map.harnesses?.["sl2-fake"];
-				if (!harness) throw new Error(`harness 映射缺失：${harnessName}`);
-				let argv: string[] = (harness.args ?? []).map((a: string) => a.replace("{prompt}", p.prompt));
-				if ((harness.prompt_mode ?? "arg") === "arg") argv = [...argv, p.prompt];
+				// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续，
+				//    与 mock 执行器同一事实源）；这里只负责 spawn + 监控
+				const plan = await api("POST", `/tasks/${p.task_id}/launch-plan`, { prompt: p.prompt });
+				const argv: string[] = plan.argv ?? [];
+				const isCmd = !!plan.wrap_cmd;
+				const finalArgv = isCmd ? ["cmd", "/c", plan.command, ...argv] : argv;
+				const command = isCmd ? "cmd" : plan.command;
 
-				// 4. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
+				// 3. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
 				const started = Date.now();
 				const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
-					const isCmd = /\.cmd$/i.test(harness.command);
-					const finalArgv = isCmd ? ["cmd", "/c", harness.command, ...argv] : argv;
-					const command = isCmd ? "cmd" : harness.command;
-					const proc = spawn(command, finalArgv, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+					const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
 					let buffer = "";
 					let text = "";
 					let usage: any = null;
@@ -190,7 +178,7 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				// 5. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
+				// 4. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
 				const files = (result.text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
 				const receipt = await api("POST", `/tasks/${p.task_id}/receipt`, {
 					files_changed: files,

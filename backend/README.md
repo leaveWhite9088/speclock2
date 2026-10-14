@@ -151,8 +151,19 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 | POST | `/api/p/{slug}/tech-orders` | 技术任务单 `{intent,scope[],baseline?,acceptance[]}` → origin=tech 任务包（不进版本链）→ `tech.order` |
 | GET/PUT/POST | `/api/p/{slug}/conventions`、`/conventions/draft`、`/conventions/approve` | 全局约定：当前版+草稿 / 草稿写入 / `{说明,动机}` 产生 ConventionVersion（首版 1.0.0，后续 PATCH） |
 | GET | `/api/p/{slug}/stats` | 仪表盘聚合（轮次/卡片/任务包/任务状态） |
+| GET/POST | `/api/models`、`DELETE /api/models/{id}` | Harness×模型**登记**（全局，不挂项目）：纯信息记录，重复登记 409；工作台不替 Harness 配置模型，派发不注入 `--model` |
+| GET | `/api/cli-sessions` | **探测** pi CLI 自己的会话目录（`~/.pi/agent/sessions/**`，可用 `PI_CODING_AGENT_SESSION_DIR`/`SPECLOCK2_PI_SESSIONS_DIR` 覆盖）：`{id,title,updated_at}`，标题规则与 pi 会话选择器一致（session_info 命名优先，否则首条用户消息） |
+| GET/POST | `/api/p/{slug}/masters` | 主代理名册：`{name,duty,dir,harness,model,session}`；harness×model 必须来自登记（422）、session 必须探测得到（422）、同名 409 |
+| POST | `/api/p/{slug}/tasks/{id}/launch-plan` | **唤醒计划**：统一计算「怎么启动该任务的 harness」（名册 harness × harness-map × 会话接续 `--session-id/--session-dir`），真实 chief 的 dispatch 工具与 mock 执行器共用；响应 `{harness,command,argv,cwd,wrap_cmd,watchdog_minutes}` |
 
-对外 id 格式：`E-0001`（事件）/ `C-0001`（卡片）/ `P-0001`（任务包）/ `T-0001`（任务）/ `O-0001`（技术单）；block/domain/document id 为纯数字字符串。
+对外 id 格式：`E-0001`（事件）/ `C-0001`（卡片）/ `P-0001`（任务包）/ `T-0001`（任务）/ `O-0001`（技术单）/ `mdl-N`（模型登记）；block/domain/document/master id 为纯数字字符串。
+
+## 唤醒与探测边界（用户原则）
+
+工作台**只做两件事**：启动 Harness（launch-plan + spawn）与监控/探测（会话扫描、看门狗、遥测解析）。
+不替 Harness 做模型选择——harness 用它自己配置的模型，`harness-map.json` 的默认映射不含任何 `--model`；
+「某 Harness 有哪些模型」只是 `/api/models` 里的登记信息，主代理名册引用它（创建时强校验），
+派发时按名册 harness 唤醒 CLI，绑定了会话则带 `--session-id/--session-dir` 接续（pi 形态，其余 harness 在 harness-map.json 配 `resume_args` 模板）。
 
 ## 账本表
 

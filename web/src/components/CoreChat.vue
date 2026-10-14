@@ -6,27 +6,30 @@ import RoundDivider from './RoundDivider.vue'
 import ApprovalCard from './ApprovalCard.vue'
 
 /**
- * 核心代理会话：平时只看这里——口语化的汇报与提案引入，
- * 审批卡片内联呈现；技术细节（工具调用/文件编辑）收在主代理工作流里。
+ * 核心代理会话：平时只看这里——口语化的汇报与提案引入，审批卡片内联呈现。
+ * 人只发自然语言（发送/停止）；卡片由核心代理自己起草（R-M2 接真实核心代理）。
  */
 const props = defineProps<{
   feed: FeedRound[]
   openers: Array<{ who: 'human' | 'core'; text: string }>
+  chatMessages: Array<{ who: 'human' | 'core'; text: string }>
+  thinking: boolean
   emptyNote?: string
   cardBusy: Record<string, boolean>
   cardError: Record<string, string>
 }>()
 
 const emit = defineEmits<{
+  (e: 'send', text: string): void
+  (e: 'stop'): void
   (e: 'approve', cardId: string): void
   (e: 'reject', cardId: string): void
-  (e: 'open-card'): void
-  (e: 'open-tech'): void
 }>()
 
 type Line = { who: 'human' | 'core'; text: string }
 
 const el = ref<HTMLElement | null>(null)
+const draft = ref('')
 
 async function scrollToEnd(): Promise<void> {
   await nextTick()
@@ -38,11 +41,18 @@ onMounted(() => {
 })
 
 watch(
-  () => props.feed,
+  () => [props.feed, props.chatMessages.length, props.thinking],
   () => {
     void scrollToEnd()
   },
 )
+
+function send(): void {
+  const text = draft.value.trim()
+  if (!text || props.thinking) return
+  draft.value = ''
+  emit('send', text)
+}
 
 /** 核心代理的口语化汇报：从账本事实派生（不是 AI 转述，A2） */
 function cardIntro(round: FeedRound['cards'][number]): string {
@@ -141,18 +151,30 @@ function showOpeners(fr: FeedRound): boolean {
           <div class="core__bubble core__bubble--core">{{ line.text }}</div>
         </div>
       </template>
+
+      <!-- 本次会话的即时对话（M1 mock；R-M2 接真实核心代理） -->
+      <div v-for="(msg, i) in chatMessages" :key="`x-${i}`" class="core__msg" :class="`core__msg--${msg.who}`">
+        <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+        <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
+      </div>
+      <div v-if="thinking" class="core__msg core__msg--core">
+        <span class="core__avatar" aria-hidden="true">核</span>
+        <div class="core__bubble core__bubble--core core__bubble--typing">正在思考…</div>
+      </div>
     </div>
 
     <footer class="core__composer">
       <input
+        v-model="draft"
         class="core__input"
         type="text"
-        disabled
-        placeholder="和核心代理对话（接入轮上线）；现在可先用下方按钮起草"
-        aria-label="核心代理输入框（M1 占位）"
+        placeholder="给核心代理发消息…（Enter 发送）"
+        aria-label="核心代理输入框"
+        :disabled="thinking"
+        @keydown.enter.prevent="send"
       />
-      <button type="button" class="btn btn--ghost" @click="emit('open-tech')">技术任务单</button>
-      <button type="button" class="btn btn--primary" @click="emit('open-card')">起草卡片</button>
+      <button v-if="thinking" type="button" class="btn" @click="emit('stop')">停止</button>
+      <button v-else type="button" class="btn btn--primary" :disabled="!draft.trim()" @click="send">发送</button>
     </footer>
   </div>
 </template>
@@ -226,6 +248,10 @@ function showOpeners(fr: FeedRound): boolean {
 .core__bubble--human {
   background: var(--c-accent);
   color: var(--c-accent-ink);
+}
+
+.core__bubble--typing {
+  color: var(--c-ink-3);
 }
 
 .core__card {

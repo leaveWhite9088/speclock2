@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createApiClient } from './api/client'
 import type {
   ApiClient,
-  Card,
   FeedVersion,
   MasterInfo,
   Package,
@@ -11,7 +10,6 @@ import type {
   ProjectDetail,
   ProjectTree,
   TaskReceipt,
-  TechOrder,
 } from './api/client'
 import { createMockApiClient, getMockActivity, getMockCoreOpeners, isMockQueueRunning } from './api/mock'
 import type { DrawerKey, FeedRound, SessionTarget } from './types'
@@ -25,8 +23,6 @@ import QueuePanel from './components/QueuePanel.vue'
 import DocsPanel from './components/DocsPanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
 import DashboardPanel from './components/DashboardPanel.vue'
-import CardComposer from './components/CardComposer.vue'
-import TechOrderComposer from './components/TechOrderComposer.vue'
 
 type Mode = 'probing' | 'live' | 'mock'
 
@@ -47,8 +43,36 @@ const masters = ref<MasterInfo[]>([])
 // 会话与抽屉
 const session = ref<SessionTarget>({ kind: 'core' })
 const drawer = ref<DrawerKey | null>(null)
-const showCardComposer = ref(false)
-const showTechComposer = ref(false)
+
+// 即时对话（M1 mock：核心代理 canned 回复；R-M2 接真实核心代理）
+const chatMessages = ref<Array<{ who: 'human' | 'core'; text: string }>>([])
+const thinking = ref(false)
+let replyTimer: ReturnType<typeof setTimeout> | null = null
+
+const CANNED_REPLIES = [
+  '收到。我先对照现有的规则和契约梳理一下，需要动文档的话，我会整理成审批卡片给你确认。',
+  '明白。如果这件事不动业务规则和契约，我会开一张技术任务单走技术通道；动的话走审批卡片，你批了再派。',
+  '好的。我核一下这个需求影响哪些模块，梳理好之后在卡片里给你看变更明细和派发对象。',
+]
+
+function sendToCore(text: string): void {
+  chatMessages.value = [...chatMessages.value, { who: 'human', text }]
+  thinking.value = true
+  const reply = CANNED_REPLIES[chatMessages.value.filter((m) => m.who === 'human').length % CANNED_REPLIES.length]
+  replyTimer = setTimeout(() => {
+    replyTimer = null
+    thinking.value = false
+    chatMessages.value = [...chatMessages.value, { who: 'core', text: reply }]
+  }, 1400)
+}
+
+function stopCore(): void {
+  if (replyTimer !== null) {
+    clearTimeout(replyTimer)
+    replyTimer = null
+  }
+  thinking.value = false
+}
 
 // 动作状态
 const cardBusy = ref<Record<string, boolean>>({})
@@ -124,8 +148,8 @@ async function selectProject(slug: string): Promise<void> {
   currentSlug.value = slug
   session.value = { kind: 'core' }
   drawer.value = null
-  showCardComposer.value = false
-  showTechComposer.value = false
+  stopCore()
+  chatMessages.value = []
   loadError.value = ''
   feed.value = []
   feedError.value = ''
@@ -278,17 +302,7 @@ async function startQueue(): Promise<void> {
   }
 }
 
-/* ---------- 起草 / 建单 / 抽屉 ---------- */
-
-function onCardCreated(_card: Card): void {
-  showCardComposer.value = false
-  void refreshAll()
-}
-
-function onTechCreated(_order: TechOrder): void {
-  showTechComposer.value = false
-  void refreshAll()
-}
+/* ---------- 起草 / 抽屉 ---------- */
 
 function onToggleDrawer(key: DrawerKey): void {
   drawer.value = drawer.value === key ? null : key
@@ -349,13 +363,15 @@ onMounted(() => {
             v-else
             :feed="feed"
             :openers="coreOpeners"
+            :chat-messages="chatMessages"
+            :thinking="thinking"
             :empty-note="feedError ? `账本数据不可用：${feedError}` : undefined"
             :card-busy="cardBusy"
             :card-error="cardError"
+            @send="sendToCore"
+            @stop="stopCore"
             @approve="approveCard"
             @reject="rejectCard"
-            @open-card="showCardComposer = true"
-            @open-tech="showTechComposer = true"
           />
         </main>
 
@@ -390,21 +406,6 @@ onMounted(() => {
         </RightDrawer>
       </div>
     </div>
-
-    <CardComposer
-      v-if="showCardComposer"
-      :client="client"
-      :slug="currentSlug"
-      @close="showCardComposer = false"
-      @created="onCardCreated"
-    />
-    <TechOrderComposer
-      v-if="showTechComposer"
-      :client="client"
-      :slug="currentSlug"
-      @close="showTechComposer = false"
-      @created="onTechCreated"
-    />
   </div>
 </template>
 

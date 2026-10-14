@@ -38,6 +38,34 @@ ol {
   list-style: none;
 }
 
+/* ---- 滚动条：贴边、细、淡，意思到了就行 ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-scrollbar) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--c-scrollbar);
+  border-radius: 2px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--c-border-strong);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ---- 徽标：默认中性描边小片；语义色只保留 ok / danger ---- */
 .badge {
   display: inline-flex;

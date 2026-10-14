@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import type { ApiClient, Block, ProjectTree } from '../api/client'
+import type { ApiClient, Block, FeedVersion, ProjectTree, VersionDetail } from '../api/client'
 import DraftViewer from './DraftViewer.vue'
 
-// 模块全景（S1 迁入 chat-first 左面板）：自取树、自管新建流与草稿查看
+/**
+ * 文档抽屉（模块全景）：三层树 + 新建流 + 草稿查看 + 版本切换。
+ * 版本沿用 v1 的独立粒度：每个模块可单独调版本（看当时快照），
+ * 每个大业务（域）也能整体调版本（域内模块各自取"该轮次时"的最新版本）。
+ */
 const props = defineProps<{
   client: ApiClient | null
   slug: string
+  /** 按模块分组的版本发布记录（含轮次），由账本投影提供 */
+  versionsByBlock: Record<string, FeedVersion[]>
 }>()
 
 type CreateTarget =
@@ -29,6 +35,13 @@ const block = ref<Block | null>(null)
 const blockError = ref('')
 const blockLoading = ref(false)
 
+/** 版本视角：blockId → 选中查看的历史版本（'' = 当前）；domainId → 域级回看的轮次 */
+const blockView = ref<Record<string, string>>({})
+const domainView = ref<Record<string, number | 'current'>>({})
+const snapshot = ref<VersionDetail | null>(null)
+const snapshotLoading = ref(false)
+const snapshotError = ref('')
+
 const createTarget = ref<CreateTarget | null>(null)
 const createTitle = ref('')
 const createError = ref('')
@@ -44,8 +57,38 @@ const createLabel = computed(() => {
   return `在「${t.documentTitle}」下新建模块`
 })
 
+function blockVersions(id: string): FeedVersion[] {
+  return [...(props.versionsByBlock[id] ?? [])].sort((a, b) => a.round - b.round)
+}
+
+/** 域内出现过的版本发布轮次（倒序） */
+function domainRounds(domainId: string, documents: ProjectTree['items'][number]['documents']): number[] {
+  const rounds = new Set<number>()
+  for (const doc of documents) {
+    for (const b of doc.blocks) {
+      for (const v of blockVersions(b.id)) rounds.add(v.round)
+    }
+  }
+  void domainId
+  return [...rounds].sort((a, b) => b - a)
+}
+
+/** 某模块"截至轮次 R"时的最新版本 */
+function asOfVersion(blockId: string, round: number): FeedVersion | null {
+  return blockVersions(blockId).filter((v) => v.round <= round).at(-1) ?? null
+}
+
+/** 树上模块行的版本徽标：显式块级选择 > 域级回看 > 当前版本 */
+function badgeText(b: { id: string; current_published_version: string | null }): string {
+  const view = blockView.value[b.id]
+  if (view) return view
+  const domain = tree.value?.items.find((d) => d.documents.some((doc) => doc.blocks.some((x) => x.id === b.id)))
+  const round = domain ? domainView.value[domain.id] : undefined
+  if (typeof round === 'number') return asOfVersion(b.id, round)?.version ?? '未发布'
+  return b.current_published_version ?? '草稿'
+}
+
 async function loadTree(expandAll: boolean): Promise<void> {
-  // client 就绪可能早于项目选定（bootstrap 时序），空 slug 不发请求
   if (!props.client || !props.slug) return
   treeLoading.value = true
   treeError.value = ''
@@ -75,13 +118,13 @@ watch(
   { immediate: true },
 )
 
-/** 批准卡片会发布新版本：树上的版本徽标需要刷新 */
-watch(
-  () => props.slug,
-  () => {
-    resetSelection()
-  },
-)
+function resetSelection(): void {
+  selectedBlockId.value = null
+  block.value = null
+  blockError.value = ''
+  snapshot.value = null
+  snapshotError.value = ''
+}
 
 function toggleDomain(id: string): void {
   if (expandedDomains.value.has(id)) expandedDomains.value.delete(id)
@@ -93,22 +136,44 @@ function toggleDocument(id: string): void {
   else expandedDocuments.value.add(id)
 }
 
-function resetSelection(): void {
-  selectedBlockId.value = null
-  block.value = null
-  blockError.value = ''
+async function loadSnapshot(blockId: string, version: string): Promise<void> {
+  if (!props.client) return
+  snapshot.value = null
+  snapshotError.value = ''
+  snapshotLoading.value = true
+  try {
+    snapshot.value = await props.client.getBlockVersion(props.slug, blockId, version)
+  } catch (err) {
+    snapshotError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    snapshotLoading.value = false
+  }
 }
 
-/** 点击模块节点：加载并展开草稿四件套（只读）；再点一次收起 */
+/** 点击模块：历史视角下看对应版本快照，否则看当前草稿 */
 async function selectBlock(id: string): Promise<void> {
   if (!props.client) return
-  if (selectedBlockId.value === id) {
+  if (selectedBlockId.value === id && !blockView.value[id]) {
     resetSelection()
     return
   }
   selectedBlockId.value = id
   block.value = null
   blockError.value = ''
+  snapshot.value = null
+  snapshotError.value = ''
+  const view = blockView.value[id]
+  if (view) {
+    await loadSnapshot(id, view)
+    return
+  }
+  const domain = tree.value?.items.find((d) => d.documents.some((doc) => doc.blocks.some((x) => x.id === id)))
+  const round = domain ? domainView.value[domain.id] : undefined
+  const asOf = typeof round === 'number' ? asOfVersion(id, round) : null
+  if (asOf) {
+    await loadSnapshot(id, asOf.version)
+    return
+  }
   blockLoading.value = true
   try {
     block.value = await props.client.getBlock(props.slug, id)
@@ -117,6 +182,22 @@ async function selectBlock(id: string): Promise<void> {
   } finally {
     blockLoading.value = false
   }
+}
+
+function onBlockVersionChange(id: string, version: string): void {
+  blockView.value = { ...blockView.value, [id]: version }
+  if (selectedBlockId.value === id) void selectBlock(id)
+  else void selectBlock(id)
+}
+
+function backToCurrent(id: string): void {
+  blockView.value = { ...blockView.value, [id]: '' }
+  void selectBlock(id)
+}
+
+/** 域级回看：切到某轮次 → 域内各模块徽标变为"截至该轮"的版本 */
+function onDomainRoundChange(domainId: string, value: string): void {
+  domainView.value = { ...domainView.value, [domainId]: value === 'current' ? 'current' : Number(value) }
 }
 
 function openCreate(target: CreateTarget): void {
@@ -172,7 +253,6 @@ async function submitCreate(): Promise<void> {
   }
 }
 
-/** 定位新节点：展开祖先 + 高亮 + 滚动到可见 */
 async function locateNode(kind: string, id: string): Promise<void> {
   const key = `${kind}-${id}`
   if (tree.value) {
@@ -187,10 +267,6 @@ async function locateNode(kind: string, id: string): Promise<void> {
   await nextTick()
   rootEl.value?.querySelector(`[data-node="${key}"]`)?.scrollIntoView({ block: 'nearest' })
 }
-
-defineExpose({
-  reloadTree: () => void loadTree(false),
-})
 </script>
 
 <template>
@@ -216,6 +292,16 @@ defineExpose({
               @click="toggleDomain(domain.id)"
             >{{ expandedDomains.has(domain.id) ? '▾' : '▸' }}</button>
             <span class="tree__domain" :title="domain.title">{{ domain.title }}</span>
+            <select
+              v-if="domainRounds(domain.id, domain.documents).length > 0"
+              class="tree__verselect"
+              :value="String(domainView[domain.id] ?? 'current')"
+              title="域级版本回看：切到某轮次，域内模块各自显示截至该轮的版本"
+              @change="onDomainRoundChange(domain.id, ($event.target as HTMLSelectElement).value)"
+            >
+              <option value="current">当前</option>
+              <option v-for="r in domainRounds(domain.id, domain.documents)" :key="r" :value="String(r)">轮次 #{{ r }}</option>
+            </select>
             <button
               type="button"
               class="tree__add"
@@ -257,13 +343,24 @@ defineExpose({
                     'is-selected': selectedBlockId === b.id,
                   }"
                 >
-                  <button type="button" class="tree__block" title="查看草稿" @click="selectBlock(b.id)">
+                  <button type="button" class="tree__block" title="查看" @click="selectBlock(b.id)">
                     {{ b.title }}
                   </button>
-                  <span
-                    class="tree__ver"
-                    :class="b.status === 'published' ? 'tree__ver--published' : ''"
-                  >{{ b.current_published_version ?? '草稿' }}</span>
+                  <select
+                    v-if="blockVersions(b.id).length > 0"
+                    class="tree__verselect tree__verselect--block"
+                    :value="blockView[b.id] ?? ''"
+                    title="模块版本：切到历史版本查看当时快照"
+                    @change="onBlockVersionChange(b.id, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="">{{ b.current_published_version ?? '草稿' }}</option>
+                    <option v-for="v in [...blockVersions(b.id)].reverse()" :key="v.version" :value="v.version">
+                      {{ v.version }}（轮次 #{{ v.round }}）
+                    </option>
+                  </select>
+                  <span v-else class="tree__ver" :class="b.status === 'published' ? 'tree__ver--published' : ''">
+                    {{ badgeText(b) }}
+                  </span>
                 </li>
               </ul>
             </li>
@@ -305,10 +402,34 @@ defineExpose({
 
     <div v-if="selectedBlockId" class="draft-pane">
       <header class="draft-pane__head">
-        <span class="draft-pane__title">草稿 · {{ block?.title ?? '…' }}</span>
-        <button type="button" class="draft-pane__close" title="关闭草稿" @click="resetSelection">✕</button>
+        <span class="draft-pane__title">
+          <template v-if="snapshot">{{ snapshot.version }} · 轮次 #{{ snapshot.round }}（历史快照）</template>
+          <template v-else>草稿 · {{ block?.title ?? '…' }}</template>
+        </span>
+        <span class="draft-pane__actions">
+          <button
+            v-if="snapshot && selectedBlockId"
+            type="button"
+            class="draft-pane__back"
+            @click="backToCurrent(selectedBlockId)"
+          >回到当前</button>
+          <button type="button" class="draft-pane__close" title="关闭" @click="resetSelection">✕</button>
+        </span>
       </header>
-      <p v-if="blockLoading" class="mtree__note">草稿加载中…</p>
+      <p v-if="snapshotLoading" class="mtree__note">快照加载中…</p>
+      <p v-else-if="snapshotError" class="mtree__note mtree__note--error">快照加载失败：{{ snapshotError }}</p>
+      <template v-else-if="snapshot">
+        <p class="draft-pane__stmt">说明：{{ snapshot.statement.说明 }}　动机：{{ snapshot.statement.动机 }}</p>
+        <DraftViewer :block="{
+          id: snapshot.block_id,
+          title: block?.title ?? `模块${snapshot.block_id}`,
+          status: 'published',
+          current_published_version: snapshot.version,
+          draft: snapshot.draft,
+          versions: [],
+        }" />
+      </template>
+      <p v-else-if="blockLoading" class="mtree__note">草稿加载中…</p>
       <p v-else-if="blockError" class="mtree__note mtree__note--error">草稿加载失败：{{ blockError }}</p>
       <DraftViewer v-else-if="block" :block="block" />
     </div>
@@ -332,7 +453,7 @@ defineExpose({
 }
 
 .mtree__retry {
-  color: var(--c-accent);
+  color: var(--c-ink-2);
   text-decoration: underline;
   font-size: var(--fs-12);
 }
@@ -342,13 +463,13 @@ defineExpose({
   color: var(--c-ink-2);
   font-size: var(--fs-12);
   border: 1px dashed var(--c-border-strong);
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   padding: 3px 10px;
 }
 
 .mtree__new-domain:hover:not(:disabled) {
-  color: var(--c-accent);
-  border-color: var(--c-accent);
+  color: var(--c-ink);
+  border-color: var(--c-ink-3);
 }
 
 .mtree__new-domain:disabled {
@@ -377,12 +498,12 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   padding: 1px 2px;
 }
 
 .tree__row.is-flash {
-  background: var(--c-accent-bg);
+  background: var(--c-panel-2);
 }
 
 .tree__row--block {
@@ -396,12 +517,13 @@ defineExpose({
   left: 8px;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1px;
   background: var(--c-border);
 }
 
 .tree__row--block.is-selected {
-  background: var(--c-accent-bg);
+  background: var(--c-panel-2);
+  box-shadow: inset 0 0 0 1px var(--c-border-strong);
 }
 
 .tree__toggle {
@@ -412,7 +534,7 @@ defineExpose({
 }
 
 .tree__toggle:hover {
-  color: var(--c-accent);
+  color: var(--c-ink);
 }
 
 .tree__domain {
@@ -438,7 +560,7 @@ defineExpose({
 }
 
 .tree__add:hover {
-  color: var(--c-accent);
+  color: var(--c-ink);
 }
 
 .tree__block {
@@ -452,7 +574,7 @@ defineExpose({
 }
 
 .tree__block:hover {
-  color: var(--c-accent);
+  color: var(--c-ink-2);
 }
 
 .tree__ver {
@@ -461,7 +583,7 @@ defineExpose({
   font-size: var(--fs-12);
   color: var(--c-ink-3);
   border: 1px solid var(--c-border);
-  border-radius: 999px;
+  border-radius: var(--radius-s);
   padding: 0 6px;
   line-height: 16px;
 }
@@ -469,7 +591,24 @@ defineExpose({
 .tree__ver--published {
   color: var(--c-ok);
   border-color: var(--c-ok-border);
-  background: var(--c-ok-bg);
+}
+
+.tree__verselect {
+  margin-left: auto;
+  flex: none;
+  max-width: 150px;
+  font-size: var(--fs-12);
+  font-family: var(--font-mono);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-s);
+  padding: 0 4px;
+  height: 20px;
+  background: var(--c-panel);
+}
+
+.tree__verselect--block {
+  margin-left: auto;
 }
 
 .tree__empty {
@@ -479,9 +618,9 @@ defineExpose({
 }
 
 .create-form {
-  border: 1px solid var(--c-accent-border);
-  background: var(--c-accent-bg);
-  border-radius: var(--radius-s);
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-panel);
+  border-radius: var(--radius-m);
   padding: var(--sp-2);
   display: grid;
   gap: var(--sp-2);
@@ -506,7 +645,7 @@ defineExpose({
 
 .create-form__input:focus {
   outline: none;
-  border-color: var(--c-accent);
+  border-color: var(--c-ink-3);
 }
 
 .create-form__error {
@@ -535,12 +674,33 @@ defineExpose({
   font-weight: 600;
 }
 
+.draft-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.draft-pane__back {
+  color: var(--c-ink-2);
+  font-size: var(--fs-12);
+  text-decoration: underline;
+}
+
+.draft-pane__back:hover {
+  color: var(--c-ink);
+}
+
 .draft-pane__close {
   color: var(--c-ink-3);
   padding: 0 4px;
 }
 
 .draft-pane__close:hover {
-  color: var(--c-danger);
+  color: var(--c-ink);
+}
+
+.draft-pane__stmt {
+  color: var(--c-ink-2);
+  font-size: var(--fs-12);
 }
 </style>

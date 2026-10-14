@@ -44,6 +44,11 @@ ol {
   scrollbar-color: var(--c-scrollbar) transparent;
 }
 
+body.is-col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 *::-webkit-scrollbar {
   width: 6px;
   height: 6px;

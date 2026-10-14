@@ -8,7 +8,6 @@ import type {
   Package,
   Project,
   ProjectDetail,
-  ProjectTree,
   TaskReceipt,
 } from './api/client'
 import { createMockApiClient, getMockActivity, getMockCoreOpeners, isMockQueueRunning } from './api/mock'
@@ -18,7 +17,6 @@ import TopBar from './components/TopBar.vue'
 import CoreChat from './components/CoreChat.vue'
 import MasterSession from './components/MasterSession.vue'
 import RightDrawer from './components/RightDrawer.vue'
-import VersionPanel from './components/VersionPanel.vue'
 import QueuePanel from './components/QueuePanel.vue'
 import DocsPanel from './components/DocsPanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
@@ -37,7 +35,6 @@ const loadError = ref('')
 const feed = ref<FeedRound[]>([])
 const feedError = ref('')
 const packages = ref<Package[]>([])
-const blockTitles = ref<Record<string, string>>({})
 const masters = ref<MasterInfo[]>([])
 
 // 会话与抽屉
@@ -82,6 +79,41 @@ const taskError = ref<Record<string, string>>({})
 const queueError = ref('')
 
 const allVersions = computed<FeedVersion[]>(() => feed.value.flatMap((fr) => fr.versions))
+
+/** 按模块分组的版本记录（文档抽屉的版本切换用） */
+const versionsByBlock = computed<Record<string, FeedVersion[]>>(() => {
+  const map: Record<string, FeedVersion[]> = {}
+  for (const v of allVersions.value) {
+    ;(map[v.block_id] ??= []).push(v)
+  }
+  return map
+})
+
+/** 侧栏可拖拽调宽：夹在 200–420px，双击复位（主区随之自适应） */
+const SIDEBAR_DEFAULT = 248
+const sidebarWidth = ref(SIDEBAR_DEFAULT)
+const dragging = ref(false)
+
+function startDrag(e: MouseEvent): void {
+  e.preventDefault()
+  dragging.value = true
+  const onMove = (ev: MouseEvent): void => {
+    sidebarWidth.value = Math.min(420, Math.max(200, ev.clientX))
+  }
+  const onUp = (): void => {
+    dragging.value = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    document.body.classList.remove('is-col-resizing')
+  }
+  document.body.classList.add('is-col-resizing')
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+function resetDrag(): void {
+  sidebarWidth.value = SIDEBAR_DEFAULT
+}
 
 const coreOpeners = computed(() => (mode.value === 'mock' ? getMockCoreOpeners(currentSlug.value) : []))
 
@@ -154,7 +186,6 @@ async function selectProject(slug: string): Promise<void> {
   feed.value = []
   feedError.value = ''
   packages.value = []
-  blockTitles.value = {}
   masters.value = []
   cardBusy.value = {}
   cardError.value = {}
@@ -191,18 +222,6 @@ async function refreshAll(): Promise<void> {
     feed.value = []
     packages.value = []
     feedError.value = err instanceof Error ? err.message : String(err)
-  }
-  try {
-    const tree: ProjectTree = await client.value.getTree(slug)
-    const titles: Record<string, string> = {}
-    for (const domain of tree.items) {
-      for (const doc of domain.documents) {
-        for (const b of doc.blocks) titles[b.id] = b.title
-      }
-    }
-    blockTitles.value = titles
-  } catch {
-    blockTitles.value = {}
   }
   try {
     masters.value = (await client.value.listMasters(slug)).items
@@ -324,13 +343,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :class="{ 'app--dragging': dragging }">
     <Sidebar
       :client="client"
       :projects="projects"
       :current-slug="currentSlug"
       :masters="masters"
       :session="session"
+      :style="{ width: `${sidebarWidth}px` }"
       @select-project="selectProject"
       @select-session="session = $event"
       @masters-changed="reloadMasters"
@@ -343,6 +363,13 @@ onMounted(() => {
         >{{ modeBadge }}</span>
       </template>
     </Sidebar>
+
+    <div
+      class="app__splitter"
+      title="拖拽调整侧栏宽度（双击复位）"
+      @mousedown="startDrag"
+      @dblclick="resetDrag"
+    ></div>
 
     <div class="app__main">
       <TopBar :session-title="sessionTitle" :drawer="drawer" @toggle-drawer="onToggleDrawer" />
@@ -375,14 +402,7 @@ onMounted(() => {
           />
         </main>
 
-        <RightDrawer
-          v-if="drawer === 'versions'"
-          title="查看版本"
-          @close="drawer = null"
-        >
-          <VersionPanel :client="client" :slug="currentSlug" :versions="allVersions" :block-titles="blockTitles" />
-        </RightDrawer>
-        <RightDrawer v-else-if="drawer === 'queue'" title="队列" @close="drawer = null">
+        <RightDrawer v-if="drawer === 'queue'" title="队列" @close="drawer = null">
           <QueuePanel
             :packages="packages"
             :task-busy="taskBusy"
@@ -395,8 +415,8 @@ onMounted(() => {
             @audit="onAudit"
           />
         </RightDrawer>
-        <RightDrawer v-else-if="drawer === 'docs'" title="文档 · 模块全景" @close="drawer = null">
-          <DocsPanel :client="client" :slug="currentSlug" />
+        <RightDrawer v-else-if="drawer === 'docs'" title="文档" @close="drawer = null">
+          <DocsPanel :client="client" :slug="currentSlug" :versions-by-block="versionsByBlock" />
         </RightDrawer>
         <RightDrawer v-else-if="drawer === 'convention'" title="全局约定" @close="drawer = null">
           <ConventionPanel :client="client" :slug="currentSlug" />
@@ -412,11 +432,26 @@ onMounted(() => {
 <style scoped>
 .app {
   height: 100vh;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
+  min-width: 0;
+}
+
+.app__splitter {
+  flex: none;
+  width: 5px;
+  margin-left: -2px;
+  margin-right: -2px;
+  z-index: 5;
+  cursor: col-resize;
+}
+
+.app__splitter:hover,
+.app--dragging .app__splitter {
+  background: var(--c-border-strong);
 }
 
 .app__main {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;

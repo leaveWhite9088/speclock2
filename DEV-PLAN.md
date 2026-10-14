@@ -82,6 +82,7 @@ Block:   { "id": "...", "title": "...", "status": "draft|published",
 | GET | `/api/p/{slug}/events` | `?since=&type=` | S3 |
 | GET | `/api/p/{slug}/packages` | 任务包与任务状态 | S4 |
 | POST | `/api/p/{slug}/tasks/{id}/receipt` | `{files_changed,self_check,summary}`（M1 手工模拟） | S4 |
+| POST | `/api/p/{slug}/tech-orders` | 技术任务单（DESIGN §6.4）：`{intent,scope[],baseline?,acceptance[]}` → 确认后生成 origin=tech 任务包 | S4 |
 | GET | `/api/p/{slug}/conventions` | 全局约定当前版 | S5 |
 | PUT | `/api/p/{slug}/conventions/draft` | 草稿 | S5 |
 | POST | `/api/p/{slug}/conventions/approve` | 产生 ConventionVersion | S5 |
@@ -105,7 +106,7 @@ Block:   { "id": "...", "title": "...", "status": "draft|published",
 | **S1** | 文档系统 | 树/草稿端点充实（rules/apis 校验，复用 v1 diffing 思路） | 左栏模块全景树 + 草稿查看 | 建 domain→document→block，草稿四件套往返一致 |
 | **S2** | 草稿编辑与卡片预览 | 卡片 ops 校验、draft.proposed 事件 | 卡片起草表单（人工编辑 ops）+ 卡片预览渲染 | 人工构造一张卡，卡片渲染与 §8.1 示意一致 |
 | **S3** | 批准闭环 | approve/reject、快照、semver、轮次、事件日志 | 时间线（轮次卡）、批准/打回按钮、版本链视图 | 批准后：版本链+1、轮次关闭开启、events 可回放 |
-| **S4** | 队列 | 任务包/任务状态机、回执端点、看门狗（内存定时） | 右栏任务包面板、回执手工提交、超时标红 | 手工回执推进状态机；超时事件可见 |
+| **S4** | 队列 | 任务包/任务状态机（**双入口**：批准卡片 / 技术任务单 `POST /tech-orders`）、回执端点、看门狗（内存定时） | 右栏任务包面板、回执手工提交、技术任务单建单表单、超时标红 | 手工回执推进状态机；技术单建单→派发→回执走通；超时事件可见 |
 | **S5** | 约定与仪表盘 | conventions 三端点、统计聚合 | 全局约定编辑、仪表盘（时长/打回/违反榜） | **M1 总验收**（见 §6） |
 
 ---

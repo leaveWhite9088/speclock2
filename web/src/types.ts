@@ -50,3 +50,22 @@ export function masterLabel(master: string | null): string {
   const map: Record<string, string> = { frontend: '前端', backend: '后端' }
   return map[master] ?? master
 }
+
+/** 耗时展示：5.6 秒 / 41 分钟 / 1 小时 12 分 */
+export function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} 秒`
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000)
+    const s = Math.round((ms % 60_000) / 1000)
+    return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分钟`
+  }
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.round((ms % 3_600_000) / 60_000)
+  return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`
+}
+
+/** token 展示（估算值，DESIGN §13.5）：180k / 1.2M */
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
+  return `${Math.round(tokens / 1000)}k`
+}

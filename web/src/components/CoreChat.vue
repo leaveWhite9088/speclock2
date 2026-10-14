@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { FeedRound } from '../types'
-import { masterLabel } from '../types'
+import { formatDuration, formatTokens, masterLabel } from '../types'
 import RoundDivider from './RoundDivider.vue'
 import ApprovalCard from './ApprovalCard.vue'
 
@@ -81,9 +81,13 @@ function receiptLines(fr: FeedRound): Line[] {
   for (const pkg of fr.packages) {
     for (const task of pkg.tasks) {
       if (task.receipt && (task.status === 'done' || task.status === 'reported' || task.status === 'auditing' || task.status === 'rejected')) {
+        const tele =
+          task.duration_ms != null && task.tokens != null
+            ? `，用时 ${formatDuration(task.duration_ms)}、约 ${formatTokens(task.tokens)} tokens`
+            : ''
         lines.push({
           who: 'core',
-          text: `${masterLabel(task.master)}完成了 ${task.task_id}：${task.receipt.summary}（改了 ${task.receipt.files_changed.length} 个文件）`,
+          text: `${masterLabel(task.master)}完成了 ${task.task_id}：${task.receipt.summary}（改了 ${task.receipt.files_changed.length} 个文件${tele}）`,
         })
       }
     }

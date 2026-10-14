@@ -354,6 +354,8 @@ function dailyReportLedger(): MockLedger {
           master: 'backend',
           status: 'done',
           watchdog_deadline: null,
+          duration_ms: 41 * 60_000,
+          tokens: 180_000,
           receipt: {
             files_changed: ['backend/export.py'],
             self_check: 'pytest 全绿（12 passed）',
@@ -480,6 +482,14 @@ export function createMockApiClient(): ApiClient {
   }
   let activitySeq = 100
   let queueRunning = false
+  /** 任务开始时间（派发时刻）与 token 估算：遥测记录用（DESIGN §13.5） */
+  const taskStart: Record<string, number> = {}
+
+  function recordTelemetry(task: Task): void {
+    const t0 = taskStart[task.task_id]
+    task.duration_ms = t0 ? Date.now() - t0 : 0
+    task.tokens = 90_000 + Math.floor(Math.random() * 150_000)
+  }
 
   let domainSeq = 0
   let documentSeq = 0
@@ -520,6 +530,7 @@ export function createMockApiClient(): ApiClient {
     const master = task.master ?? 'frontend'
     const ledger = ledgerOf(slug)
     task.status = 'dispatched'
+    taskStart[task.task_id] = Date.now()
     task.watchdog_deadline = new Date(Date.now() + 60 * 60_000).toISOString()
     pushEvent(ledger, pkg.round, `master:${master}` as EventActor, 'task.dispatched', { task: task.task_id }, {})
     pushActivity(master, 'note', `收到任务 ${task.task_id}（${pkg.package_id}${pkg.origin === 'tech' ? ' · 技术单' : ''}）`)
@@ -548,6 +559,7 @@ export function createMockApiClient(): ApiClient {
         self_check: master === 'backend' ? 'pytest 全绿' : 'npm run build 通过',
         summary,
       }
+      recordTelemetry(task)
       pushEvent(ledger, pkg.round, `master:${master}` as EventActor, 'task.receipt', { task: task.task_id }, {})
       pushActivity(master, 'message', `已完成：${summary}（改动 ${files.length} 个文件）`)
     }, 4400)
@@ -852,6 +864,7 @@ export function createMockApiClient(): ApiClient {
       if (minutes < 1) {
         throw new ApiError(422, { code: 'validation_error', message: 'watchdog_minutes 必须为正数' })
       }
+      taskStart[task.task_id] = Date.now()
       task.status = 'dispatched'
       task.watchdog_deadline = new Date(Date.now() + minutes * 60_000).toISOString()
       const round = taskRound(ledger, taskId)
@@ -866,6 +879,7 @@ export function createMockApiClient(): ApiClient {
       }
       task.status = 'reported'
       task.receipt = clone(body)
+      recordTelemetry(task)
       pushEvent(ledger, taskRound(ledger, taskId), 'master:backend', 'task.receipt', { task: taskId }, {})
       return clone(task)
     },

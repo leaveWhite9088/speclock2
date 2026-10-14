@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { Task, TaskReceipt } from '../api/client'
-import { TASK_STATUS_LABELS, masterLabel } from '../types'
+import { TASK_STATUS_LABELS, formatDuration, formatTokens, masterLabel } from '../types'
 
 const props = defineProps<{
   task: Task
@@ -68,6 +68,11 @@ function submitAudit(result: 'pass' | 'fail'): void {
       <code class="taskrow__id">{{ task.task_id }}</code>
       <span class="taskrow__master">{{ masterLabel(task.master) }}</span>
       <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
+      <span
+        v-if="task.duration_ms != null || task.tokens != null"
+        class="taskrow__tele"
+        title="过程遥测：派发→回执的耗时与 token 消耗（估算）"
+      >⏱ {{ task.duration_ms != null ? formatDuration(task.duration_ms) : '—' }} · {{ task.tokens != null ? `${formatTokens(task.tokens)} tokens(估)` : '—' }}</span>
       <span class="taskrow__actions">
         <button
           v-if="task.status === 'queued' || task.status === 'timeout'"
@@ -158,6 +163,13 @@ function submitAudit(result: 'pass' | 'fail'): void {
 
 .taskrow__master {
   color: var(--c-ink-2);
+}
+
+.taskrow__tele {
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .taskrow__actions {

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { MasterInfo, Package } from '../api/client'
 import type { ActivityItem } from '../types'
-import { TASK_STATUS_LABELS } from '../types'
+import { TASK_STATUS_LABELS, formatDuration, formatTokens } from '../types'
 
 /**
  * 主代理工作流：盯进程时才看——工具调用、文件编辑、思考耗时等技术过程；
@@ -22,6 +22,20 @@ const myTasks = computed(() =>
     .filter(({ task }) => task.master === props.master.id || (task.master === null && props.master.id === 'frontend'))
     .slice(0, 8),
 )
+
+/** 累计遥测：该主代理已完成任务的耗时与 token 总量（DESIGN §13.5 仪表盘一行的原料） */
+const totals = computed(() => {
+  const done = myTasks.value.filter(({ task }) => task.status === 'done' || task.status === 'reported')
+  let ms = 0
+  let tokens = 0
+  let counted = 0
+  for (const { task } of done) {
+    if (task.duration_ms != null) ms += task.duration_ms
+    if (task.tokens != null) tokens += task.tokens
+    if (task.duration_ms != null || task.tokens != null) counted++
+  }
+  return { tasks: done.length, counted, ms, tokens }
+})
 
 const activityCount = computed(() => props.activity.length)
 
@@ -50,7 +64,11 @@ watch(
         <span class="msession__name">{{ master.name }}</span>
         <span class="msession__duty">{{ master.duty }} · {{ master.dir }} · {{ master.harness }} · {{ master.model }}</span>
       </div>
-      <span class="msession__count">{{ activityCount }} 条过程记录</span>
+      <span class="msession__count">
+        {{ activityCount }} 条过程记录<template v-if="totals.counted > 0">
+          · 累计 {{ totals.tasks }} 个任务 {{ formatDuration(totals.ms) }} · {{ formatTokens(totals.tokens) }} tokens(估)</template
+        >
+      </span>
     </header>
 
     <div class="msession__body">
@@ -59,11 +77,14 @@ watch(
           <h6 class="msession__sec-title">任务</h6>
           <p v-if="myTasks.length === 0" class="msession__empty">暂无分配到的任务。</p>
           <ul v-else class="msession__tasks">
-            <li v-for="{ pkg, task } in myTasks" :key="task.task_id" class="msession__task">
-              <code>{{ task.task_id }}</code>
-              <span class="msession__pkg">{{ pkg.package_id }}{{ pkg.origin === 'tech' ? ' · 技术单' : '' }}</span>
-              <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
-            </li>
+          <li v-for="{ pkg, task } in myTasks" :key="task.task_id" class="msession__task">
+            <code>{{ task.task_id }}</code>
+            <span class="msession__pkg">{{ pkg.package_id }}{{ pkg.origin === 'tech' ? ' · 技术单' : '' }}</span>
+            <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
+            <span v-if="task.duration_ms != null || task.tokens != null" class="msession__tele">
+              ⏱ {{ task.duration_ms != null ? formatDuration(task.duration_ms) : '—' }} · {{ task.tokens != null ? `${formatTokens(task.tokens)} tokens(估)` : '—' }}
+            </span>
+          </li>
           </ul>
         </section>
 
@@ -197,6 +218,14 @@ watch(
 
 .msession__pkg {
   color: var(--c-ink-3);
+}
+
+.msession__tele {
+  margin-left: auto;
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .msession__feed {

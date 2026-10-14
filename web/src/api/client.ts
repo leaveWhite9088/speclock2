@@ -248,6 +248,9 @@ export interface Task {
   status: TaskStatus
   watchdog_deadline: string | null
   receipt: TaskReceipt | null
+  /** 过程遥测（DESIGN §13.5：派发→回执的耗时与 token 消耗；token 为估算，R-M2 接真实数据） */
+  duration_ms?: number | null
+  tokens?: number | null
 }
 
 export interface Package {

@@ -4,15 +4,16 @@ import type { DrawerKey } from '../types'
 defineProps<{
   sessionTitle: string
   drawer: DrawerKey | null
+  docsActive: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-drawer', key: DrawerKey): void
+  (e: 'toggle-docs'): void
 }>()
 
 const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
   { key: 'queue', label: '队列', primary: true },
-  { key: 'docs', label: '文档', primary: true },
   { key: 'convention', label: '约定' },
 ]
 </script>
@@ -20,7 +21,13 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
 <template>
   <header class="topbar">
     <span class="topbar__title" :title="sessionTitle">{{ sessionTitle }}</span>
-    <nav class="topbar__entries" aria-label="右侧栏入口">
+    <nav class="topbar__entries" aria-label="右侧入口">
+      <button
+        type="button"
+        class="topbar__entry topbar__entry--primary"
+        :class="{ 'is-active': docsActive }"
+        @click="emit('toggle-docs')"
+      >文档</button>
       <button
         v-for="entry in entries"
         :key="entry.key"

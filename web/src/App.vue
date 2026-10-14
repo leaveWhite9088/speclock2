@@ -16,9 +16,9 @@ import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
 import CoreChat from './components/CoreChat.vue'
 import MasterSession from './components/MasterSession.vue'
+import DocsBrowser from './components/DocsBrowser.vue'
 import RightDrawer from './components/RightDrawer.vue'
 import QueuePanel from './components/QueuePanel.vue'
-import DocsPanel from './components/DocsPanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
 
 type Mode = 'probing' | 'live' | 'mock'
@@ -39,6 +39,8 @@ const masters = ref<MasterInfo[]>([])
 // 会话与抽屉
 const session = ref<SessionTarget>({ kind: 'core' })
 const drawer = ref<DrawerKey | null>(null)
+/** 文档浏览：主区视图（v1 式 树→文档→模块 三层） */
+const docsView = ref(false)
 
 // 即时对话（M1 mock：核心代理 canned 回复；R-M2 接真实核心代理）
 const chatMessages = ref<Array<{ who: 'human' | 'core'; text: string }>>([])
@@ -179,6 +181,7 @@ async function selectProject(slug: string): Promise<void> {
   currentSlug.value = slug
   session.value = { kind: 'core' }
   drawer.value = null
+  docsView.value = false
   stopCore()
   chatMessages.value = []
   loadError.value = ''
@@ -326,6 +329,11 @@ function onToggleDrawer(key: DrawerKey): void {
   drawer.value = drawer.value === key ? null : key
 }
 
+function onSelectSession(target: SessionTarget): void {
+  session.value = target
+  docsView.value = false
+}
+
 watch(
   () => isMockQueueRunning(),
   (running) => {
@@ -351,7 +359,7 @@ onMounted(() => {
       :session="session"
       :style="{ width: `${sidebarWidth}px` }"
       @select-project="selectProject"
-      @select-session="session = $event"
+      @select-session="onSelectSession"
       @masters-changed="reloadMasters"
     >
       <template #foot>
@@ -371,13 +379,28 @@ onMounted(() => {
     ></div>
 
     <div class="app__main">
-      <TopBar :session-title="sessionTitle" :drawer="drawer" @toggle-drawer="onToggleDrawer" />
+      <TopBar
+        :session-title="docsView ? '文档' : sessionTitle"
+        :drawer="drawer"
+        :docs-active="docsView"
+        @toggle-drawer="onToggleDrawer"
+        @toggle-docs="docsView = !docsView"
+      />
 
       <div class="app__body">
         <main class="app__chat">
           <div v-if="mode === 'probing'" class="chat-note">正在探测后端（GET /api/health）…</div>
           <div v-else-if="loadError" class="chat-note chat-note--error">加载项目失败：{{ loadError }}</div>
           <div v-else-if="projects.length === 0" class="chat-note">项目列表为空。</div>
+          <DocsBrowser
+            v-else-if="docsView"
+            :key="currentSlug"
+            :client="client"
+            :slug="currentSlug"
+            :feed="feed"
+            :versions-by-block="versionsByBlock"
+            @close="docsView = false"
+          />
           <MasterSession
             v-else-if="activeMaster"
             :key="`${currentSlug}-${activeMaster.id}`"
@@ -413,9 +436,6 @@ onMounted(() => {
             @receipt="onReceipt"
             @audit="onAudit"
           />
-        </RightDrawer>
-        <RightDrawer v-else-if="drawer === 'docs'" title="文档" @close="drawer = null">
-          <DocsPanel :client="client" :slug="currentSlug" :versions-by-block="versionsByBlock" />
         </RightDrawer>
         <RightDrawer v-else-if="drawer === 'convention'" title="全局约定" @close="drawer = null">
           <ConventionPanel :client="client" :slug="currentSlug" />

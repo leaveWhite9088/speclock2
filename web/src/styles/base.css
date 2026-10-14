@@ -1,0 +1,198 @@
+/* 基础样式与通用原语（依赖 tokens.css 的设计令牌） */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  font-size: var(--fs-14);
+  line-height: 1.55;
+  color: var(--c-ink);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+select {
+  font: inherit;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+/* ---- 徽标 ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: var(--fs-12);
+  line-height: 18px;
+  border: 1px solid var(--c-border);
+  color: var(--c-ink-2);
+  background: var(--c-panel-2);
+  white-space: nowrap;
+}
+.badge--pending {
+  color: var(--c-warn);
+  background: var(--c-warn-bg);
+  border-color: var(--c-warn-border);
+}
+.badge--approved {
+  color: var(--c-ok);
+  background: var(--c-ok-bg);
+  border-color: var(--c-ok-border);
+}
+.badge--rejected {
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+  border-color: var(--c-danger-border);
+}
+.badge--ongoing {
+  color: var(--c-accent);
+  background: var(--c-accent-bg);
+  border-color: var(--c-accent-border);
+}
+.badge--closed {
+  color: var(--c-ink-3);
+  background: var(--c-panel-2);
+  border-color: var(--c-border);
+}
+.badge--mode-live {
+  color: var(--c-ok);
+  background: var(--c-ok-bg);
+  border-color: var(--c-ok-border);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.badge--mode-mock {
+  color: var(--c-warn);
+  background: var(--c-warn-bg);
+  border-color: var(--c-warn-border);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.badge--mode-probing {
+  color: var(--c-ink-3);
+  background: var(--c-panel-2);
+  border-color: var(--c-border);
+}
+
+/* ---- 按钮 ---- */
+.btn {
+  padding: 5px 14px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-panel);
+  color: var(--c-ink);
+  font-size: var(--fs-13);
+}
+.btn:hover {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+.btn--primary {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+.btn--primary:hover {
+  background: var(--c-accent-strong);
+  color: var(--c-accent-ink);
+}
+.btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-ink-2);
+}
+.btn--ghost:hover {
+  color: var(--c-accent);
+}
+
+/* ---- ops 行（审批卡内的 diff 行） ---- */
+.ops {
+  display: grid;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+}
+.op {
+  padding: 2px 8px;
+  border-radius: var(--radius-s);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.op--modify {
+  color: var(--c-ink);
+  background: var(--c-mono-bg);
+}
+.op--add {
+  color: var(--c-ok);
+  background: var(--c-ok-bg);
+}
+.op--remove {
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+}
+.op--breaking {
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+  font-weight: 600;
+}
+
+/* ---- 通用提示 ---- */
+.drawer-hint {
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  margin-top: var(--sp-2);
+}
+
+/* ---- 子卡片骨架（派发 / 回执 / 裁决，S0 占位形态） ---- */
+.sub-card {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-m);
+  background: var(--c-panel);
+  padding: var(--sp-3);
+  display: grid;
+  gap: 4px;
+  box-shadow: var(--shadow-card);
+}
+.sub-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+.sub-card__tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  font-size: var(--fs-12);
+  font-weight: 400;
+  color: var(--c-ink-2);
+  background: var(--c-panel-2);
+  border: 1px solid var(--c-border);
+}
+.sub-card__line {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+}

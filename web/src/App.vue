@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { createApiClient } from './api/client'
-import type { ApiClient, Project, ProjectDetail, ProjectTree } from './api/client'
+import type { ApiClient, Project, ProjectDetail } from './api/client'
 import { createMockApiClient, getTimelineFixture } from './api/mock'
 import type { RoundFixture } from './types'
 import type { PanelKey } from './types'
@@ -18,7 +18,6 @@ const client = ref<ApiClient | null>(null)
 const projects = ref<Project[]>([])
 const currentSlug = ref('')
 const detail = ref<ProjectDetail | null>(null)
-const tree = ref<ProjectTree | null>(null)
 const rounds = ref<RoundFixture[]>([])
 const activePanel = ref<PanelKey | null>(null)
 const loadError = ref('')
@@ -54,7 +53,7 @@ async function bootstrap(): Promise<void> {
   if (projects.value.length > 0) await selectProject(projects.value[0].slug)
 }
 
-/** 项目切换 = 换工作区，不是页面导航（DESIGN.md §14.3） */
+/** 项目切换 = 换工作区，不是页面导航（DESIGN.md §14.3）；LeftRail 随 :key 重挂载，树与选中状态重置 */
 async function selectProject(slug: string): Promise<void> {
   if (!client.value) return
   currentSlug.value = slug
@@ -65,11 +64,6 @@ async function selectProject(slug: string): Promise<void> {
   } catch (err) {
     detail.value = null
     loadError.value = err instanceof Error ? err.message : String(err)
-  }
-  try {
-    tree.value = await client.value.getTree(slug)
-  } catch {
-    tree.value = null
   }
   rounds.value = mode.value === 'mock' ? getTimelineFixture(slug) : []
 }
@@ -102,7 +96,7 @@ onMounted(() => {
     </PlaceholderPanel>
 
     <div class="app-body">
-      <LeftRail class="app-body__left" :tree="tree" />
+      <LeftRail :key="currentSlug" class="app-body__left" :client="client" :slug="currentSlug" />
       <main class="app-body__mid">
         <div v-if="mode === 'probing'" class="mid-note">正在探测后端（GET /api/health）…</div>
         <div v-else-if="loadError" class="mid-note mid-note--error">加载项目失败：{{ loadError }}</div>

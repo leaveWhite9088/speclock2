@@ -126,6 +126,10 @@ ol {
 .btn--ghost:hover {
   color: var(--c-accent);
 }
+.btn--sm {
+  padding: 3px 10px;
+  font-size: var(--fs-12);
+}
 
 /* ---- ops 行（审批卡内的 diff 行） ---- */
 .ops {

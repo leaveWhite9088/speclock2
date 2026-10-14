@@ -1,12 +1,23 @@
 /**
- * mock 模式（M1-S0）：后端不可达时的内置数据与客户端。
+ * mock 模式（M1）：后端不可达时的内置数据与客户端。
  *
- * fixtures：两个项目（日报系统 / 费用报销）；「日报系统」时间线为轮次 #12，
- * 含一张待批准审批卡，数据照 DESIGN.md §8.1 的示例构造。
+ * S0：两个项目 fixtures；「日报系统」时间线为轮次 #12，含一张待批准审批卡
+ *     （数据照 DESIGN.md §8.1 示例）。
+ * S1：树与草稿改为客户端实例内的可变状态——新建业务域/文档/模块、PUT 草稿
+ *     全部走本地状态（不发真请求），后端不在时全流程可演示。
  * 时间线 fixture（getTimelineFixture）为前端展示层数据，非契约端点。
  */
 import { ApiError } from './client'
-import type { ApiClient, ApiEntry, Card, ProjectDetail, ProjectTree, Project } from './client'
+import type {
+  ApiClient,
+  ApiEntry,
+  Block,
+  BlockDraft,
+  Card,
+  Project,
+  ProjectDetail,
+  ProjectTree,
+} from './client'
 import type { RoundFixture } from '../types'
 
 /* ---------- fixtures ---------- */
@@ -103,7 +114,61 @@ const details: Record<string, ProjectDetail> = {
   expense: { slug: 'expense', name: '费用报销', current_round: 3, open_card: null },
 }
 
-const trees: Record<string, ProjectTree> = {
+const emptyDraft = (): BlockDraft => ({ content_md: '', rules: [], apis: [], nfr_md: '' })
+
+/** 「导出」模块的完整草稿（含中文规则与嵌套字段，供草稿查看演示） */
+const exportBlockDraft: BlockDraft = {
+  content_md:
+    '市场部每个工作日需要一份带汇总指标的日报。本模块负责按日期生成并导出日报文件，支持手动触发与批量导出。',
+  rules: [
+    { id: 'R1', name: '导出范围', detail: '默认导出最近一个工作日，可选最近 7 天或 30 天' },
+    { id: 'R2', name: '文件格式', detail: 'CSV 与 Excel(xlsx) 两种格式' },
+    { id: 'R3', name: '失败处理', detail: '导出失败时保留上次生成的文件，并向订阅者发送失败通知' },
+  ],
+  apis: [
+    exportEntry,
+    {
+      name: '批量导出',
+      api: 'POST /export/batch',
+      desc: '按日期区间批量导出，异步任务',
+      request: [
+        {
+          name: 'range',
+          type: 'object',
+          required: true,
+          description: '日期区间',
+          children: [
+            { name: 'start', type: 'string', required: true, description: '开始日期 YYYY-MM-DD' },
+            { name: 'end', type: 'string', required: true, description: '结束日期 YYYY-MM-DD' },
+          ],
+        },
+        {
+          name: 'fields',
+          type: 'array',
+          required: false,
+          description: '导出字段白名单，缺省导出全部',
+          children: [{ name: '(项)', type: 'string', required: true, description: '字段名' }],
+        },
+      ],
+      response: [
+        { name: 'code', type: 'string', required: true, description: 'ok | export_failed' },
+        {
+          name: 'task',
+          type: 'object',
+          required: true,
+          description: '导出任务',
+          children: [
+            { name: 'task_id', type: 'string', required: true, description: '任务 ID' },
+            { name: 'status', type: 'string', required: true, description: 'running | done | failed' },
+          ],
+        },
+      ],
+    },
+  ],
+  nfr_md: '导出最近 30 天数据应在 10 秒内完成；单文件上限 50MB，超出自动拆分。',
+}
+
+const treeFixtures: Record<string, ProjectTree> = {
   'daily-report': {
     items: [
       {
@@ -136,6 +201,45 @@ const trees: Record<string, ProjectTree> = {
         ],
       },
     ],
+  },
+}
+
+const blockFixtures: Record<string, Block> = {
+  'B-1': {
+    id: 'B-1',
+    title: '导出',
+    status: 'published',
+    current_published_version: '1.2.0',
+    draft: exportBlockDraft,
+    versions: [
+      {
+        version: '1.2.0',
+        round: 11,
+        statement: { 说明: '导出支持失败通知', 动机: '运维需要在失败时被告知' },
+        delta_summary: '1改',
+      },
+    ],
+  },
+  'B-2': {
+    id: 'B-2',
+    title: '订阅',
+    status: 'draft',
+    current_published_version: null,
+    draft: {
+      content_md: '报表使用者可订阅日报，每日定时收到邮件。',
+      rules: [{ id: 'R1', name: '订阅范围', detail: '按报表维度订阅，一人可订阅多份' }],
+      apis: [],
+      nfr_md: '',
+    },
+    versions: [],
+  },
+  'B-3': {
+    id: 'B-3',
+    title: '提交',
+    status: 'draft',
+    current_published_version: null,
+    draft: emptyDraft(),
+    versions: [],
   },
 }
 
@@ -180,17 +284,71 @@ function mustFind<T>(record: Record<string, T>, key: string, what: string): T {
 }
 
 export function createMockApiClient(): ApiClient {
+  // 每个 mock 客户端实例一份可变状态：新建流与草稿写入只改这里，不发真请求
+  const trees: Record<string, ProjectTree> = structuredClone(treeFixtures)
+  const blocks: Record<string, Block> = structuredClone(blockFixtures)
+  let domainSeq = 0
+  let documentSeq = 0
+  let blockSeq = 0
+  const now = (): string => new Date().toISOString()
+
   return {
     health: async () => ({ ok: true }),
     listProjects: async () => ({ items: projects.map((x) => ({ ...x })) }),
     createProject: async () => notImplemented('POST /api/projects'),
     getProject: async (slug) => ({ ...mustFind(details, slug, '项目') }),
-    getTree: async (slug) => mustFind(trees, slug, '项目'),
-    createDomain: async () => notImplemented('POST /api/p/{slug}/domains'),
-    createDocument: async () => notImplemented('POST /api/p/{slug}/documents'),
-    createBlock: async () => notImplemented('POST /api/p/{slug}/blocks'),
-    getBlock: async () => notImplemented('GET /api/p/{slug}/blocks/{id}'),
-    updateBlockDraft: async () => notImplemented('PUT /api/p/{slug}/blocks/{id}'),
+    getTree: async (slug) => structuredClone(mustFind(trees, slug, '项目')),
+    createDomain: async (slug, body) => {
+      const tree = mustFind(trees, slug, '项目')
+      const id = `D-1${++domainSeq}`
+      tree.items.push({ id, title: body.title, documents: [] })
+      return { id, title: body.title, created_at: now() }
+    },
+    createDocument: async (slug, body) => {
+      const tree = mustFind(trees, slug, '项目')
+      const domain = tree.items.find((d) => d.id === body.domain_id)
+      if (!domain) throw new ApiError(404, { code: 'not_found', message: `业务域 ${body.domain_id} 不存在（mock）` })
+      const id = `DOC-1${++documentSeq}`
+      domain.documents.push({ id, title: body.title, blocks: [] })
+      return { id, domain_id: body.domain_id, title: body.title, created_at: now() }
+    },
+    createBlock: async (slug, body) => {
+      const tree = mustFind(trees, slug, '项目')
+      let document: ProjectTree['items'][number]['documents'][number] | undefined
+      for (const domain of tree.items) {
+        const found = domain.documents.find((d) => d.id === body.document_id)
+        if (found) document = found
+      }
+      if (!document) throw new ApiError(404, { code: 'not_found', message: `文档 ${body.document_id} 不存在（mock）` })
+      const id = `B-1${++blockSeq}`
+      const block: Block = {
+        id,
+        title: body.title,
+        status: 'draft',
+        current_published_version: null,
+        draft: emptyDraft(),
+        versions: [],
+      }
+      document.blocks.push({
+        id,
+        title: body.title,
+        status: 'draft',
+        current_published_version: null,
+      })
+      blocks[id] = block
+      return structuredClone(block)
+    },
+    getBlock: async (_slug, id) => structuredClone(mustFind(blocks, id, '模块')),
+    updateBlockDraft: async (_slug, id, draft) => {
+      const block = mustFind(blocks, id, '模块')
+      block.draft = {
+        content_md: draft.content_md,
+        rules: structuredClone(draft.rules),
+        apis: structuredClone(draft.apis),
+        nfr_md: draft.nfr_md,
+      }
+      return structuredClone(block)
+    },
     createCard: async () => notImplemented('POST /api/p/{slug}/cards'),
     listCards: async (slug, status) => {
       const detail = details[slug]

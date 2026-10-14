@@ -79,7 +79,8 @@ export interface BlockVersionInfo {
   version: string
   round: number
   statement: Statement
-  delta_summary: string
+  /** 后端取自 delta_json.summary，无 delta 时为 null（对齐 backend S0 实现） */
+  delta_summary: string | null
 }
 
 export interface Block {
@@ -263,6 +264,23 @@ export interface CreateBlockBody {
   title: string
 }
 
+/**
+ * 创建端点的响应体（契约 v0 端点表未列，形状对齐 backend S0 的 serialize 实现：
+ * domain_out / document_out / block_out）。
+ */
+export interface DomainCreated {
+  id: string
+  title: string
+  created_at: string
+}
+
+export interface DocumentCreated {
+  id: string
+  domain_id: string
+  title: string
+  created_at: string
+}
+
 export interface RejectCardBody {
   reason?: string
 }
@@ -335,9 +353,9 @@ export interface ApiClient {
   createProject(body: CreateProjectBody): Promise<Project>
   getProject(slug: string): Promise<ProjectDetail>
   getTree(slug: string): Promise<ProjectTree>
-  createDomain(slug: string, body: CreateDomainBody): Promise<{ id: string; title: string }>
-  createDocument(slug: string, body: CreateDocumentBody): Promise<{ id: string; title: string }>
-  createBlock(slug: string, body: CreateBlockBody): Promise<{ id: string; title: string }>
+  createDomain(slug: string, body: CreateDomainBody): Promise<DomainCreated>
+  createDocument(slug: string, body: CreateDocumentBody): Promise<DocumentCreated>
+  createBlock(slug: string, body: CreateBlockBody): Promise<Block>
   getBlock(slug: string, id: string): Promise<Block>
   updateBlockDraft(slug: string, id: string, draft: BlockDraft): Promise<Block>
   createCard(slug: string, card: Card): Promise<Card>
@@ -365,17 +383,17 @@ export function createApiClient(): ApiClient {
     getProject: (slug) => request<ProjectDetail>(p(slug)),
     getTree: (slug) => request<ProjectTree>(`${p(slug)}/tree`),
     createDomain: (slug, body) =>
-      request<{ id: string; title: string }>(`${p(slug)}/domains`, {
+      request<DomainCreated>(`${p(slug)}/domains`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
     createDocument: (slug, body) =>
-      request<{ id: string; title: string }>(`${p(slug)}/documents`, {
+      request<DocumentCreated>(`${p(slug)}/documents`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
     createBlock: (slug, body) =>
-      request<{ id: string; title: string }>(`${p(slug)}/blocks`, {
+      request<Block>(`${p(slug)}/blocks`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),

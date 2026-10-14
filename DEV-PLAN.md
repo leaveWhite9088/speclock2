@@ -84,6 +84,7 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 | POST | `/api/p/{slug}/documents` | `{domain_id,title}` | S0 ✅ |
 | POST | `/api/p/{slug}/blocks` | `{document_id,title}`，草稿态 | S0 ✅ |
 | GET | `/api/p/{slug}/blocks/{id}` | 草稿 + 版本列表 | S0 ✅ |
+| GET | `/api/p/{slug}/blocks/{id}/versions/{version}` | **某版本四件套快照**（`version=draft` 返回当前草稿）；响应含 content_md/rules/apis/nfr_md + statement/round/delta_summary。形状对齐 `web/src/api/client.ts` 的 `VersionDetail`（前端已按此调用，2026-10-14 验收发现契约缺口，补录） | S2-fix |
 | PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套读写（**不产生版本**）；rules/apis 校验、规则稳定 ID | S1 |
 | POST | `/api/p/{slug}/cards` | 人工模拟"主主代理起草"：提交 Card（校验 ops 与 block 存在性，statement 必填） | S2 |
 | GET | `/api/p/{slug}/cards` | `?status=` 筛选 | S2 |

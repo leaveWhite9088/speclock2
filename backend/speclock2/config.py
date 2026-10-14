@@ -6,6 +6,21 @@ import os
 from pathlib import Path
 
 
+def load_env_file(path: Path) -> None:
+    """加载 KEY=VALUE 本地环境文件（backend/.env，含密钥不入库）；已存在的环境变量优先。"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env_file(Path(__file__).resolve().parent.parent / ".env")
+
+
 def resolve_data_dir() -> Path:
     override = os.environ.get("SPECLOCK2_DATA_DIR")
     if override:

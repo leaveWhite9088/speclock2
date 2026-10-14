@@ -118,6 +118,51 @@ function resetDrag(): void {
 
 const coreOpeners = computed(() => (mode.value === 'mock' ? getMockCoreOpeners(currentSlug.value) : []))
 
+/** 跨项目徽标（§14.3）：其他项目的 待批准/运行中 在不切界面的情况下可见 */
+const projectStats = ref<Record<string, { pending: number; active: number }>>({})
+
+async function refreshProjectStats(): Promise<void> {
+  if (!client.value) return
+  const entries = await Promise.all(
+    projects.value.map(async (p) => {
+      try {
+        const s = await client.value!.getStats(p.slug)
+        return [p.slug, { pending: s.cards.pending, active: s.packages.active }] as const
+      } catch {
+        return [p.slug, { pending: 0, active: 0 }] as const
+      }
+    }),
+  )
+  projectStats.value = Object.fromEntries(entries)
+}
+
+/** 核心代理行徽标：待批准卡片数 */
+const corePending = computed(() => feed.value.flatMap((fr) => fr.cards).filter((c) => c.status === 'pending').length)
+
+/** 主代理状态（完整显示：执行中/排队/待审计/超时，带任务号） */
+interface MasterState {
+  label: string
+  kind: 'running' | 'queued' | 'auditing' | 'timeout'
+}
+
+const masterStates = computed<Record<string, MasterState>>(() => {
+  const states: Record<string, MasterState> = {}
+  for (const pkg of packages.value) {
+    for (const t of pkg.tasks) {
+      if (!t.master) continue
+      const cur = states[t.master]
+      const rank = (s: MasterState['kind']) => ({ timeout: 0, running: 1, queued: 2, auditing: 3 })[s]
+      let next: MasterState | null = null
+      if (t.status === 'timeout') next = { label: `超时 · ${t.task_id}`, kind: 'timeout' }
+      else if (t.status === 'dispatched' || t.status === 'running') next = { label: `执行中 · ${t.task_id}`, kind: 'running' }
+      else if (t.status === 'queued') next = { label: `排队中 · ${t.task_id}`, kind: 'queued' }
+      else if (t.status === 'reported' || t.status === 'auditing') next = { label: `待审计 · ${t.task_id}`, kind: 'auditing' }
+      if (next && (!cur || rank(next.kind) < rank(cur.kind))) states[t.master] = next
+    }
+  }
+  return states
+})
+
 const sessionTitle = computed(() => {
   const target = session.value
   if (target.kind === 'core') return '核心代理'
@@ -225,6 +270,7 @@ async function refreshAll(): Promise<void> {
     packages.value = []
     feedError.value = err instanceof Error ? err.message : String(err)
   }
+  void refreshProjectStats()
   try {
     masters.value = (await client.value.listMasters(slug)).items
   } catch {
@@ -357,6 +403,9 @@ onMounted(() => {
       :current-slug="currentSlug"
       :masters="masters"
       :session="session"
+      :project-stats="projectStats"
+      :master-states="masterStates"
+      :core-pending="corePending"
       :style="{ width: `${sidebarWidth}px` }"
       @select-project="selectProject"
       @select-session="onSelectSession"

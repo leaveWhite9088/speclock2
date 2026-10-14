@@ -5,9 +5,9 @@ import type { SessionTarget } from '../types'
 import ModalShell from './ModalShell.vue'
 
 /**
- * 左侧栏（Kimi Code 风）：上半是项目列表，下半是当前项目的代理——
- * 核心代理（对话入口）+ 自建主代理（带职责/harness/模型，弹窗式详细创建，
- * 主代理后续要与核心代理通信）。
+ * 左侧栏（Kimi Code 风）：上半是项目列表（挂跨项目徽标：别的项目待批准/运行中
+ * 不切界面也看得见，§14.3），下半是当前项目的代理——核心代理（待批准徽标）+
+ * 主代理（完整状态：执行中/排队/待审计/超时，带任务号）。
  */
 const props = defineProps<{
   client: ApiClient | null
@@ -15,6 +15,9 @@ const props = defineProps<{
   currentSlug: string
   masters: MasterInfo[]
   session: SessionTarget
+  projectStats: Record<string, { pending: number; active: number }>
+  masterStates: Record<string, { label: string; kind: 'running' | 'queued' | 'auditing' | 'timeout' }>
+  corePending: number
 }>()
 
 const emit = defineEmits<{
@@ -106,6 +109,16 @@ function avatarText(name: string): string {
               <span class="sidebar__item-name">{{ p.name }}</span>
               <span class="sidebar__item-sub">{{ p.slug }}</span>
             </span>
+            <span
+              v-if="(projectStats[p.slug]?.pending ?? 0) > 0"
+              class="sidebar__flag sidebar__flag--pending"
+              title="有待批准卡片"
+            >待批准 {{ projectStats[p.slug].pending }}</span>
+            <span
+              v-else-if="(projectStats[p.slug]?.active ?? 0) > 0"
+              class="sidebar__flag"
+              title="有任务在运行"
+            >{{ projectStats[p.slug].active }} 运行中</span>
           </button>
         </li>
         <li v-if="projects.length === 0" class="sidebar__empty">（暂无项目）</li>
@@ -128,6 +141,9 @@ function avatarText(name: string): string {
               <span class="sidebar__item-name">核心代理</span>
               <span class="sidebar__item-sub">需求澄清 · 提案起草 · 汇报</span>
             </span>
+            <span v-if="corePending > 0" class="sidebar__flag sidebar__flag--pending" title="有待批准卡片">
+              待批准 {{ corePending }}
+            </span>
           </button>
         </li>
 
@@ -142,8 +158,17 @@ function avatarText(name: string): string {
             <span class="sidebar__avatar" aria-hidden="true">{{ avatarText(m.name) }}</span>
             <span class="sidebar__item-text">
               <span class="sidebar__item-name">{{ m.name }}</span>
-              <span class="sidebar__item-sub">{{ m.duty }}</span>
+              <span class="sidebar__item-sub">
+                <template v-if="masterStates[m.id]">{{ masterStates[m.id].label }}</template>
+                <template v-else>{{ m.duty }}</template>
+              </span>
             </span>
+            <span
+              v-if="masterStates[m.id]"
+              class="sidebar__dot"
+              :class="`sidebar__dot--${masterStates[m.id].kind}`"
+              :title="masterStates[m.id].label"
+            ></span>
           </button>
         </li>
       </ul>
@@ -311,6 +336,49 @@ function avatarText(name: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 跨项目徽标 / 核心代理待批准徽标（§14.3） */
+.sidebar__flag {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.sidebar__flag--pending {
+  color: var(--c-danger);
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-bg);
+  font-weight: 600;
+}
+
+/* 主代理状态点：执行中绿 / 排队灰 / 待审计灰 / 超时红 */
+.sidebar__dot {
+  flex: none;
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-ink-3);
+}
+
+.sidebar__dot--running {
+  background: var(--c-ok);
+}
+
+.sidebar__dot--queued,
+.sidebar__dot--auditing {
+  background: var(--c-border-strong);
+}
+
+.sidebar__dot--timeout {
+  background: var(--c-danger);
 }
 
 .sidebar__empty {

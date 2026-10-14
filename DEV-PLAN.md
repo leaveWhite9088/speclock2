@@ -31,7 +31,7 @@ speclock2/
 
 ---
 
-## 2. API 契约 v0.2（S2 扩充：卡片 ops 携带 block_id；新增任务流转/约定/统计端点）
+## 2. API 契约 v0.3（R-M2 扩充：对话与核心代理会话端点）
 
 **通用约定**（与 DESIGN.md §5.5 全局约定的子集一致）：
 
@@ -102,6 +102,11 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 | PUT | `/api/p/{slug}/conventions/draft` | 草稿 `content_md` | S2 |
 | POST | `/api/p/{slug}/conventions/approve` | `{说明,动机}` → 产生 ConventionVersion | S2 |
 | GET | `/api/p/{slug}/stats` | 仪表盘聚合（形状见 Stats） | S2 |
+| POST | `/api/p/{slug}/chat` | `{message}` 发给核心代理（pi）；回复经 SSE 推送；人消息与代理回复分别落 `chat.human` / `chat.chief` 事件 | R-M2 |
+| GET | `/api/p/{slug}/chat/stream` | SSE 流：`message_delta` / `message_final` / `card_proposed` / `agent_error` | R-M2 |
+| GET | `/api/p/{slug}/agent` | 核心代理状态：`{running, model, context_usage_percent, session_id}` | R-M2 |
+| POST | `/api/p/{slug}/agent/start` | `{model?}` 启动/唤醒核心代理会话（幂等） | R-M2 |
+| POST | `/api/p/{slug}/agent/stop` | 停止会话（pi 会话持久化，可再唤醒） | R-M2 |
 
 ---
 
@@ -119,9 +124,9 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 | 轮次 | 主题 | 后端 | 前端 | 验收 |
 |------|------|------|------|------|
 | **S0** ✅ 已验收 | 骨架 | 工程/注册表/账本建库/S0 端点/桩/测试/README | 单页壳三栏布局/API client+mock/组件骨架/README | 两端可跑；FE live 模式列出 BE 建的项目 |
-| **S1** 在途 | 文档系统 | 树/草稿端点充实（rules/apis 校验，复用 v1 diffing 思路） | 左栏模块全景树 + 草稿查看 | 建 domain→document→block，草稿四件套往返一致 |
-| **S2** M1 收尾（整包：审批闭环+队列+约定+仪表盘） | 账本全流程 | 卡片起草/ops 校验、approve/reject、快照、semver、轮次、事件链、events/rounds 端点；任务包双入口（卡片/技术任务单）、回执端点、看门狗；conventions 三端点；统计聚合 | 对话流内联审批卡片（渲染/批改/批准/打回）、轮次分段线、版本链视图；任务包面板、回执手工提交、技术单建单、超时标红；全局约定编辑；仪表盘 | **M1 总验收（§6）全部通过** |
-| **R-M2** 接入轮 | 主主代理上线 | pi RPC 客户端、会话管理（一项目一会话）、派发协议、回执端点接真实任务、看门狗接真实进程 | chat-first 重设计落地 + 真实流式对话 + 直达会话入口 + 各面板接真实数据 | 一轮真实闭环：对话 → 起草 → 批准 → 派发 → 回执（人工验收代替审计） |
+| **S1** ✅ 已验收 | 文档系统 | 树/草稿端点充实（rules/apis 校验，复用 v1 diffing 思路） | 左栏模块全景树 + 草稿查看 | 建 domain→document→block，草稿四件套往返一致 |
+| **S2** ✅ 已验收 | 账本全流程 | 卡片/批准/快照/semver/轮次/事件链/任务包双入口/回执/看门狗/约定/统计 | chat-first 重构 + M1 全部界面（含用户十余轮直达迭代） | **M1 总验收通过（2026-10-14：pytest 22 绿 + live 实测全链路）**；遗留版本快照端点 → R-M2 前置 |
+| **R-M2** 接入轮 | 主主代理上线 | **A 阶段**：pi RPC 适配层、一项目一会话、SSE 对话流、对话入库（chat.* 事件）、核心代理经 `draft_card` 工具起草真卡；**B 阶段**：`dispatch` 工具真实派生 harness、遥测/回执、看门狗接真实进程 | （前端 R-M2 提示词待后端契约落地后另发） | A：SSE 流式回复 + 工具起草卡片出现；B：批准→真实进程→回执→done/timeout |
 | 调整清单 | M3/M4 不预排轮次，大差不差再调整 | 契约测试生成、审计代理、投诉回流、看门狗细化 | 规则违反榜、仪表盘打磨、跨项目徽标、可视化 | 随做随派（工作台自身派发或人工转发），按张派发 |
 
 > 粒度调整记录（2026-10-14）：原拆六片（S0~S5）→ 四片 → 现为 **2 个整包轮 + 调整模式**。原因：派发靠人工中继、往返成本高；S0 证明主代理可承载大任务；M3/M4 属打磨性质，适合"整包→大差不差→调整"的循环。

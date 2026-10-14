@@ -180,17 +180,17 @@ const shown = computed(() => {
 }
 
 .bd__title {
-  font-size: var(--fs-16);
+  font-size: 18px;
   font-weight: 700;
 }
 
 .bd__id {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .bd__status {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   padding: 0 var(--sp-2);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-s);
@@ -210,12 +210,12 @@ const shown = computed(() => {
 
 .bd__selabel {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .bd__verchip {
   font-family: var(--font-mono);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ok);
   border: 1px solid var(--c-ok-border);
   border-radius: var(--radius-s);
@@ -230,7 +230,7 @@ const shown = computed(() => {
 
 .bd__select {
   font: inherit;
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-2);
   border: 1px solid var(--c-border-strong);
   border-radius: var(--radius-m);
@@ -241,12 +241,12 @@ const shown = computed(() => {
 
 .bd__meta {
   color: var(--c-ink-2);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .bd__hint {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   background: var(--c-panel-2);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-m);
@@ -278,7 +278,7 @@ const shown = computed(() => {
   border-radius: var(--radius-m);
   background: var(--c-panel);
   border-collapse: collapse;
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .bd__table th {
@@ -313,6 +313,6 @@ const shown = computed(() => {
 
 .bd__curtag {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 </style>

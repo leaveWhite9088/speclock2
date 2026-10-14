@@ -67,14 +67,14 @@ defineProps<{
 }
 
 .draft__sec-title {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   font-weight: 600;
   color: var(--c-ink-3);
 }
 
 .draft__pre {
   font-family: var(--font-mono);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   background: var(--c-mono-bg);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-s);
@@ -90,7 +90,7 @@ defineProps<{
 }
 
 .draft__rule {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   display: flex;
   gap: var(--sp-2);
   align-items: baseline;
@@ -114,7 +114,7 @@ defineProps<{
 
 .draft__empty {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .api-card {
@@ -139,7 +139,7 @@ defineProps<{
 
 .api-card__path {
   font-family: var(--font-mono);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-accent);
   background: var(--c-accent-bg);
   border-radius: var(--radius-s);
@@ -147,7 +147,7 @@ defineProps<{
 }
 
 .api-card__desc {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-2);
 }
 
@@ -157,7 +157,7 @@ defineProps<{
 }
 
 .api-card__group-title {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-3);
   font-weight: 600;
 }

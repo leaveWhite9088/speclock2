@@ -126,18 +126,18 @@ function toggleManifest(round: number): void {
 }
 
 .doc__title {
-  font-size: var(--fs-16);
+  font-size: 18px;
   font-weight: 700;
 }
 
 .doc__domain {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .doc__desc {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   margin-top: calc(-1 * var(--sp-2));
 }
 
@@ -178,7 +178,7 @@ function toggleManifest(round: number): void {
 }
 
 .doc__status {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   padding: 0 var(--sp-2);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-s);
@@ -192,7 +192,7 @@ function toggleManifest(round: number): void {
 
 .doc__ver {
   font-family: var(--font-mono);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ok);
   border: 1px solid var(--c-ok-border);
   border-radius: var(--radius-s);
@@ -202,12 +202,12 @@ function toggleManifest(round: number): void {
 
 .doc__unpub {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .doc__empty {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .doc__tl {
@@ -264,14 +264,14 @@ function toggleManifest(round: number): void {
 }
 
 .doc__tl-note {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-2);
   flex: 1;
   min-width: 160px;
 }
 
 .doc__tl-meta {
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-3);
 }
 
@@ -280,7 +280,7 @@ function toggleManifest(round: number): void {
   margin-top: var(--sp-1);
   border-top: 1px solid var(--c-border);
   border-collapse: collapse;
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .doc__manifest th {

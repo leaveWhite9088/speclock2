@@ -201,7 +201,7 @@ void rootEl
 
 <style scoped>
 .dtree {
-  padding: var(--sp-4);
+  padding: var(--sp-5);
   display: grid;
   gap: var(--sp-3);
   align-content: start;
@@ -209,6 +209,7 @@ void rootEl
 
 .dtree__note {
   color: var(--c-ink-3);
+  font-size: var(--fs-13);
 }
 
 .dtree__note--error {
@@ -225,7 +226,8 @@ void rootEl
   color: var(--c-ink-2);
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--radius-m);
-  padding: 3px 10px;
+  padding: 5px 12px;
+  font-size: var(--fs-13);
 }
 
 .dtree__new:hover:not(:disabled) {
@@ -235,38 +237,39 @@ void rootEl
 
 .dtree__hint {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .tree {
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .tree__node {
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .tree__children {
-  margin-left: 16px;
+  margin-left: 18px;
   display: grid;
-  gap: 2px;
+  gap: 3px;
   border-left: 1px solid var(--c-border);
-  padding-left: var(--sp-2);
+  padding-left: var(--sp-3);
 }
 
 .tree__row {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
-  padding: 1px 2px;
+  gap: var(--sp-2);
+  padding: 4px 2px;
 }
 
 .tree__toggle {
   color: var(--c-ink-3);
-  width: 14px;
+  width: 16px;
   flex: none;
+  font-size: var(--fs-13);
 }
 
 .tree__toggle:hover {
@@ -280,7 +283,7 @@ void rootEl
 
 .tree__doc {
   color: var(--c-ink-2);
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
 }
 
 .tree__doc:hover {
@@ -293,15 +296,15 @@ void rootEl
   font-size: var(--fs-12);
   border: 1px solid var(--c-border);
   border-radius: 999px;
-  padding: 0 6px;
-  line-height: 16px;
+  padding: 0 7px;
+  line-height: 18px;
 }
 
 .tree__add {
   margin-left: auto;
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
-  padding: 0 4px;
+  font-size: var(--fs-13);
+  padding: 2px 6px;
   flex: none;
 }
 
@@ -312,7 +315,7 @@ void rootEl
 .tree__block {
   color: var(--c-ink);
   font-family: var(--font-mono);
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
 }
 
 .tree__block:hover {
@@ -322,12 +325,12 @@ void rootEl
 .ver {
   margin-left: auto;
   flex: none;
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink-3);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-s);
-  padding: 0 6px;
-  line-height: 16px;
+  padding: 1px 7px;
+  line-height: 18px;
 }
 
 .ver--pub {
@@ -337,7 +340,7 @@ void rootEl
 
 .tree__empty {
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
 }
 
 .cform {

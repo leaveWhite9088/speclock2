@@ -76,6 +76,18 @@ function openBlockFromCurrentDoc(blockId: string): void {
   view.value = { kind: 'block', domainId: v.domainId, documentId: v.documentId, blockId }
 }
 
+/** 返回上一级：模块 → 文档 → 树 → 退出文档回到会话 */
+function goUp(): void {
+  const v = view.value
+  if (v.kind === 'block') {
+    view.value = { kind: 'document', domainId: v.domainId, documentId: v.documentId }
+  } else if (v.kind === 'document') {
+    view.value = { kind: 'tree' }
+  } else {
+    emit('close')
+  }
+}
+
 function findDomain(domainId: string) {
   return tree.value?.items.find((d) => d.id === domainId) ?? null
 }
@@ -119,7 +131,7 @@ watch(
           <span v-if="i < crumbs.length - 1" class="docs__crumb-sep" aria-hidden="true">/</span>
         </template>
       </nav>
-      <button type="button" class="btn btn--ghost btn--sm" @click="emit('close')">← 返回对话</button>
+      <button type="button" class="btn btn--sm docs__up" @click="goUp">← 返回上一级</button>
     </header>
 
     <div class="docs__body">
@@ -180,7 +192,7 @@ watch(
 }
 
 .docs__crumb {
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
   color: var(--c-ink-2);
   padding: 2px 6px;
   border-radius: var(--radius-m);
@@ -199,6 +211,11 @@ watch(
 
 .docs__crumb-sep {
   color: var(--c-ink-3);
+}
+
+.docs__up {
+  margin-left: auto;
+  flex: none;
 }
 
 .docs__body {

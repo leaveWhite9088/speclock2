@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .config import Settings
 
-PROMPT_TIMEOUT = 300  # 单回合兜底超时（秒）
+PROMPT_TIMEOUT = 600  # 单回合兜底超时（秒）：真模型多轮工具调用（含派发等待）耗时较长
 STATS_WARN_PERCENT = 80
 
 
@@ -51,17 +51,18 @@ def resolve_pi_command() -> list[str] | None:
     if override:
         return override.split()
     try:
-        root = subprocess.run(
-            ["npm", "root", "-g"], capture_output=True, text=True, timeout=30
-        ).stdout.strip()
-        pkg = Path(root) / "@earendil-works" / "pi-coding-agent" / "package.json"
-        if pkg.exists():
-            bin_js = Path(root) / "@earendil-works" / "pi-coding-agent" / json.loads(
-                pkg.read_text(encoding="utf-8")
-            )["bin"]["pi"]
-            node = shutil.which("node")
-            if node and bin_js.exists():
-                return [node, str(bin_js)]
+        npm = shutil.which("npm")  # Windows 下 subprocess 不解析 .cmd，须经 which 拿全名
+        if npm:
+            root = subprocess.run(
+                [npm, "root", "-g"], capture_output=True, text=True, timeout=30
+            ).stdout.strip()
+            pkg_dir = Path(root) / "@earendil-works" / "pi-coding-agent"
+            pkg = pkg_dir / "package.json"
+            if pkg.exists():
+                bin_js = pkg_dir / json.loads(pkg.read_text(encoding="utf-8"))["bin"]["pi"]
+                node = shutil.which("node")
+                if node and bin_js.exists():
+                    return [node, str(bin_js)]
     except Exception:
         pass
     which = shutil.which("pi")

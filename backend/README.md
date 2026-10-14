@@ -70,8 +70,11 @@ npm i -g @earendil-works/pi-coding-agent@1.2.0   # 锁版本；pi --version 确�
 | 变量 | 说明 |
 |------|------|
 | `SPECLOCK2_CHIEF_MOCK=1` | **降级开关**：无 provider key 时核心代理走本地模拟（含工具效果），全流程可自测 |
-| `SPECLOCK2_CHIEF_PROVIDER` / `SPECLOCK2_CHIEF_MODEL` | 真模型（如 `zai-coding-cn` / 模型名）；对应 provider 的 API key 按 pi 的环境变量约定设置 |
+| `SPECLOCK2_CHIEF_PROVIDER` / `SPECLOCK2_CHIEF_MODEL` | 核心代理真模型（如 `minimax-cn` / `MiniMax-M3`）；对应 provider 的 API key 按 pi 的环境变量约定设置（如 `MINIMAX_CN_API_KEY`） |
+| `SPECLOCK2_MASTER_MODEL` | 主代理模型（被派发的 pi 用）；缺省沿用核心代理配置 |
 | `SPECLOCK2_PI_CMD` | 覆盖 pi 启动命令（默认自动解析 `npm root -g` 下的 node + cli.js） |
+
+**两级代理都可直接配置**：核心代理在工作台内部经 RPC 请求（上面的 env）；主代理在派发时直接唤醒对应 CLI——`data/harness-map.json` 的 `masters` 决定每个主代理用哪个 harness。配置了真模型时默认映射自动把 backend/frontend 指向真 pi（继承 provider key 与 `SPECLOCK2_MASTER_MODEL`），未配置时落到零依赖替身 `sl2-fake`（无 key 开箱可测）。技术任务单支持可选 `master` 字段（默认 `backend`）指定执行主体。
 
 ### harness 映射（`data/harness-map.json`，首次自动生成）
 

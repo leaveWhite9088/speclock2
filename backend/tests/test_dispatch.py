@@ -53,15 +53,15 @@ def _write_map(data_dir: Path, masters: dict, extra_args: list[str] | None = Non
     (data_dir / "harness-map.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
 
 
-def test_harness_map_build_argv():
+def test_harness_map_build_argv(data_dir):
     cfg = {"command": "python", "args": ["x.py", "--flag"], "prompt_mode": "arg"}
     assert build_argv(cfg, "做任务") == ["python", "x.py", "--flag", "做任务"]
     inline = {"command": "node", "args": ["cli.js", "-p", "{prompt}"], "prompt_mode": "inline"}
     assert build_argv(inline, "做任务") == ["node", "cli.js", "-p", "做任务"]
-    # 默认映射：包含替身 harness 与 master 映射
+    # 默认映射（无模型配置时）：master 映射到零依赖替身；技术单（master 空）也落替身
     default = default_map()
     assert resolve_harness(default, "backend")["prompt_mode"] == "arg"
-    assert resolve_harness(default, None)["command"]  # 技术单任务（master 待定）落到默认替身
+    assert resolve_harness(default, None)["command"]
 
 
 def test_dispatch_full_flow_with_real_process(mock_client, data_dir, cleanup_written_files):

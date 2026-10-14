@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,8 +22,21 @@ from .pi_runtime import resolve_pi_command
 DEFAULT_MASTER_HARNESS = "sl2-fake"
 
 
+def master_model() -> str | None:
+    """主代理模型：优先 SPECLOCK2_MASTER_MODEL，否则沿用核心代理的 provider/model。"""
+    m = os.environ.get("SPECLOCK2_MASTER_MODEL")
+    if m:
+        return m
+    provider = os.environ.get("SPECLOCK2_CHIEF_PROVIDER", "")
+    model = os.environ.get("SPECLOCK2_CHIEF_MODEL", "")
+    if provider and model:
+        return f"{provider}/{model}"
+    return model or None
+
+
 def default_map() -> dict:
-    """默认映射：替身 harness 零依赖可跑；pi（node 直启，避免 .cmd 问题）装了即有。"""
+    """默认映射：配置了真模型 → 主代理直接唤醒 pi（真 CLI，继承 provider key）；
+    未配置 → 落到零依赖替身，无 key 也能全链自测。"""
     backend_dir = Path(__file__).resolve().parent.parent
     fake = backend_dir / "scripts" / "fake_harness.py"
     harnesses: dict[str, dict] = {
@@ -30,14 +44,18 @@ def default_map() -> dict:
             "command": sys.executable,
             "args": [str(fake)],
             "prompt_mode": "arg",
-            "note": "被派发 harness 替身：无 key 自测用；装了真 CLI 后把 masters 改指 pi/claude-code/codex",
+            "note": "被派发 harness 替身：无 key 自测用；主代理默认走 pi，本条仅兜底",
         },
     }
+    model = master_model()
     pi_cmd = resolve_pi_command()
     if pi_cmd and pi_cmd[0].lower().endswith(("node", "node.exe")):  # node 直启 cli.js，避开 .cmd
+        pi_args = [*pi_cmd[1:], "--mode", "json", "-p", "{prompt}", "--no-session"]
+        if model:
+            pi_args += ["--model", model]
         harnesses["pi"] = {
             "command": pi_cmd[0],
-            "args": [*pi_cmd[1:], "--mode", "json", "-p", "{prompt}", "--no-session"],
+            "args": pi_args,
             "prompt_mode": "inline",
         }
     harnesses["claude-code"] = {
@@ -50,9 +68,11 @@ def default_map() -> dict:
         "args": ["exec", "--json", "{prompt}"],
         "prompt_mode": "inline",
     }
+    # 有真模型 → 主代理默认真 CLI；否则替身（保证无 key 环境开箱可测）
+    default_master = "pi" if (model and "pi" in harnesses) else DEFAULT_MASTER_HARNESS
     return {
         "watchdog_minutes_default": 60,
-        "masters": {"backend": DEFAULT_MASTER_HARNESS, "frontend": DEFAULT_MASTER_HARNESS},
+        "masters": {"backend": default_master, "frontend": default_master},
         "harnesses": harnesses,
     }
 

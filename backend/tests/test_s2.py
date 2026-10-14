@@ -328,7 +328,7 @@ def test_tech_order_flow(client):
     assert tech_pkg["origin"] == "tech"
     assert tech_pkg["version_refs"] == {}
     assert len(tech_pkg["tasks"]) == 1
-    assert tech_pkg["tasks"][0]["master"] is None  # master 待定
+    assert tech_pkg["tasks"][0]["master"] == "backend"  # 技术单默认执行主体（可传 master 覆盖）
 
     ev = _events(client, type="tech.order")
     assert ev[0]["ref"]["order"] == "O-0001"

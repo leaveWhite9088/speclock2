@@ -47,6 +47,7 @@ class TechOrderBody(BaseModel):
     scope: list | None = None
     baseline: dict | None = None
     acceptance: list = []
+    master: str | None = "backend"  # 执行主体（决定派发哪个 harness；回执记录契约扩展）
 
 
 def _project_or_404(request: Request, slug: str) -> None:
@@ -233,8 +234,8 @@ def create_tech_order(slug: str, body: TechOrderBody, request: Request) -> dict:
         package = models.TaskPackage(origin="tech", round=round_.n, version_refs={}, created_at=now_iso())
         session.add(package)
         session.flush()
-        # 技术单任务 master 待定（null），派发前由人指定——M1 由 dispatch 直接派发
-        task = models.Task(package_id=package.id, master=None, status="queued",
+        # 技术单任务的执行主体（默认 backend；映射 masters[None] 命不中会落替身）
+        task = models.Task(package_id=package.id, master=body.master, status="queued",
                            created_at=now_iso(), updated_at=now_iso())
         session.add(task)
         session.flush()

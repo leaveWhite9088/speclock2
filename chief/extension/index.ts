@@ -126,8 +126,9 @@ export default function (pi: ExtensionAPI) {
 				const task = pkg?.tasks.find((t: any) => t.task_id === p.task_id);
 				if (!task) throw new Error(`任务 ${p.task_id} 不存在`);
 
-				// 2. 状态机推进 + 看门狗
-				await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: p.watchdog_minutes });
+				// 2. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）
+				const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
+				await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: watchdogMinutes });
 
 				// 3. harness 映射（与 mock 执行器共用同一配置文件）
 				const map = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "harness-map.json"), "utf-8"));
@@ -139,7 +140,7 @@ export default function (pi: ExtensionAPI) {
 
 				// 4. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
 				const started = Date.now();
-				const result = await new Promise<{ exitCode: number; text: string; usage: any }>((resolve) => {
+				const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
 					const isCmd = /\.cmd$/i.test(harness.command);
 					const finalArgv = isCmd ? ["cmd", "/c", harness.command, ...argv] : argv;
 					const command = isCmd ? "cmd" : harness.command;
@@ -147,6 +148,7 @@ export default function (pi: ExtensionAPI) {
 					let buffer = "";
 					let text = "";
 					let usage: any = null;
+					let stderrTail = "";
 					const processLine = (line: string) => {
 						if (!line.trim()) return;
 						let event: any;
@@ -169,27 +171,31 @@ export default function (pi: ExtensionAPI) {
 						buffer = lines.pop() ?? "";
 						for (const line of lines) processLine(line);
 					});
-					proc.stderr.on("data", () => {}); // 防背压
+					proc.stderr.on("data", (data: Buffer) => {
+						stderrTail = (stderrTail + data.toString("utf-8")).slice(-500); // 尾部诊断
+					});
 					proc.on("close", (code) => {
 						if (buffer.trim()) processLine(buffer);
-						resolve({ exitCode: code ?? 1, text, usage });
+						resolve({ exitCode: code ?? 1, text, usage, stderrTail });
 					});
-					proc.on("error", () => resolve({ exitCode: 1, text, usage }));
+					proc.on("error", (err) => {
+						resolve({ exitCode: 1, text, usage, stderrTail: String(err) });
+					});
 				});
 
 				if (result.exitCode !== 0) {
 					return {
-						content: [{ type: "text", text: `任务 ${p.task_id} 进程异常退出（码 ${result.exitCode}），未回执，等待看门狗标记 timeout` }],
-						details: { outcome: "crashed", exit_code: result.exitCode },
+						content: [{ type: "text", text: `任务 ${p.task_id} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}，未回执，等待看门狗标记 timeout` }],
+						details: { outcome: "crashed", exit_code: result.exitCode, stderr: result.stderrTail },
 					};
 				}
 
 				// 5. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
-				const files = (text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+				const files = (result.text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
 				const receipt = await api("POST", `/tasks/${p.task_id}/receipt`, {
 					files_changed: files,
 					self_check: `主代理进程退出码 0`,
-					summary: text.slice(0, 200),
+					summary: result.text.slice(0, 200),
 					telemetry: {
 						duration_ms: Date.now() - started,
 						tokens: result.usage

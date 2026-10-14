@@ -10,6 +10,10 @@ from fastapi.testclient import TestClient
 def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
     monkeypatch.setenv("SPECLOCK2_DATA_DIR", str(d))
+    # 隔离开发机 backend/.env 的本地配置（key/模型配置不进测试环境）
+    for key in ("SPECLOCK2_CHIEF_PROVIDER", "SPECLOCK2_CHIEF_MODEL", "SPECLOCK2_MASTER_MODEL",
+                "MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "SPECLOCK2_PI_CMD"):
+        monkeypatch.delenv(key, raising=False)
     return d
 
 

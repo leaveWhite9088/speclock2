@@ -308,8 +308,12 @@ export interface MasterInfo {
   /** 目录所有权，如 backend/ */
   dir: string
   harness: string
-  /** 使用的模型（主代理挂在强模型上） */
+  /** 使用的模型（主代理挂在强模型上；只能从「模型登记」里选） */
   model: string
+  /** 绑定的 CLI 会话 id（唤醒后接续该会话工作） */
+  session?: string | null
+  /** 会话标题（展示用；mock 由 CLI 会话表联出） */
+  session_title?: string | null
 }
 
 export interface CreateMasterBody {
@@ -318,6 +322,28 @@ export interface CreateMasterBody {
   dir?: string
   harness?: string
   model?: string
+  session?: string
+}
+
+/* ---------- Harness 模型登记（工作台只唤醒 Harness，不替它配模型；端点为提议形状） ---------- */
+
+/** 一条登记：Harness × 模型（纯信息记录，添加主代理时从这里选） */
+export interface ModelEntry {
+  id: string
+  harness: string
+  model: string
+}
+
+export interface RegisterModelBody {
+  harness: string
+  model: string
+}
+
+/** CLI 会话（读取 CLI 内部的会话列表，主代理创建时选定一个绑定） */
+export interface CliSession {
+  id: string
+  title: string
+  updated_at: string
 }
 
 /* ---------- 版本快照详情（查看版本：当时那份 API/业务；端点为提议形状） ---------- */
@@ -477,6 +503,11 @@ export interface ApiClient {
   createMaster(slug: string, body: CreateMasterBody): Promise<MasterInfo>
   getBlockVersion(slug: string, blockId: string, version: string): Promise<VersionDetail>
   startQueue(slug: string): Promise<{ started: number }>
+  /** Harness×模型登记（全局，不挂项目；后端未提供时 UI 用内置登记兜底） */
+  listModels(): Promise<{ items: ModelEntry[] }>
+  registerModel(body: RegisterModelBody): Promise<ModelEntry>
+  removeModel(id: string): Promise<void>
+  listCliSessions(): Promise<{ items: CliSession[] }>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -552,5 +583,10 @@ export function createApiClient(): ApiClient {
     getBlockVersion: (slug, blockId, version) =>
       request<VersionDetail>(`${p(slug)}/blocks/${blockId}/versions/${version}`),
     startQueue: (slug) => request<{ started: number }>(`${p(slug)}/queue/start`, { method: 'POST' }),
+    listModels: () => request<{ items: ModelEntry[] }>('/api/models'),
+    registerModel: (body) =>
+      request<ModelEntry>('/api/models', { method: 'POST', body: JSON.stringify(body) }),
+    removeModel: (id) => request<void>(`/api/models/${id}`, { method: 'DELETE' }),
+    listCliSessions: () => request<{ items: CliSession[] }>('/api/cli-sessions'),
   }
 }

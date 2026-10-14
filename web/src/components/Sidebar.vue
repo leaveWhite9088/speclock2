@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { ApiClient, MasterInfo, Project } from '../api/client'
+import { computed, ref, watch } from 'vue'
+import type { ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
 import type { SessionTarget } from '../types'
 import ModalShell from './ModalShell.vue'
 
@@ -18,6 +18,10 @@ const props = defineProps<{
   projectStats: Record<string, { pending: number; active: number }>
   masterStates: Record<string, { label: string; kind: 'running' | 'queued' | 'auditing' | 'timeout' }>
   corePending: number
+  /** Harness×模型登记（右上角「模型」维护）：主代理的属性只能从这里选 */
+  modelEntries: ModelEntry[]
+  /** CLI 内部的会话列表：主代理唤醒后接续选定的会话工作 */
+  cliSessions: CliSession[]
 }>()
 
 const emit = defineEmits<{
@@ -26,25 +30,45 @@ const emit = defineEmits<{
   (e: 'masters-changed'): void
 }>()
 
-const HARNESS_OPTIONS = ['claude-code', 'codex', 'kimicode']
-const MODEL_SUGGESTIONS = ['glm-4.7', 'claude-sonnet-4.5', 'gpt-5.2', 'deepseek-v3.2', 'qwen3-max']
-
 const showModal = ref(false)
 const newName = ref('')
 const newDuty = ref('')
 const newDir = ref('')
-const newHarness = ref(HARNESS_OPTIONS[0])
-const newModel = ref(MODEL_SUGGESTIONS[0])
+const newHarness = ref('')
+const newModel = ref('')
+const newSession = ref('')
 const addError = ref('')
 const creating = ref(false)
+
+/** 可选 Harness = 登记里出现过的（保持登记顺序） */
+const harnessOptions = computed(() => [...new Set(props.modelEntries.map((e) => e.harness))])
+
+/** 可选模型 = 当前 Harness 名下登记的 */
+const modelOptions = computed(() =>
+  props.modelEntries.filter((e) => e.harness === newHarness.value).map((e) => e.model),
+)
+
+// 切 Harness 后模型不在其名下时，回落到该 Harness 的第一个登记模型
+watch(
+  () => newHarness.value,
+  () => {
+    if (!modelOptions.value.includes(newModel.value)) newModel.value = modelOptions.value[0] ?? ''
+  },
+)
+
+function sessionLabel(s: CliSession): string {
+  const day = s.updated_at.slice(5, 16).replace('T', ' ')
+  return `${s.title} · ${s.id} · ${day}`
+}
 
 function openAdd(): void {
   showModal.value = true
   newName.value = ''
   newDuty.value = ''
   newDir.value = ''
-  newHarness.value = HARNESS_OPTIONS[0]
-  newModel.value = MODEL_SUGGESTIONS[0]
+  newHarness.value = harnessOptions.value[0] ?? ''
+  newModel.value = modelOptions.value[0] ?? ''
+  newSession.value = ''
   addError.value = ''
 }
 
@@ -63,6 +87,14 @@ async function submitAdd(): Promise<void> {
     addError.value = '目录必填（这个主代理只能动它的目录，如 backend/）'
     return
   }
+  if (!newHarness.value || !newModel.value) {
+    addError.value = 'Harness 与模型从登记里选——先在右上角「模型」里登记'
+    return
+  }
+  if (!newSession.value) {
+    addError.value = '请选择要绑定的 CLI 会话'
+    return
+  }
   creating.value = true
   addError.value = ''
   try {
@@ -72,6 +104,7 @@ async function submitAdd(): Promise<void> {
       dir: newDir.value,
       harness: newHarness.value,
       model: newModel.value,
+      session: newSession.value,
     })
     closeAdd()
     emit('masters-changed')
@@ -193,19 +226,27 @@ function avatarText(name: string): string {
         </label>
         <div class="amaster__grid2">
           <label class="amaster__field">
-            Harness
-            <select v-model="newHarness" class="amaster__input" :disabled="creating">
-              <option v-for="h in HARNESS_OPTIONS" :key="h" :value="h">{{ h }}</option>
+            Harness（从「模型」登记里选）
+            <select v-model="newHarness" class="amaster__input" :disabled="creating || harnessOptions.length === 0">
+              <option v-if="harnessOptions.length === 0" value="">（未登记）</option>
+              <option v-for="h in harnessOptions" :key="h" :value="h">{{ h }}</option>
             </select>
           </label>
           <label class="amaster__field">
             模型
-            <input v-model="newModel" class="amaster__input" type="text" list="amaster-models" :disabled="creating" />
-            <datalist id="amaster-models">
-              <option v-for="m in MODEL_SUGGESTIONS" :key="m" :value="m" />
-            </datalist>
+            <select v-model="newModel" class="amaster__input" :disabled="creating || modelOptions.length === 0">
+              <option v-if="modelOptions.length === 0" value="">（未登记）</option>
+              <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+            </select>
           </label>
         </div>
+        <label class="amaster__field">
+          会话（读取 CLI 内部的会话列表，唤醒后接续该会话工作）
+          <select v-model="newSession" class="amaster__input" :disabled="creating || cliSessions.length === 0">
+            <option value="" disabled>选择一个 CLI 会话…</option>
+            <option v-for="s in cliSessions" :key="s.id" :value="s.id">{{ sessionLabel(s) }}</option>
+          </select>
+        </label>
         <label class="amaster__field">
           目录（所有权边界：只能动这个目录）
           <input v-model="newDir" class="amaster__input" type="text" placeholder="如 data/ 或 web/src/" :disabled="creating" />

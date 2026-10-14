@@ -4,7 +4,7 @@
 import type { Card, Event, FeedVersion, Package, RoundInfo, TaskStatus } from './api/client'
 
 /** 顶栏右侧抽屉入口（文档是主区视图，不占抽屉） */
-export type DrawerKey = 'queue' | 'convention'
+export type DrawerKey = 'queue' | 'convention' | 'models'
 
 /** 当前会话：核心代理，或某个主代理的工作流视图 */
 export type SessionTarget = { kind: 'core' } | { kind: 'master'; masterId: string }

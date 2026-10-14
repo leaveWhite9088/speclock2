@@ -3,14 +3,23 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createApiClient } from './api/client'
 import type {
   ApiClient,
+  CliSession,
   FeedVersion,
   MasterInfo,
+  ModelEntry,
   Package,
   Project,
   ProjectDetail,
   TaskReceipt,
 } from './api/client'
-import { createMockApiClient, getMockActivity, getMockCoreOpeners, isMockQueueRunning } from './api/mock'
+import {
+  createMockApiClient,
+  FALLBACK_CLI_SESSIONS,
+  FALLBACK_MODEL_ENTRIES,
+  getMockActivity,
+  getMockCoreOpeners,
+  isMockQueueRunning,
+} from './api/mock'
 import type { DrawerKey, FeedRound, SessionTarget } from './types'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
@@ -20,6 +29,7 @@ import DocsBrowser from './components/DocsBrowser.vue'
 import RightDrawer from './components/RightDrawer.vue'
 import QueuePanel from './components/QueuePanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
+import ModelPanel from './components/ModelPanel.vue'
 
 type Mode = 'probing' | 'live' | 'mock'
 
@@ -35,6 +45,10 @@ const feed = ref<FeedRound[]>([])
 const feedError = ref('')
 const packages = ref<Package[]>([])
 const masters = ref<MasterInfo[]>([])
+
+// Harness×模型登记 + CLI 会话列表（「模型」抽屉与添加主代理共用）
+const modelEntries = ref<ModelEntry[]>([])
+const cliSessions = ref<CliSession[]>([])
 
 // 会话与抽屉
 const session = ref<SessionTarget>({ kind: 'core' })
@@ -217,6 +231,7 @@ async function bootstrap(): Promise<void> {
     client.value = createMockApiClient()
     projects.value = (await client.value.listProjects()).items
   }
+  await loadRegistry()
   if (projects.value.length > 0) await selectProject(projects.value[0].slug)
 }
 
@@ -288,6 +303,21 @@ async function reloadMasters(): Promise<void> {
     masters.value = (await client.value.listMasters(currentSlug.value)).items
   } catch {
     /* 保持现状 */
+  }
+}
+
+/** 模型登记与 CLI 会话列表：live 后端未提供端点时用内置登记兜底（主代理表单仍可用） */
+async function loadRegistry(): Promise<void> {
+  if (!client.value) return
+  try {
+    modelEntries.value = (await client.value.listModels()).items
+  } catch {
+    modelEntries.value = FALLBACK_MODEL_ENTRIES.map((x) => ({ ...x }))
+  }
+  try {
+    cliSessions.value = (await client.value.listCliSessions()).items
+  } catch {
+    cliSessions.value = FALLBACK_CLI_SESSIONS.map((x) => ({ ...x }))
   }
 }
 
@@ -406,6 +436,8 @@ onMounted(() => {
       :project-stats="projectStats"
       :master-states="masterStates"
       :core-pending="corePending"
+      :model-entries="modelEntries"
+      :cli-sessions="cliSessions"
       :style="{ width: `${sidebarWidth}px` }"
       @select-project="selectProject"
       @select-session="onSelectSession"
@@ -488,6 +520,9 @@ onMounted(() => {
         </RightDrawer>
         <RightDrawer v-else-if="drawer === 'convention'" title="全局约定" @close="drawer = null">
           <ConventionPanel :client="client" :slug="currentSlug" />
+        </RightDrawer>
+        <RightDrawer v-else-if="drawer === 'models'" title="模型" @close="drawer = null">
+          <ModelPanel :client="client" :entries="modelEntries" @changed="loadRegistry" />
         </RightDrawer>
       </div>
     </div>

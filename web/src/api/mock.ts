@@ -16,12 +16,14 @@ import type {
   BlockDraft,
   Card,
   CardSubmission,
+  CliSession,
   Convention,
   CreateTechOrderBody,
   Event,
   EventActor,
   FeedVersion,
   MasterInfo,
+  ModelEntry,
   Package,
   Project,
   ProjectTree,
@@ -411,6 +413,25 @@ const projects: Project[] = [
   { slug: 'expense', name: '费用报销', created_at: '2026-10-13T14:30:00+08:00', status: 'active' },
 ]
 
+/* ---------- Harness×模型登记 / CLI 会话（mock 初始数据；live 后端缺端点时也用它兜底） ---------- */
+
+export const FALLBACK_MODEL_ENTRIES: ModelEntry[] = [
+  { id: 'mdl-1', harness: 'claude-code', model: 'glm-4.7' },
+  { id: 'mdl-2', harness: 'claude-code', model: 'claude-sonnet-4.5' },
+  { id: 'mdl-3', harness: 'codex', model: 'gpt-5.2' },
+  { id: 'mdl-4', harness: 'codex', model: 'deepseek-v3.2' },
+  { id: 'mdl-5', harness: 'kimicode', model: 'kimi-k2.5' },
+  { id: 'mdl-6', harness: 'kimicode', model: 'qwen3-max' },
+]
+
+/** 「读取 CLI 内部的会话列表」的 mock 形态（R-M2 接真实 CLI 会话目录） */
+export const FALLBACK_CLI_SESSIONS: CliSession[] = [
+  { id: 'sess_7d21c8', title: '日报导出 · 后端实现', updated_at: '2026-10-14T09:20:00+08:00' },
+  { id: 'sess_3a90f2', title: '前端工作台 · 界面重构', updated_at: '2026-10-13T16:41:00+08:00' },
+  { id: 'sess_b54e07', title: '订阅模块 · 方案讨论', updated_at: '2026-10-12T11:05:00+08:00' },
+  { id: 'sess_e8c31d', title: '全局约定 · 起草', updated_at: '2026-10-11T20:33:00+08:00' },
+]
+
 /* ---------- mock 客户端 ---------- */
 
 export function createMockApiClient(): ApiClient {
@@ -455,18 +476,22 @@ export function createMockApiClient(): ApiClient {
     },
   }
 
-  // ---- R-M2 前的前端承载状态：主代理注册 / 版本快照 / 过程流 / 队列模拟 ----
+  // ---- R-M2 前的前端承载状态：主代理注册 / 模型登记 / CLI 会话 / 版本快照 / 过程流 / 队列模拟 ----
+  const sessionTitle = (id: string | null | undefined): string | null =>
+    FALLBACK_CLI_SESSIONS.find((s) => s.id === id)?.title ?? null
   const mastersBySlug: Record<string, MasterInfo[]> = {
     'daily-report': [
-      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7' },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5' },
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
     expense: [
-      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7' },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5' },
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
   }
   let masterSeq = 0
+  const modelRegistry: ModelEntry[] = clone(FALLBACK_MODEL_ENTRIES)
+  let modelSeq = modelRegistry.length
   /** 版本快照：key = `${blockId}@${version}` → 当时整份草稿（查看版本用） */
   const versionSnaps: Record<string, BlockDraft> = {
     '1@1.2.0': clone(exportBlockDraft),
@@ -986,13 +1011,21 @@ export function createMockApiClient(): ApiClient {
       if (!body.name.trim() || !body.duty.trim()) {
         throw new ApiError(422, { code: 'validation_error', message: '名称与职责必填' })
       }
+      if (!body.session?.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: '请选择要绑定的 CLI 会话' })
+      }
+      if (!body.harness?.trim() || !body.model?.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: 'Harness 与模型必选（从「模型」登记里选）' })
+      }
       const master: MasterInfo = {
         id: `m${++masterSeq}`,
         name: body.name.trim(),
         duty: body.duty.trim(),
         dir: body.dir?.trim() || '（待定）',
-        harness: body.harness?.trim() || 'claude-code',
-        model: body.model?.trim() || 'glm-4.7',
+        harness: body.harness.trim(),
+        model: body.model.trim(),
+        session: body.session.trim(),
+        session_title: sessionTitle(body.session),
       }
       ;(mastersBySlug[slug] ??= []).push(master)
       return { ...master }
@@ -1022,6 +1055,27 @@ export function createMockApiClient(): ApiClient {
       runNextPackage(slug, 0)
       return { started: pending.length }
     },
+
+    listModels: async () => ({ items: modelRegistry.map((x) => ({ ...x })) }),
+    registerModel: async (body) => {
+      const harness = body.harness.trim()
+      const model = body.model.trim()
+      if (!harness || !model) {
+        throw new ApiError(422, { code: 'validation_error', message: 'Harness 与模型都要填' })
+      }
+      if (modelRegistry.some((x) => x.harness === harness && x.model === model)) {
+        throw new ApiError(409, { code: 'conflict', message: `${harness} 已登记过模型 ${model}` })
+      }
+      const entry: ModelEntry = { id: `mdl-${++modelSeq}`, harness, model }
+      modelRegistry.push(entry)
+      return { ...entry }
+    },
+    removeModel: async (id) => {
+      const idx = modelRegistry.findIndex((x) => x.id === id)
+      if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `登记 ${id} 不存在（mock）` })
+      modelRegistry.splice(idx, 1)
+    },
+    listCliSessions: async () => ({ items: FALLBACK_CLI_SESSIONS.map((x) => ({ ...x })) }),
   }
 
   bindMockRuntime(

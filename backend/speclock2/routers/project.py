@@ -150,6 +150,46 @@ def get_block(slug: str, block_id: str, request: Request) -> dict:
     return data
 
 
+@router.get("/blocks/{block_id}/versions/{version}")
+def get_block_version(slug: str, block_id: str, version: str, request: Request) -> dict:
+    """某版本四件套快照（契约 v0.3 S2-fix）；version=draft 返回当前草稿。"""
+    db = request.app.state.db
+    with db.registry_session() as session:
+        _project_or_404(session, slug)
+    with db.ledger_session(slug) as session:
+        block = _block_or_404(session, block_id)
+        if version == "draft":
+            return {
+                "block_id": str(block.id),
+                "version": "draft",
+                "round": 0,  # 草稿未进入任何轮次（见回执说明）
+                "statement": None,
+                "delta_summary": None,
+                "draft": serialize.draft_out(block),
+            }
+        snapshot = session.scalars(
+            select(models.BlockVersion)
+            .where(models.BlockVersion.block_id == block.id, models.BlockVersion.version == version)
+            .limit(1)
+        ).first()
+        if snapshot is None:
+            raise ApiError(404, "not_found", f"版本不存在：{version}")
+        delta_json = snapshot.delta_json or {}
+        return {
+            "block_id": str(block.id),
+            "version": snapshot.version,
+            "round": snapshot.round,
+            "statement": snapshot.statement,
+            "delta_summary": delta_json.get("summary"),
+            "draft": {
+                "content_md": snapshot.content_md,
+                "rules": snapshot.rules_json,
+                "apis": snapshot.apis_json,
+                "nfr_md": snapshot.nfr_md,
+            },
+        }
+
+
 @router.put("/blocks/{block_id}")
 def update_block_draft(slug: str, block_id: str, body: schemas.BlockDraftUpdate, request: Request) -> dict:
     db = request.app.state.db

@@ -96,6 +96,41 @@ ol {
   border-color: var(--c-border);
 }
 
+/* ---- 任务状态徽标（DESIGN.md §9.3 状态机；timeout 标红） ---- */
+.badge--queued {
+  color: var(--c-ink-2);
+  background: var(--c-panel-2);
+  border-color: var(--c-border);
+}
+.badge--dispatched,
+.badge--running {
+  color: var(--c-accent);
+  background: var(--c-accent-bg);
+  border-color: var(--c-accent-border);
+}
+.badge--reported,
+.badge--auditing {
+  color: var(--c-warn);
+  background: var(--c-warn-bg);
+  border-color: var(--c-warn-border);
+}
+.badge--done {
+  color: var(--c-ok);
+  background: var(--c-ok-bg);
+  border-color: var(--c-ok-border);
+}
+.badge--rejected {
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
+  border-color: var(--c-danger-border);
+}
+.badge--timeout {
+  color: #ffffff;
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+  font-weight: 700;
+}
+
 /* ---- 按钮 ---- */
 .btn {
   padding: 5px 14px;

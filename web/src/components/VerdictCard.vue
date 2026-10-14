@@ -1,23 +1,28 @@
 <script setup lang="ts">
-import type { VerdictBrief } from '../types'
+import { computed } from 'vue'
+import type { Event } from '../api/client'
 
-defineProps<{
-  verdict: VerdictBrief
+const props = defineProps<{
+  event: Event
 }>()
+
+const result = computed((): 'pass' | 'fail' => (props.event.type.endsWith('passed') ? 'pass' : 'fail'))
+const taskId = computed((): string => String(props.event.ref.task ?? ''))
+const note = computed((): string => {
+  const raw = props.event.payload.note
+  return typeof raw === 'string' ? raw : ''
+})
 </script>
 
 <template>
-  <article class="sub-card sub-card--verdict" :aria-label="`裁决卡 ${verdict.title}`">
+  <article class="sub-card sub-card--verdict" :aria-label="`裁决卡 ${event.id}`">
     <header class="sub-card__head">
       <span class="sub-card__tag">裁决</span>
-      <span>{{ verdict.title }}</span>
-      <span class="badge" :class="verdict.result === 'pass' ? 'badge--approved' : 'badge--rejected'">
-        {{ verdict.result === 'pass' ? '通过' : '不通过' }}
+      <span>验收 · {{ taskId }}</span>
+      <span class="badge" :class="result === 'pass' ? 'badge--approved' : 'badge--rejected'">
+        {{ result === 'pass' ? '通过' : '不通过' }}
       </span>
     </header>
-    <p class="sub-card__line">{{ verdict.summary }}</p>
-    <ul v-if="verdict.evidence.length > 0" class="ops">
-      <li v-for="(line, i) in verdict.evidence" :key="i" class="op op--modify">证据 {{ i + 1 }}：{{ line }}</li>
-    </ul>
+    <p class="sub-card__line">{{ note || (result === 'pass' ? '契约测试通过' : '契约测试未通过') }}</p>
   </article>
 </template>

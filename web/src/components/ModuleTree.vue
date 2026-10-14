@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { ApiClient, Block, ProjectTree } from '../api/client'
-import DrawerSection from './DrawerSection.vue'
 import DraftViewer from './DraftViewer.vue'
 
-// S1：模块全景为智能组件——自取树、自管新建流与草稿查看；
-// 切换项目时由父组件 :key 重挂载，状态随之重置并重新加载。
+// 模块全景（S1 迁入 chat-first 左面板）：自取树、自管新建流与草稿查看
 const props = defineProps<{
   client: ApiClient | null
   slug: string
@@ -47,8 +45,7 @@ const createLabel = computed(() => {
 })
 
 async function loadTree(expandAll: boolean): Promise<void> {
-  // client 就绪可能早于项目选定（bootstrap 时序），空 slug 不发请求，
-  // 项目选定后 :key 重挂载会带正确 slug 重新加载
+  // client 就绪可能早于项目选定（bootstrap 时序），空 slug 不发请求
   if (!props.client || !props.slug) return
   treeLoading.value = true
   treeError.value = ''
@@ -76,6 +73,14 @@ watch(
     if (c) void loadTree(true)
   },
   { immediate: true },
+)
+
+/** 批准卡片会发布新版本：树上的版本徽标需要刷新 */
+watch(
+  () => props.slug,
+  () => {
+    resetSelection()
+  },
 )
 
 function toggleDomain(id: string): void {
@@ -182,177 +187,157 @@ async function locateNode(kind: string, id: string): Promise<void> {
   await nextTick()
   rootEl.value?.querySelector(`[data-node="${key}"]`)?.scrollIntoView({ block: 'nearest' })
 }
+
+defineExpose({
+  reloadTree: () => void loadTree(false),
+})
 </script>
 
 <template>
-  <aside ref="rootEl" class="leftrail">
-    <DrawerSection title="模块全景" :open="true">
-      <div class="pano">
-        <p v-if="!client" class="pano__note">连接后端中…</p>
-        <p v-else-if="treeLoading && !treeLoaded" class="pano__note">加载中…</p>
-        <p v-else-if="treeError" class="pano__note pano__note--error">
-          加载失败：{{ treeError }}
-          <button type="button" class="pano__retry" @click="loadTree(true)">重试</button>
-        </p>
-        <template v-else-if="tree && tree.items.length > 0">
-          <ul class="tree">
-            <li v-for="domain in tree.items" :key="domain.id" class="tree__node">
+  <div ref="rootEl" class="mtree">
+    <p v-if="!client" class="mtree__note">连接后端中…</p>
+    <p v-else-if="treeLoading && !treeLoaded" class="mtree__note">加载中…</p>
+    <p v-else-if="treeError" class="mtree__note mtree__note--error">
+      加载失败：{{ treeError }}
+      <button type="button" class="mtree__retry" @click="loadTree(true)">重试</button>
+    </p>
+    <template v-else-if="tree && tree.items.length > 0">
+      <ul class="tree">
+        <li v-for="domain in tree.items" :key="domain.id" class="tree__node">
+          <div
+            class="tree__row"
+            :data-node="`domain-${domain.id}`"
+            :class="{ 'is-flash': flashKey === `domain-${domain.id}` }"
+          >
+            <button
+              type="button"
+              class="tree__toggle"
+              :aria-expanded="expandedDomains.has(domain.id)"
+              @click="toggleDomain(domain.id)"
+            >{{ expandedDomains.has(domain.id) ? '▾' : '▸' }}</button>
+            <span class="tree__domain" :title="domain.title">{{ domain.title }}</span>
+            <button
+              type="button"
+              class="tree__add"
+              title="在此业务域下新建文档"
+              @click="openCreate({ kind: 'document', domainId: domain.id, domainTitle: domain.title })"
+            >＋文档</button>
+          </div>
+          <ul v-if="expandedDomains.has(domain.id)" class="tree__children">
+            <li v-if="domain.documents.length === 0" class="tree__empty">（无文档）</li>
+            <li v-for="doc in domain.documents" :key="doc.id" class="tree__node">
               <div
                 class="tree__row"
-                :data-node="`domain-${domain.id}`"
-                :class="{ 'is-flash': flashKey === `domain-${domain.id}` }"
+                :data-node="`document-${doc.id}`"
+                :class="{ 'is-flash': flashKey === `document-${doc.id}` }"
               >
                 <button
                   type="button"
                   class="tree__toggle"
-                  :aria-expanded="expandedDomains.has(domain.id)"
-                  :title="expandedDomains.has(domain.id) ? '折叠' : '展开'"
-                  @click="toggleDomain(domain.id)"
-                >{{ expandedDomains.has(domain.id) ? '▾' : '▸' }}</button>
-                <span class="tree__domain" :title="domain.title">{{ domain.title }}</span>
+                  :aria-expanded="expandedDocuments.has(doc.id)"
+                  @click="toggleDocument(doc.id)"
+                >{{ expandedDocuments.has(doc.id) ? '▾' : '▸' }}</button>
+                <span class="tree__doc" :title="doc.title">{{ doc.title }}</span>
                 <button
                   type="button"
                   class="tree__add"
-                  title="在此业务域下新建文档"
-                  @click="openCreate({ kind: 'document', domainId: domain.id, domainTitle: domain.title })"
-                >＋文档</button>
+                  title="在此文档下新建模块"
+                  @click="openCreate({ kind: 'block', documentId: doc.id, documentTitle: doc.title })"
+                >＋模块</button>
               </div>
-              <ul v-if="expandedDomains.has(domain.id)" class="tree__children">
-                <li v-if="domain.documents.length === 0" class="tree__empty">（无文档）</li>
-                <li v-for="doc in domain.documents" :key="doc.id" class="tree__node">
-                  <div
-                    class="tree__row"
-                    :data-node="`document-${doc.id}`"
-                    :class="{ 'is-flash': flashKey === `document-${doc.id}` }"
-                  >
-                    <button
-                      type="button"
-                      class="tree__toggle"
-                      :aria-expanded="expandedDocuments.has(doc.id)"
-                      :title="expandedDocuments.has(doc.id) ? '折叠' : '展开'"
-                      @click="toggleDocument(doc.id)"
-                    >{{ expandedDocuments.has(doc.id) ? '▾' : '▸' }}</button>
-                    <span class="tree__doc" :title="doc.title">{{ doc.title }}</span>
-                    <button
-                      type="button"
-                      class="tree__add"
-                      title="在此文档下新建模块"
-                      @click="openCreate({ kind: 'block', documentId: doc.id, documentTitle: doc.title })"
-                    >＋模块</button>
-                  </div>
-                  <ul v-if="expandedDocuments.has(doc.id)" class="tree__children">
-                    <li v-if="doc.blocks.length === 0" class="tree__empty">（无模块）</li>
-                    <li
-                      v-for="b in doc.blocks"
-                      :key="b.id"
-                      class="tree__row tree__row--block"
-                      :data-node="`block-${b.id}`"
-                      :class="{
-                        'is-flash': flashKey === `block-${b.id}`,
-                        'is-selected': selectedBlockId === b.id,
-                      }"
-                    >
-                      <button type="button" class="tree__block" title="查看草稿" @click="selectBlock(b.id)">
-                        {{ b.title }}
-                      </button>
-                      <span
-                        class="tree__ver"
-                        :class="b.status === 'published' ? 'tree__ver--published' : ''"
-                      >{{ b.current_published_version ?? '草稿' }}</span>
-                    </li>
-                  </ul>
+              <ul v-if="expandedDocuments.has(doc.id)" class="tree__children">
+                <li v-if="doc.blocks.length === 0" class="tree__empty">（无模块）</li>
+                <li
+                  v-for="b in doc.blocks"
+                  :key="b.id"
+                  class="tree__row tree__row--block"
+                  :data-node="`block-${b.id}`"
+                  :class="{
+                    'is-flash': flashKey === `block-${b.id}`,
+                    'is-selected': selectedBlockId === b.id,
+                  }"
+                >
+                  <button type="button" class="tree__block" title="查看草稿" @click="selectBlock(b.id)">
+                    {{ b.title }}
+                  </button>
+                  <span
+                    class="tree__ver"
+                    :class="b.status === 'published' ? 'tree__ver--published' : ''"
+                  >{{ b.current_published_version ?? '草稿' }}</span>
                 </li>
               </ul>
             </li>
           </ul>
-        </template>
-        <template v-else>
-          <p class="pano__note">暂无业务域</p>
-        </template>
+        </li>
+      </ul>
+    </template>
+    <template v-else>
+      <p class="mtree__note">暂无业务域</p>
+    </template>
 
-        <button
-          v-if="!createTarget"
-          type="button"
-          class="pano__new-domain"
-          :disabled="!client"
-          @click="openCreate({ kind: 'domain' })"
-        >＋ 新建业务域</button>
+    <button
+      v-if="!createTarget"
+      type="button"
+      class="mtree__new-domain"
+      :disabled="!client"
+      @click="openCreate({ kind: 'domain' })"
+    >＋ 新建业务域</button>
 
-        <form v-if="createTarget" class="create-form" @submit.prevent="submitCreate">
-          <p class="create-form__label">{{ createLabel }}</p>
-          <input
-            v-model="createTitle"
-            class="create-form__input"
-            type="text"
-            placeholder="名称"
-            :disabled="creating"
-          />
-          <p v-if="createError" class="create-form__error">{{ createError }}</p>
-          <div class="create-form__actions">
-            <button type="submit" class="btn btn--primary btn--sm" :disabled="creating">
-              {{ creating ? '创建中…' : '创建' }}
-            </button>
-            <button type="button" class="btn btn--ghost btn--sm" :disabled="creating" @click="cancelCreate">
-              取消
-            </button>
-          </div>
-        </form>
-
-        <div v-if="selectedBlockId" class="draft-pane">
-          <header class="draft-pane__head">
-            <span class="draft-pane__title">草稿 · {{ block?.title ?? '…' }}</span>
-            <button type="button" class="draft-pane__close" title="关闭草稿" @click="resetSelection">✕</button>
-          </header>
-          <p v-if="blockLoading" class="pano__note">草稿加载中…</p>
-          <p v-else-if="blockError" class="pano__note pano__note--error">草稿加载失败：{{ blockError }}</p>
-          <DraftViewer v-else-if="block" :block="block" />
-        </div>
+    <form v-if="createTarget" class="create-form" @submit.prevent="submitCreate">
+      <p class="create-form__label">{{ createLabel }}</p>
+      <input
+        v-model="createTitle"
+        class="create-form__input"
+        type="text"
+        placeholder="名称"
+        :disabled="creating"
+      />
+      <p v-if="createError" class="create-form__error">{{ createError }}</p>
+      <div class="create-form__actions">
+        <button type="submit" class="btn btn--primary btn--sm" :disabled="creating">
+          {{ creating ? '创建中…' : '创建' }}
+        </button>
+        <button type="button" class="btn btn--ghost btn--sm" :disabled="creating" @click="cancelCreate">
+          取消
+        </button>
       </div>
-    </DrawerSection>
+    </form>
 
-    <DrawerSection title="版本链">
-      <p class="drawer-hint">占位：BlockVersion 快照链（每次批准产生一个不可变版本），S3 切片接入。</p>
-    </DrawerSection>
-
-    <DrawerSection title="规则违反榜">
-      <p class="drawer-hint">占位：按规则 ID 统计历史违反次数，S5 切片接入。</p>
-    </DrawerSection>
-
-    <DrawerSection title="全局约定">
-      <p class="drawer-hint">占位：项目级全局约定文档（版本化、需批准），S5 切片接入。</p>
-    </DrawerSection>
-  </aside>
+    <div v-if="selectedBlockId" class="draft-pane">
+      <header class="draft-pane__head">
+        <span class="draft-pane__title">草稿 · {{ block?.title ?? '…' }}</span>
+        <button type="button" class="draft-pane__close" title="关闭草稿" @click="resetSelection">✕</button>
+      </header>
+      <p v-if="blockLoading" class="mtree__note">草稿加载中…</p>
+      <p v-else-if="blockError" class="mtree__note mtree__note--error">草稿加载失败：{{ blockError }}</p>
+      <DraftViewer v-else-if="block" :block="block" />
+    </div>
+  </div>
 </template>
 
 <style scoped>
-.leftrail {
-  border-right: 1px solid var(--c-border);
-  background: var(--c-panel);
-  overflow-y: auto;
-}
-
-.pano {
+.mtree {
   display: grid;
   gap: var(--sp-2);
 }
 
-.pano__note {
+.mtree__note {
   color: var(--c-ink-3);
   font-size: var(--fs-12);
 }
 
-.pano__note--error {
+.mtree__note--error {
   color: var(--c-danger);
   word-break: break-all;
 }
 
-.pano__retry {
+.mtree__retry {
   color: var(--c-accent);
   text-decoration: underline;
   font-size: var(--fs-12);
 }
 
-.pano__new-domain {
+.mtree__new-domain {
   justify-self: start;
   color: var(--c-ink-2);
   font-size: var(--fs-12);
@@ -361,12 +346,12 @@ async function locateNode(kind: string, id: string): Promise<void> {
   padding: 3px 10px;
 }
 
-.pano__new-domain:hover:not(:disabled) {
+.mtree__new-domain:hover:not(:disabled) {
   color: var(--c-accent);
   border-color: var(--c-accent);
 }
 
-.pano__new-domain:disabled {
+.mtree__new-domain:disabled {
   color: var(--c-ink-3);
   cursor: not-allowed;
 }

@@ -1,42 +1,40 @@
 /**
- * 前端展示层共享类型（非契约）。
- * 时间线骨架在 S0 由 mock 提供数据；S3 起改由 GET /api/p/{slug}/rounds/{n} 组装，
- * 届时这些类型与 api/client.ts 的 RoundDetail 对齐。
+ * 前端展示层共享类型与常量（非契约）。
+ * 对话流（chat-first）按轮次分段组装：轮次 = 对话流中的分段线（DESIGN.md §7.3/§15.1）。
  */
-import type { Card, ReceiptSubmission } from './api/client'
+import type { Card, Event, FeedVersion, Package, RoundInfo, TaskStatus } from './api/client'
 
-/** 顶栏右侧四个全局入口（S0 打开占位面板） */
+/** 顶栏四个全局入口面板 */
 export type PanelKey = 'queue' | 'dashboard' | 'convention' | 'masters'
 
-/** 派发卡骨架输入（契约 v0 的任务明细属 S4，届时替换为 api/client.ts 的 Task） */
-export interface TaskBrief {
-  task_id: string
-  master: string
-  harness: string
-  status: string
+/** 对话流中的一个轮次分段：分段线 + 该轮的内联卡片 */
+export interface FeedRound {
+  info: RoundInfo
+  /** 本轮审批卡片（含待批准/已批准/已打回） */
+  cards: Card[]
+  /** 本轮发布的版本（批准落档点） */
+  versions: FeedVersion[]
+  /** 本轮任务包（派发卡） */
+  packages: Package[]
+  /** 本轮审计裁决事件（裁决卡） */
+  verdictEvents: Event[]
 }
 
-/** 裁决卡骨架输入（audit_runs / complaints 形状属 S3/S5，届时替换） */
-export interface VerdictBrief {
-  title: string
-  result: 'pass' | 'fail'
-  summary: string
-  evidence: string[]
+/** 任务状态徽标文案（§9.3 状态机） */
+export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+  queued: '排队中',
+  dispatched: '已派发',
+  running: '运行中',
+  reported: '已回执',
+  auditing: '审计中',
+  done: '完成',
+  rejected: '已打回',
+  timeout: '超时',
 }
 
-/** 轮次卡内的子卡片条目（按 kind 分发到对应组件） */
-export type TimelineCardItem =
-  | { kind: 'approval'; card: Card }
-  | { kind: 'dispatch'; task: TaskBrief }
-  | { kind: 'receipt'; receipt: ReceiptSubmission }
-  | { kind: 'verdict'; verdict: VerdictBrief }
-
-/** 轮次卡数据（DESIGN.md §7.3：轮次 N = 第 N-1 次批准到第 N 次批准之间的全部活动） */
-export interface RoundFixture {
-  n: number
-  status: 'ongoing' | 'closed'
-  openedAt: string
-  closedAt: string | null
-  summary: string
-  cards: TimelineCardItem[]
+/** 主代理中文名（展示用；技术单任务派发前 master 为 null → 待定） */
+export function masterLabel(master: string | null): string {
+  if (master === null) return '待定'
+  const map: Record<string, string> = { frontend: '前端', backend: '后端' }
+  return map[master] ?? master
 }

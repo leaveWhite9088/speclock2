@@ -1,7 +1,7 @@
 /**
- * SpecLock 2 前端 API 层（M1-S0）
+ * SpecLock 2 前端 API 层（M1-S2，契约 v0.2）
  *
- * 覆盖 DEV-PLAN.md §2「API 契约 v0」全部端点的 TypeScript 类型与调用函数。
+ * 覆盖 DEV-PLAN.md §2「API 契约 v0.2」全部端点的 TypeScript 类型与调用函数。
  * 通用约定（契约 §2）：
  *  - 所有响应 JSON；错误 envelope {code, message, details}，HTTP 状态码与语义一致；
  *  - 时间 ISO 8601 带时区字符串；对外 id 一律字符串；
@@ -38,7 +38,7 @@ export interface ProjectDetail {
 export interface Statement {
   说明: string
   动机: string
-  /** Bug 修复版本引用的被违反规则 ID（DESIGN.md §6.5），契约 v0 未列，可选 */
+  /** Bug 修复版本引用的被违反规则 ID（DESIGN.md §6.5），可选 */
   违反?: string[]
 }
 
@@ -79,7 +79,6 @@ export interface BlockVersionInfo {
   version: string
   round: number
   statement: Statement
-  /** 后端取自 delta_json.summary，无 delta 时为 null（对齐 backend S0 实现） */
   delta_summary: string | null
 }
 
@@ -117,10 +116,11 @@ export interface ProjectTree {
   items: TreeDomainNode[]
 }
 
-/* ---------- 审批卡片（DESIGN.md §8） ---------- */
+/* ---------- 审批卡片（DESIGN.md §8，契约 v0.2：ops 携带 block_id） ---------- */
 
 export interface RuleOp {
   op: 'add' | 'modify' | 'remove'
+  block_id: string
   id: string
   before: Rule | null
   after: Rule | null
@@ -128,11 +128,12 @@ export interface RuleOp {
 
 export interface ApiOp {
   op: 'upsert' | 'remove'
+  block_id: string
   key: string
   entry: ApiEntry | null
   breaking: boolean
   /**
-   * 以下三个为展示层补充字段：契约 v0 的 ApiOp 未定义，语义来自 DESIGN.md §8.2 的
+   * 以下三个为展示层补充字段：契约 v0.2 的 ApiOp 未定义，语义来自 DESIGN.md §8.2 的
    * changes（"请求 +format(string)" 这类 diff 行文案）。已记入回执「契约疑问」，
    * 待 PM 裁决由服务端下发还是前端从 entry 计算。
    */
@@ -161,12 +162,27 @@ export interface Card {
   api_ops: ApiOp[]
   breaking_count: number
   impact: string[]
-  risk: CardRisk
-  /** 以下字段契约 v0 的 Card 未列（见 DESIGN.md §8.2），均为可选，记入回执「契约疑问」 */
+  /** 提交方未携带 risk 时后端存 null（backend S2 实测） */
+  risk: CardRisk | null
+  /** 以下字段契约 v0.2 的 Card 未列（见 DESIGN.md §8.2），均为可选，记入回执「契约疑问」 */
   convention_ops?: unknown[]
   task_preview?: TaskPreviewItem[]
   narration_event?: string
   decision?: unknown
+}
+
+/** POST /api/p/{slug}/cards 请求体：statement 必填 + 两组 ops */
+export interface CardSubmission {
+  statement: Statement
+  rule_ops: RuleOp[]
+  api_ops: ApiOp[]
+}
+
+/** POST /cards/{id}/approve 响应（契约 v0.2） */
+export interface ApproveResponse {
+  versions: Array<{ block_id: string; version: string; breaking: boolean }>
+  closed_round: number
+  package_id: string
 }
 
 /* ---------- 事件与轮次（DESIGN.md §7） ---------- */
@@ -191,15 +207,23 @@ export interface RoundInfo {
   versions_manifest: Record<string, string>
 }
 
-/** GET /api/p/{slug}/rounds/{n} 渲染源（S3 实装，形状按 DESIGN.md §7.3 预置） */
+/** 轮次内发布的版本（GET /rounds/{n}.versions 元素；block_id 用于定位模块） */
+export interface FeedVersion extends BlockVersionInfo {
+  block_id: string
+}
+
+/**
+ * GET /api/p/{slug}/rounds/{n} 渲染源（backend S2 实测：外层带完整 RoundInfo，
+ * versions 元素含 block_id）
+ */
 export interface RoundDetail {
-  n: number
+  round: RoundInfo
   events: Event[]
-  versions: BlockVersionInfo[]
+  versions: FeedVersion[]
   cards: Card[]
 }
 
-/* ---------- 任务包与回执（DESIGN.md §9 / §13.4） ---------- */
+/* ---------- 任务包与任务（DESIGN.md §9，契约 v0.2） ---------- */
 
 export type TaskStatus =
   | 'queued'
@@ -211,36 +235,64 @@ export type TaskStatus =
   | 'rejected'
   | 'timeout'
 
-export interface Task {
-  task_id: string
-  master: string
-  depends_on: string[]
-  status: TaskStatus
-  harness: string | null
-  session_ref: string | null
-}
-
-export interface TaskPackage {
-  package_id: string
-  round: number
-  version_refs: Record<string, string>
-  tasks: Task[]
-}
-
-export interface ReceiptSubmission {
-  task_id: string
+export interface TaskReceipt {
   files_changed: string[]
   self_check: string
   summary: string
 }
 
-/* ---------- 全局约定（DESIGN.md §5.5） ---------- */
+export interface Task {
+  task_id: string
+  /** 技术单任务派发前 master 待定（backend S2：master 可为 null） */
+  master: string | null
+  status: TaskStatus
+  watchdog_deadline: string | null
+  receipt: TaskReceipt | null
+}
+
+export interface Package {
+  package_id: string
+  origin: 'approval' | 'tech'
+  round: number
+  version_refs: Record<string, string>
+  tasks: Task[]
+}
+
+/* ---------- 技术任务单（DESIGN.md §6.4） ---------- */
+
+export interface TechOrder {
+  order_id: string
+  intent: string
+  scope: string[]
+  baseline: Record<string, string> | null
+  acceptance: string[]
+  package_id: string
+}
+
+export interface CreateTechOrderBody {
+  intent: string
+  scope: string[]
+  baseline?: Record<string, string>
+  acceptance: string[]
+}
+
+/* ---------- 全局约定（DESIGN.md §5.5，契约 v0.2） ---------- */
 
 export interface Convention {
-  version: string
-  round: number
-  statement: Statement
-  content: string
+  /** 首次批准前没有版本（backend S2：version/content_md 可为 null） */
+  version: string | null
+  content_md: string | null
+  draft_md: string | null
+  statement: Statement | null
+}
+
+/* ---------- 仪表盘统计（契约 v0.2） ---------- */
+
+export interface Stats {
+  rounds: { count: number; open: number }
+  cards: { pending: number; approved: number; rejected: number }
+  packages: { done: number; active: number }
+  tasks: { rejected: number; timeout: number }
 }
 
 /* ---------- 请求体 ---------- */
@@ -264,10 +316,7 @@ export interface CreateBlockBody {
   title: string
 }
 
-/**
- * 创建端点的响应体（契约 v0 端点表未列，形状对齐 backend S0 的 serialize 实现：
- * domain_out / document_out / block_out）。
- */
+/** 创建端点响应体（契约端点表未列，形状对齐 backend S0 的 serialize 实现） */
 export interface DomainCreated {
   id: string
   title: string
@@ -285,13 +334,27 @@ export interface RejectCardBody {
   reason?: string
 }
 
-export interface ListEventsQuery {
-  since?: string
-  type?: string
+export interface DispatchBody {
+  watchdog_minutes?: number
+}
+
+export interface AuditBody {
+  result: 'pass' | 'fail'
+  note?: string
 }
 
 export interface ConventionDraftBody {
-  content: string
+  content_md: string
+}
+
+export interface ApproveConventionBody {
+  说明: string
+  动机: string
+}
+
+export interface ListEventsQuery {
+  since?: string
+  type?: string
 }
 
 /* ---------- 错误与请求工具 ---------- */
@@ -346,7 +409,7 @@ function withQuery(path: string, query?: ListEventsQuery | { status?: CardStatus
 
 /* ---------- 客户端接口（live 与 mock 共同实现） ---------- */
 
-/** 契约 v0 全端点（路径与语义见 DEV-PLAN.md §2 端点表） */
+/** 契约 v0.2 全端点（路径与语义见 DEV-PLAN.md §2 端点表） */
 export interface ApiClient {
   health(): Promise<HealthResponse>
   listProjects(): Promise<{ items: Project[] }>
@@ -358,18 +421,22 @@ export interface ApiClient {
   createBlock(slug: string, body: CreateBlockBody): Promise<Block>
   getBlock(slug: string, id: string): Promise<Block>
   updateBlockDraft(slug: string, id: string, draft: BlockDraft): Promise<Block>
-  createCard(slug: string, card: Card): Promise<Card>
+  createCard(slug: string, body: CardSubmission): Promise<Card>
   listCards(slug: string, status?: CardStatus): Promise<{ items: Card[] }>
-  approveCard(slug: string, id: string): Promise<Card>
+  approveCard(slug: string, id: string): Promise<ApproveResponse>
   rejectCard(slug: string, id: string, body: RejectCardBody): Promise<Card>
   listRounds(slug: string): Promise<{ items: RoundInfo[] }>
   getRound(slug: string, n: number): Promise<RoundDetail>
   listEvents(slug: string, query?: ListEventsQuery): Promise<{ items: Event[] }>
-  listPackages(slug: string): Promise<{ items: TaskPackage[] }>
-  submitReceipt(slug: string, taskId: string, body: ReceiptSubmission): Promise<ReceiptSubmission>
+  listPackages(slug: string): Promise<{ items: Package[] }>
+  dispatchTask(slug: string, taskId: string, body?: DispatchBody): Promise<Task>
+  submitReceipt(slug: string, taskId: string, body: TaskReceipt): Promise<Task>
+  auditTask(slug: string, taskId: string, body: AuditBody): Promise<Task>
+  createTechOrder(slug: string, body: CreateTechOrderBody): Promise<TechOrder>
   getConvention(slug: string): Promise<Convention>
   updateConventionDraft(slug: string, body: ConventionDraftBody): Promise<Convention>
-  approveConvention(slug: string): Promise<Convention>
+  approveConvention(slug: string, body: ApproveConventionBody): Promise<Convention>
+  getStats(slug: string): Promise<Stats>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -383,27 +450,21 @@ export function createApiClient(): ApiClient {
     getProject: (slug) => request<ProjectDetail>(p(slug)),
     getTree: (slug) => request<ProjectTree>(`${p(slug)}/tree`),
     createDomain: (slug, body) =>
-      request<DomainCreated>(`${p(slug)}/domains`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
+      request<DomainCreated>(`${p(slug)}/domains`, { method: 'POST', body: JSON.stringify(body) }),
     createDocument: (slug, body) =>
       request<DocumentCreated>(`${p(slug)}/documents`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
     createBlock: (slug, body) =>
-      request<Block>(`${p(slug)}/blocks`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
+      request<Block>(`${p(slug)}/blocks`, { method: 'POST', body: JSON.stringify(body) }),
     getBlock: (slug, id) => request<Block>(`${p(slug)}/blocks/${id}`),
     updateBlockDraft: (slug, id, draft) =>
       request<Block>(`${p(slug)}/blocks/${id}`, { method: 'PUT', body: JSON.stringify(draft) }),
-    createCard: (slug, card) =>
-      request<Card>(`${p(slug)}/cards`, { method: 'POST', body: JSON.stringify(card) }),
+    createCard: (slug, body) =>
+      request<Card>(`${p(slug)}/cards`, { method: 'POST', body: JSON.stringify(body) }),
     listCards: (slug, status) => request<{ items: Card[] }>(withQuery(`${p(slug)}/cards`, { status })),
-    approveCard: (slug, id) => request<Card>(`${p(slug)}/cards/${id}/approve`, { method: 'POST' }),
+    approveCard: (slug, id) => request<ApproveResponse>(`${p(slug)}/cards/${id}/approve`, { method: 'POST' }),
     rejectCard: (slug, id, body) =>
       request<Card>(`${p(slug)}/cards/${id}/reject`, {
         method: 'POST',
@@ -412,19 +473,37 @@ export function createApiClient(): ApiClient {
     listRounds: (slug) => request<{ items: RoundInfo[] }>(`${p(slug)}/rounds`),
     getRound: (slug, n) => request<RoundDetail>(`${p(slug)}/rounds/${n}`),
     listEvents: (slug, query) => request<{ items: Event[] }>(withQuery(`${p(slug)}/events`, query)),
-    listPackages: (slug) => request<{ items: TaskPackage[] }>(`${p(slug)}/packages`),
+    listPackages: (slug) => request<{ items: Package[] }>(`${p(slug)}/packages`),
+    dispatchTask: (slug, taskId, body) =>
+      request<Task>(`${p(slug)}/tasks/${taskId}/dispatch`, {
+        method: 'POST',
+        body: JSON.stringify(body ?? {}),
+      }),
     submitReceipt: (slug, taskId, body) =>
-      request<ReceiptSubmission>(`${p(slug)}/tasks/${taskId}/receipt`, {
+      request<Task>(`${p(slug)}/tasks/${taskId}/receipt`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    auditTask: (slug, taskId, body) =>
+      request<Task>(`${p(slug)}/tasks/${taskId}/audit`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    createTechOrder: (slug, body) =>
+      request<TechOrder>(`${p(slug)}/tech-orders`, { method: 'POST', body: JSON.stringify(body) }),
     getConvention: (slug) => request<Convention>(`${p(slug)}/conventions`),
     updateConventionDraft: (slug, body) =>
       request<Convention>(`${p(slug)}/conventions/draft`, {
         method: 'PUT',
         body: JSON.stringify(body),
       }),
-    approveConvention: (slug) =>
-      request<Convention>(`${p(slug)}/conventions/approve`, { method: 'POST' }),
+    approveConvention: (slug, body) =>
+      // 兼容双形状：契约 v0.2 是平铺 {说明,动机}，backend S2 实现为嵌套 {statement:{…}}
+      // （双方都已记契约疑问，待 PM 裁决后收敛）
+      request<Convention>(`${p(slug)}/conventions/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ ...body, statement: { 说明: body.说明, 动机: body.动机 } }),
+      }),
+    getStats: (slug) => request<Stats>(`${p(slug)}/stats`),
   }
 }

@@ -51,6 +51,11 @@ function onSelectChange(e: Event): void {
       </select>
     </label>
 
+    <span
+      class="topbar__session"
+      title="会话切换：R-M2 接入（当前只有主主代理；直达会话入口收在代理面板，DESIGN.md §6.4）"
+    >会话：主主代理 ▾</span>
+
     <nav class="topbar__entries" aria-label="全局入口">
       <button
         v-for="entry in entries"
@@ -120,6 +125,17 @@ function onSelectChange(e: Event): void {
   background: var(--c-panel);
   color: var(--c-ink);
   min-width: 160px;
+}
+
+.topbar__session {
+  margin-left: var(--sp-2);
+  padding: 3px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-s);
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  cursor: default;
+  user-select: none;
 }
 
 .topbar__entries {

@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ApiOp, Card, RuleOp } from '../api/client'
+import { masterLabel } from '../types'
 
 const props = defineProps<{
   card: Card
+  busy?: boolean
+  error?: string
 }>()
 
-const MASTER_LABELS: Record<string, string> = { frontend: '前端', backend: '后端' }
-
-function masterLabel(master: string): string {
-  return MASTER_LABELS[master] ?? master
-}
+const emit = defineEmits<{
+  (e: 'approve', cardId: string): void
+  (e: 'reject', cardId: string): void
+}>()
 
 const STATUS_META: Record<Card['status'], { text: string; cls: string }> = {
   pending: { text: '待批准', cls: 'badge--pending' },
@@ -46,16 +48,15 @@ const ruleCountText = computed(() => countText(opCounts(props.card.rule_ops)))
 const apiCountText = computed(() => countText(opCounts(props.card.api_ops)))
 
 function ruleOpLine(op: RuleOp): string {
-  if (op.op === 'add') return `+ ${op.id} ${op.after?.name ?? ''}：${op.after?.detail ?? ''}`
+  if (op.op === 'add') return `+ ${op.after?.name ?? ''}：${op.after?.detail ?? ''}`
   if (op.op === 'remove') return `- ${op.id} ${op.before?.name ?? ''}`
-  const name = op.after?.name ?? op.before?.name ?? ''
+  const name = op.after?.name ?? op.before?.name ?? op.id
   return `M ${op.id} ${name}：${op.before?.detail ?? ''} → ${op.after?.detail ?? ''}`
 }
 
 function apiOpLine(op: ApiOp): string {
   const prefix = op.op === 'remove' ? '-' : op.existed === false ? '+' : 'M'
-  const detail =
-    op.changes && op.changes.length > 0 ? op.changes.join('；') : (op.entry?.desc ?? '')
+  const detail = op.changes && op.changes.length > 0 ? op.changes.join('；') : (op.entry?.desc ?? '')
   return `${prefix} ${op.key}　${detail}`
 }
 
@@ -75,8 +76,17 @@ const dispatchPreviewText = computed(() => {
   return `${text} 并行`
 })
 
-// DESIGN.md §8.3：L2 区默认折叠，破坏性变更强制展开
-const breaking = computed(() => props.card.breaking_count > 0)
+// DESIGN.md §8.3：L2 区默认折叠，破坏性变更强制展开。
+// breaking_count 以 ops 为准兜底：后端 S2 对 pydantic 模型计Breaking 数恒 0（记入回执），
+// 展示层从 api_ops（breaking 或 remove）自行推导，保证破坏性必然强制展开。
+const breakingCount = computed(
+  () =>
+    Math.max(
+      props.card.breaking_count,
+      props.card.api_ops.filter((o) => o.op === 'remove' || o.breaking).length,
+    ),
+)
+const breaking = computed(() => breakingCount.value > 0)
 const l2ManuallyOpen = ref(false)
 const l2Open = computed(() => breaking.value || l2ManuallyOpen.value)
 
@@ -107,11 +117,8 @@ function toggleL2(): void {
     <section class="approval-card__section">
       <h4 class="section-title">业务规则(L1)<span class="counts">{{ ruleCountText }}</span></h4>
       <ul class="ops">
-        <li
-          v-for="(op, i) in card.rule_ops"
-          :key="`r-${i}`"
-          :class="`op op--${op.op}`"
-        >{{ ruleOpLine(op) }}</li>
+        <li v-for="(op, i) in card.rule_ops" :key="`r-${i}`" :class="`op op--${op.op}`">{{ ruleOpLine(op) }}</li>
+        <li v-if="card.rule_ops.length === 0" class="op op--modify">（无规则变更）</li>
       </ul>
     </section>
 
@@ -119,7 +126,7 @@ function toggleL2(): void {
       <h4 class="section-title" :class="{ 'section-title--toggle': !breaking }" @click="toggleL2">
         契约(L2)
         <span class="counts">{{ apiCountText }}</span>
-        <span v-if="breaking" class="counts counts--breaking">⚠{{ card.breaking_count }} 破坏性</span>
+        <span v-if="breaking" class="counts counts--breaking">⚠{{ breakingCount }} 破坏性</span>
         <span v-if="breaking" class="fold-hint fold-hint--locked" title="含破坏性变更，强制展开">强制展开</span>
         <span v-else class="fold-hint">{{ l2Open ? '收起' : '展开' }}</span>
       </h4>
@@ -132,6 +139,7 @@ function toggleL2(): void {
             class="op op--breaking"
           >⚠ {{ line }}</li>
         </template>
+        <li v-if="card.api_ops.length === 0" class="op op--modify">（无契约变更）</li>
       </ul>
     </section>
 
@@ -142,6 +150,7 @@ function toggleL2(): void {
     </p>
 
     <p
+      v-if="card.risk"
       class="approval-card__risk"
       :class="{ 'approval-card__risk--verified': card.risk.verified_by === 'audit' }"
     >
@@ -150,10 +159,24 @@ function toggleL2(): void {
     </p>
 
     <footer class="approval-card__actions">
-      <button type="button" class="btn btn--primary" title="S0 占位：S3 切片接入实际行为">批准并派发</button>
-      <button type="button" class="btn" title="S0 占位：S3 切片接入实际行为">打回</button>
-      <button type="button" class="btn btn--ghost" title="S0 占位：S2 切片接入字段级 diff">展开完整diff</button>
+      <template v-if="card.status === 'pending'">
+        <button
+          type="button"
+          class="btn btn--primary"
+          :disabled="busy"
+          title="批准：应用 ops → 版本快照 → 任务包入队（DESIGN.md §8.4）"
+          @click="emit('approve', card.card_id)"
+        >{{ busy ? '处理中…' : '批准并派发' }}</button>
+        <button
+          type="button"
+          class="btn"
+          :disabled="busy"
+          @click="emit('reject', card.card_id)"
+        >打回</button>
+      </template>
+      <button type="button" class="btn btn--ghost" title="字段级 diff：M3 门禁自动化接入">展开完整diff</button>
     </footer>
+    <p v-if="error" class="approval-card__error">{{ error }}</p>
   </article>
 </template>
 
@@ -284,5 +307,11 @@ function toggleL2(): void {
   gap: var(--sp-2);
   border-top: 1px dashed var(--c-border);
   padding-top: var(--sp-3);
+}
+
+.approval-card__error {
+  color: var(--c-danger);
+  font-size: var(--fs-12);
+  word-break: break-all;
 }
 </style>

@@ -6,8 +6,8 @@ M1 单页应用：Vue 3（Composition API + `<script setup>`）+ Vite + TypeScri
 **界面形态（Kimi Code 风格的聊天工作台）：**
 
 - **左侧栏**：上半是项目列表（项目一切换 = 换工作区）；下半是当前项目的代理——
-  **核心代理**（原"主主代理"：需求澄清、提案起草、汇报与决策支持，平时只看它）+
-  自建**主代理**（每个都写清职责，可随时添加）；
+  **核心代理**（需求澄清、提案起草、汇报与决策支持，平时只看它）+
+  自建**主代理**（职责/harness/模型/目录在弹窗里一次配清——它后续要与核心代理通信）；
 - **主区 = 聊天框**：
   - **核心代理会话**：口语化对话与汇报（干完了什么、改了哪些文件、验收结果），
     审批卡片由核心代理起草并内联呈现（批准/打回）；底部输入框发自然语言，
@@ -17,7 +17,8 @@ M1 单页应用：Vue 3（Composition API + `<script setup>`）+ Vite + TypeScri
 - **右上角抽屉**：**队列**（任务包排队，一键开始——包内并行、包间串行；mock 模拟执行）、
   **文档**（模块全景树+草稿查看+**版本切换**：每个模块可单独切历史版本看当时快照，
   每个大业务（域）也能整体回看到某轮次——域内模块各自取"截至该轮"的版本）、
-  约定、统计；
+  **约定**（全局约定=一份文档：全项目生效的细节性约定，直接编辑直接生效，
+  平时由核心代理维护）；
 - **侧栏可拖拽调宽**（200–420px，双击复位），主区随宽度自适应；
 - 视觉：中性灰阶 + 近黑主色，仅 成功绿/危险红 两个语义色，无阴影无动效；
   滚动条为贴边细淡样式（6px、浅灰、透明轨道）。
@@ -63,21 +64,17 @@ src/
 │   ├── client.ts   # 契约 v0.2 全端点 + masters/版本快照/queue-start（提议端点）
 │   └── mock.ts     # mock 客户端：迷你账本状态机 + 主代理注册 + 过程流 + 队列模拟
 ├── components/
-│   ├── Sidebar.vue            # 左侧栏：项目列表 + 核心代理/主代理（职责+创建）
+│   ├── Sidebar.vue            # 左侧栏：项目列表 + 核心代理/主代理（详细弹窗创建）
 │   ├── TopBar.vue             # 顶栏：当前会话标题 + 右侧抽屉入口
-│   ├── CoreChat.vue           # 核心代理会话：口语化汇报 + 内联审批卡 + 底部输入栏
+│   ├── CoreChat.vue           # 核心代理会话：口语化汇报 + 内联审批卡 + 发送/停止
 │   ├── MasterSession.vue      # 主代理工作流：任务 + 思考/工具/文件编辑过程流
 │   ├── ApprovalCard.vue       # 审批卡片（§8.1；批准/打回）
-│   ├── CardComposer.vue       # 起草卡片表单（模块/statement/rule_ops/api_ops）
-│   ├── TechOrderComposer.vue  # 技术任务单建单表单
 │   ├── RightDrawer.vue        # 右侧抽屉壳
-│   ├── VersionPanel.vue       # 查看版本：版本列表 → 当时 API/业务快照详情
 │   ├── QueuePanel.vue         # 队列：一键开始（包内并行·包间串行）
 │   ├── PackageList.vue        # 任务包列表（队列共用）
 │   ├── TaskRow.vue            # 任务行：状态徽标 + 派发/回执/审计
 │   ├── DocsPanel.vue / ModuleTree.vue / DraftViewer.vue / ApiFieldList.vue  # 文档抽屉
-│   ├── ConventionPanel.vue    # 约定：查看/草稿/批准
-│   ├── DashboardPanel.vue     # 统计计数卡
+│   ├── ConventionPanel.vue    # 全局约定：一份文档，直接编辑直接生效
 │   ├── ModalShell.vue / RoundDivider.vue / DrawerSection.vue
 ├── styles/          # tokens.css（令牌）+ base.css（原语）
 ├── types.ts         # 会话/抽屉/过程流/轮次分段 等展示层类型

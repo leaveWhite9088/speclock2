@@ -305,12 +305,16 @@ export interface MasterInfo {
   /** 目录所有权，如 backend/ */
   dir: string
   harness: string
+  /** 使用的模型（主代理挂在强模型上） */
+  model: string
 }
 
 export interface CreateMasterBody {
   name: string
   duty: string
   dir?: string
+  harness?: string
+  model?: string
 }
 
 /* ---------- 版本快照详情（查看版本：当时那份 API/业务；端点为提议形状） ---------- */

@@ -14,7 +14,6 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
   { key: 'queue', label: '队列', primary: true },
   { key: 'docs', label: '文档', primary: true },
   { key: 'convention', label: '约定' },
-  { key: 'stats', label: '统计' },
 ]
 </script>
 

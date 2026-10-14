@@ -456,12 +456,12 @@ export function createMockApiClient(): ApiClient {
   // ---- R-M2 前的前端承载状态：主代理注册 / 版本快照 / 过程流 / 队列模拟 ----
   const mastersBySlug: Record<string, MasterInfo[]> = {
     'daily-report': [
-      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5' },
     ],
     expense: [
-      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5' },
     ],
   }
   let masterSeq = 0
@@ -977,7 +977,8 @@ export function createMockApiClient(): ApiClient {
         name: body.name.trim(),
         duty: body.duty.trim(),
         dir: body.dir?.trim() || '（待定）',
-        harness: 'claude-code',
+        harness: body.harness?.trim() || 'claude-code',
+        model: body.model?.trim() || 'glm-4.7',
       }
       ;(mastersBySlug[slug] ??= []).push(master)
       return { ...master }

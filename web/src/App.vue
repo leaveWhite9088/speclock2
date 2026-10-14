@@ -20,7 +20,6 @@ import RightDrawer from './components/RightDrawer.vue'
 import QueuePanel from './components/QueuePanel.vue'
 import DocsPanel from './components/DocsPanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
-import DashboardPanel from './components/DashboardPanel.vue'
 
 type Mode = 'probing' | 'live' | 'mock'
 
@@ -228,8 +227,8 @@ async function refreshAll(): Promise<void> {
   } catch {
     // 后端未提供 masters 端点：退回内置两席
     masters.value = [
-      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5' },
     ]
   }
 }
@@ -420,9 +419,6 @@ onMounted(() => {
         </RightDrawer>
         <RightDrawer v-else-if="drawer === 'convention'" title="全局约定" @close="drawer = null">
           <ConventionPanel :client="client" :slug="currentSlug" />
-        </RightDrawer>
-        <RightDrawer v-else-if="drawer === 'stats'" title="统计" @close="drawer = null">
-          <DashboardPanel :client="client" :slug="currentSlug" />
         </RightDrawer>
       </div>
     </div>

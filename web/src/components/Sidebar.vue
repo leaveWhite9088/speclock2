@@ -2,11 +2,12 @@
 import { ref } from 'vue'
 import type { ApiClient, MasterInfo, Project } from '../api/client'
 import type { SessionTarget } from '../types'
+import ModalShell from './ModalShell.vue'
 
 /**
- * 左侧栏（Kimi Code 风）：上半是项目列表（项目一、项目二…），
- * 下半是当前项目的代理——核心代理（原"主主代理"，改名）+ 自建主代理（带职责，可添加）。
- * 点击代理即切换主区会话：核心代理 = 口语化对话；主代理 = 工作过程流。
+ * 左侧栏（Kimi Code 风）：上半是项目列表，下半是当前项目的代理——
+ * 核心代理（对话入口）+ 自建主代理（带职责/harness/模型，弹窗式详细创建，
+ * 主代理后续要与核心代理通信）。
  */
 const props = defineProps<{
   client: ApiClient | null
@@ -22,23 +23,30 @@ const emit = defineEmits<{
   (e: 'masters-changed'): void
 }>()
 
-const adding = ref(false)
+const HARNESS_OPTIONS = ['claude-code', 'codex', 'kimicode']
+const MODEL_SUGGESTIONS = ['glm-4.7', 'claude-sonnet-4.5', 'gpt-5.2', 'deepseek-v3.2', 'qwen3-max']
+
+const showModal = ref(false)
 const newName = ref('')
 const newDuty = ref('')
 const newDir = ref('')
+const newHarness = ref(HARNESS_OPTIONS[0])
+const newModel = ref(MODEL_SUGGESTIONS[0])
 const addError = ref('')
 const creating = ref(false)
 
 function openAdd(): void {
-  adding.value = true
-  addError.value = ''
-}
-
-function cancelAdd(): void {
-  adding.value = false
+  showModal.value = true
   newName.value = ''
   newDuty.value = ''
   newDir.value = ''
+  newHarness.value = HARNESS_OPTIONS[0]
+  newModel.value = MODEL_SUGGESTIONS[0]
+  addError.value = ''
+}
+
+function closeAdd(): void {
+  showModal.value = false
   addError.value = ''
 }
 
@@ -48,15 +56,21 @@ async function submitAdd(): Promise<void> {
     addError.value = '名称与职责必填'
     return
   }
+  if (!newDir.value.trim()) {
+    addError.value = '目录必填（这个主代理只能动它的目录，如 backend/）'
+    return
+  }
   creating.value = true
   addError.value = ''
   try {
     await props.client.createMaster(props.currentSlug, {
       name: newName.value,
       duty: newDuty.value,
-      dir: newDir.value || undefined,
+      dir: newDir.value,
+      harness: newHarness.value,
+      model: newModel.value,
     })
-    cancelAdd()
+    closeAdd()
     emit('masters-changed')
   } catch (err) {
     addError.value = err instanceof Error ? err.message : String(err)
@@ -134,24 +148,54 @@ function avatarText(name: string): string {
         </li>
       </ul>
 
-      <button v-if="!adding" type="button" class="sidebar__add" :disabled="!client" @click="openAdd">＋ 添加主代理</button>
-      <form v-else class="sidebar__form" @submit.prevent="submitAdd">
-        <input v-model="newName" class="sidebar__input" type="text" placeholder="名称（如 数据主代理）" :disabled="creating" />
-        <input v-model="newDuty" class="sidebar__input" type="text" placeholder="职责：一句话说清负责什么" :disabled="creating" />
-        <input v-model="newDir" class="sidebar__input" type="text" placeholder="目录（可选，如 data/）" :disabled="creating" />
-        <p v-if="addError" class="sidebar__form-error">{{ addError }}</p>
-        <div class="sidebar__form-actions">
-          <button type="submit" class="btn btn--primary btn--sm" :disabled="creating">
-            {{ creating ? '创建中…' : '创建' }}
-          </button>
-          <button type="button" class="btn btn--ghost btn--sm" :disabled="creating" @click="cancelAdd">取消</button>
-        </div>
-      </form>
+      <button v-if="!showModal" type="button" class="sidebar__add" :disabled="!client" @click="openAdd">＋ 添加主代理</button>
     </section>
 
     <footer class="sidebar__foot">
       <slot name="foot" />
     </footer>
+
+    <!-- 添加主代理：详细弹窗（后续要与核心代理通信，配置要一次说清） -->
+    <ModalShell v-if="showModal" title="添加主代理" @close="closeAdd">
+      <form class="amaster" @submit.prevent="submitAdd">
+        <label class="amaster__field">
+          名称
+          <input v-model="newName" class="amaster__input" type="text" placeholder="如：数据主代理" :disabled="creating" />
+        </label>
+        <label class="amaster__field">
+          职责（它负责什么；核心代理据此派活与汇报）
+          <textarea v-model="newDuty" class="amaster__input" rows="2" placeholder="如：负责数据管道与报表生成：数据清洗、聚合任务" :disabled="creating"></textarea>
+        </label>
+        <div class="amaster__grid2">
+          <label class="amaster__field">
+            Harness
+            <select v-model="newHarness" class="amaster__input" :disabled="creating">
+              <option v-for="h in HARNESS_OPTIONS" :key="h" :value="h">{{ h }}</option>
+            </select>
+          </label>
+          <label class="amaster__field">
+            模型
+            <input v-model="newModel" class="amaster__input" type="text" list="amaster-models" :disabled="creating" />
+            <datalist id="amaster-models">
+              <option v-for="m in MODEL_SUGGESTIONS" :key="m" :value="m" />
+            </datalist>
+          </label>
+        </div>
+        <label class="amaster__field">
+          目录（所有权边界：只能动这个目录）
+          <input v-model="newDir" class="amaster__input" type="text" placeholder="如 data/ 或 web/src/" :disabled="creating" />
+        </label>
+
+        <p v-if="addError" class="amaster__error">{{ addError }}</p>
+
+        <footer class="amaster__actions">
+          <button type="button" class="btn" :disabled="creating" @click="closeAdd">取消</button>
+          <button type="submit" class="btn btn--primary" :disabled="creating">
+            {{ creating ? '创建中…' : '创建主代理' }}
+          </button>
+        </footer>
+      </form>
+    </ModalShell>
   </aside>
 </template>
 
@@ -289,34 +333,49 @@ function avatarText(name: string): string {
   cursor: not-allowed;
 }
 
-.sidebar__form {
-  margin: var(--sp-1) var(--sp-1) 0;
+.amaster {
   display: grid;
-  gap: var(--sp-1);
-  background: var(--c-panel);
+  gap: var(--sp-3);
+}
+
+.amaster__grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+
+.amaster__field {
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+}
+
+.amaster__input {
+  font: inherit;
+  font-size: var(--fs-13);
+  padding: 5px 8px;
   border: 1px solid var(--c-border-strong);
   border-radius: var(--radius-m);
-  padding: var(--sp-2);
-}
-
-.sidebar__input {
-  font: inherit;
-  font-size: var(--fs-12);
-  padding: 4px 8px;
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--radius-s);
   background: var(--c-panel);
   color: var(--c-ink);
+  resize: vertical;
 }
 
-.sidebar__form-error {
+.amaster__input:focus {
+  outline: none;
+  border-color: var(--c-ink-3);
+}
+
+.amaster__error {
   color: var(--c-danger);
   font-size: var(--fs-12);
   word-break: break-all;
 }
 
-.sidebar__form-actions {
+.amaster__actions {
   display: flex;
+  justify-content: flex-end;
   gap: var(--sp-2);
 }
 

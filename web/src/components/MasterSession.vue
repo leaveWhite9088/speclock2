@@ -48,7 +48,7 @@ watch(
       <span class="msession__avatar" aria-hidden="true">{{ master.name.slice(0, 1) }}</span>
       <div class="msession__t">
         <span class="msession__name">{{ master.name }}</span>
-        <span class="msession__duty">{{ master.duty }} · {{ master.dir }} · {{ master.harness }}</span>
+        <span class="msession__duty">{{ master.duty }} · {{ master.dir }} · {{ master.harness }} · {{ master.model }}</span>
       </div>
       <span class="msession__count">{{ activityCount }} 条过程记录</span>
     </header>

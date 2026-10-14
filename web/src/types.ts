@@ -1,11 +1,23 @@
 /**
  * 前端展示层共享类型与常量（非契约）。
- * 对话流（chat-first）按轮次分段组装：轮次 = 对话流中的分段线（DESIGN.md §7.3/§15.1）。
  */
 import type { Card, Event, FeedVersion, Package, RoundInfo, TaskStatus } from './api/client'
 
-/** 顶栏四个全局入口面板 */
-export type PanelKey = 'queue' | 'dashboard' | 'convention' | 'masters'
+/** 顶栏右侧抽屉入口 */
+export type DrawerKey = 'versions' | 'queue' | 'docs' | 'convention' | 'stats'
+
+/** 当前会话：核心代理，或某个主代理的工作流视图 */
+export type SessionTarget = { kind: 'core' } | { kind: 'master'; masterId: string }
+
+/** 主代理过程流条目（M1 由 mock 模拟；R-M2 接真实遥测） */
+export interface ActivityItem {
+  id: string
+  ts: string
+  kind: 'thinking' | 'tool' | 'edit' | 'note' | 'message'
+  text: string
+  /** tool: 命令/结果摘要；edit: +N -M */
+  meta?: string
+}
 
 /** 对话流中的一个轮次分段：分段线 + 该轮的内联卡片 */
 export interface FeedRound {

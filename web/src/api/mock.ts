@@ -21,6 +21,7 @@ import type {
   Event,
   EventActor,
   FeedVersion,
+  MasterInfo,
   Package,
   Project,
   ProjectTree,
@@ -31,6 +32,7 @@ import type {
   TaskStatus,
   TechOrder,
 } from './client'
+import type { ActivityItem } from '../types'
 
 /* ---------- 基础工具 ---------- */
 
@@ -451,6 +453,34 @@ export function createMockApiClient(): ApiClient {
     },
   }
 
+  // ---- R-M2 前的前端承载状态：主代理注册 / 版本快照 / 过程流 / 队列模拟 ----
+  const mastersBySlug: Record<string, MasterInfo[]> = {
+    'daily-report': [
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+    ],
+    expense: [
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+    ],
+  }
+  let masterSeq = 0
+  /** 版本快照：key = `${blockId}@${version}` → 当时整份草稿（查看版本用） */
+  const versionSnaps: Record<string, BlockDraft> = {
+    '1@1.2.0': clone(exportBlockDraft),
+  }
+  const activityByMaster: Record<string, ActivityItem[]> = {
+    backend: [
+      { id: 'A-1', ts: '2026-10-13T10:31:00+08:00', kind: 'note', text: '收到任务 T-0044（P-0011）' },
+      { id: 'A-2', ts: '2026-10-13T10:31:04+08:00', kind: 'thinking', text: '思考了 2.4 秒' },
+      { id: 'A-3', ts: '2026-10-13T10:31:09+08:00', kind: 'tool', text: 'Bash', meta: 'pytest -q（12 passed）' },
+      { id: 'A-4', ts: '2026-10-13T11:05:00+08:00', kind: 'edit', text: 'backend/export.py', meta: '+86 -12' },
+      { id: 'A-5', ts: '2026-10-13T11:12:00+08:00', kind: 'message', text: '已完成：新增批量导出端点与日期区间校验' },
+    ],
+  }
+  let activitySeq = 100
+  let queueRunning = false
+
   let domainSeq = 0
   let documentSeq = 0
   let blockSeq = 0
@@ -475,6 +505,74 @@ export function createMockApiClient(): ApiClient {
     }
     ledger.events.push(e)
     return e
+  }
+
+  function pushActivity(master: string, kind: ActivityItem['kind'], text: string, meta?: string): void {
+    const list = (activityByMaster[master] ??= [])
+    list.push({ id: `A-${++activitySeq}`, ts: now(), kind, text, meta })
+  }
+
+  /**
+   * 队列模拟（R-M2 前的演示形态）：一键开始 → 包间串行、包内并行。
+   * 每个任务在主代理过程流里产出 思考→工具→文件编辑→完成汇报，并落回执/审计事件。
+   */
+  function simulateTask(slug: string, pkg: Package, task: Task): void {
+    const master = task.master ?? 'frontend'
+    const ledger = ledgerOf(slug)
+    task.status = 'dispatched'
+    task.watchdog_deadline = new Date(Date.now() + 60 * 60_000).toISOString()
+    pushEvent(ledger, pkg.round, `master:${master}` as EventActor, 'task.dispatched', { task: task.task_id }, {})
+    pushActivity(master, 'note', `收到任务 ${task.task_id}（${pkg.package_id}${pkg.origin === 'tech' ? ' · 技术单' : ''}）`)
+
+    const files = master === 'backend'
+      ? ['backend/api/export.py', 'backend/services/export.py']
+      : ['web/src/components/Export.vue', 'web/src/api/client.ts']
+    const summary = `按任务 ${task.task_id} 完成${pkg.origin === 'tech' ? '技术调整' : '变更'}实现`
+
+    setTimeout(() => {
+      task.status = 'running'
+      pushActivity(master, 'thinking', `思考了 ${(1 + Math.random() * 2).toFixed(1)} 秒`)
+    }, 700)
+    setTimeout(() => {
+      pushActivity(master, 'tool', 'Bash', master === 'backend' ? 'pytest -q（全部通过）' : 'npm run build（通过）')
+    }, 1700)
+    files.forEach((file, i) => {
+      setTimeout(() => {
+        pushActivity(master, 'edit', file, `+${8 + Math.floor(Math.random() * 40)} -${1 + Math.floor(Math.random() * 8)}`)
+      }, 2400 + i * 500)
+    })
+    setTimeout(() => {
+      task.status = 'reported'
+      task.receipt = {
+        files_changed: files,
+        self_check: master === 'backend' ? 'pytest 全绿' : 'npm run build 通过',
+        summary,
+      }
+      pushEvent(ledger, pkg.round, `master:${master}` as EventActor, 'task.receipt', { task: task.task_id }, {})
+      pushActivity(master, 'message', `已完成：${summary}（改动 ${files.length} 个文件）`)
+    }, 4400)
+    setTimeout(() => {
+      task.status = 'done'
+      pushEvent(ledger, pkg.round, 'audit', 'audit.machine.passed', { task: task.task_id }, { note: '契约测试通过' })
+    }, 5600)
+  }
+
+  function runNextPackage(slug: string, idx: number): void {
+    const pkgs = ledgers[slug]?.packages ?? []
+    if (idx >= pkgs.length) {
+      queueRunning = false
+      return
+    }
+    const pkg = pkgs[idx]
+    const finished = pkg.tasks.length > 0 && pkg.tasks.every((t) => t.status === 'done' || t.status === 'rejected')
+    if (finished) {
+      runNextPackage(slug, idx + 1)
+      return
+    }
+    for (const task of pkg.tasks) {
+      if (task.status === 'queued' || task.status === 'timeout') simulateTask(slug, pkg, task)
+    }
+    setTimeout(() => runNextPackage(slug, idx + 1), 6600)
   }
 
   /** 看门狗：读取路径顺带巡检，到期未回执的 dispatched/running 任务标记 timeout（§9.4） */
@@ -558,7 +656,7 @@ export function createMockApiClient(): ApiClient {
     return out
   }
 
-  return {
+  const api: ApiClient = {
     health: async () => ({ ok: true }),
     listProjects: async () => ({ items: projects.map((x) => ({ ...x })) }),
     createProject: async () => notImplemented('POST /api/projects'),
@@ -671,6 +769,7 @@ export function createMockApiClient(): ApiClient {
         block.current_published_version = next
         block.status = 'published'
         block.versions.push({ version: next, round: round.n, statement: card.statement, delta_summary: stat.summary })
+        versionSnaps[`${blockId}@${next}`] = clone(block.draft)
         feedVersions.push(fv)
         versions.push({ block_id: blockId, version: next, breaking: stat.breaking })
         pushEvent(ledger, round.n, 'system', 'version.published', { block: blockId }, { version: next })
@@ -849,7 +948,7 @@ export function createMockApiClient(): ApiClient {
       tickWatchdogs(ledger)
       const done = ledger.packages.filter((p) => p.tasks.length > 0 && p.tasks.every((t) => t.status === 'done' || t.status === 'rejected')).length
       const stats: Stats = {
-        rounds: { count: ledger.rounds.length, open: ledger.rounds.filter((r) => r.closed_at === null).length },
+        rounds: { count: ledger.rounds.filter((r) => r.closed_at !== null).length, open: ledger.rounds.filter((r) => r.closed_at === null).length },
         cards: {
           pending: ledger.cards.filter((c) => c.status === 'pending').length,
           approved: ledger.cards.filter((c) => c.status === 'approved').length,
@@ -863,7 +962,90 @@ export function createMockApiClient(): ApiClient {
       }
       return stats
     },
+
+    listMasters: async (slug) => {
+      mustFind(ledgers, slug, '项目')
+      return { items: (mastersBySlug[slug] ?? []).map((m) => ({ ...m })) }
+    },
+    createMaster: async (slug, body) => {
+      mustFind(ledgers, slug, '项目')
+      if (!body.name.trim() || !body.duty.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: '名称与职责必填' })
+      }
+      const master: MasterInfo = {
+        id: `m${++masterSeq}`,
+        name: body.name.trim(),
+        duty: body.duty.trim(),
+        dir: body.dir?.trim() || '（待定）',
+        harness: 'claude-code',
+      }
+      ;(mastersBySlug[slug] ??= []).push(master)
+      return { ...master }
+    },
+    getBlockVersion: async (slug, blockId, version) => {
+      const block = mustFind(blocksOf(slug), blockId, '模块')
+      const snap = versionSnaps[`${blockId}@${version}`]
+      if (!snap) throw new ApiError(404, { code: 'not_found', message: `版本 ${version} 快照不存在` })
+      const meta = block.versions.find((v) => v.version === version)
+      return {
+        block_id: blockId,
+        version,
+        round: meta?.round ?? 0,
+        statement: meta?.statement ?? { 说明: '', 动机: '' },
+        delta_summary: meta?.delta_summary ?? null,
+        draft: clone(snap),
+      }
+    },
+    startQueue: async (slug) => {
+      const ledger = ledgerOf(slug)
+      if (queueRunning) return { started: 0 }
+      const pending = ledger.packages.filter(
+        (p) => p.tasks.length > 0 && !p.tasks.every((t) => t.status === 'done' || t.status === 'rejected'),
+      )
+      if (pending.length === 0) return { started: 0 }
+      queueRunning = true
+      runNextPackage(slug, 0)
+      return { started: pending.length }
+    },
   }
+
+  bindMockRuntime(
+    () => Object.fromEntries(Object.entries(activityByMaster).map(([k, v]) => [k, [...v]])),
+    () => queueRunning,
+  )
+  return api
+}
+
+/* ---------- mock 专用展示层出口（App/MasterSession 直接读取） ---------- */
+
+let readActivity: () => Record<string, ActivityItem[]> = () => ({})
+let readQueueRunning: () => boolean = () => false
+
+/** 由 createMockApiClient 绑定（模块级单例读取口） */
+function bindMockRuntime(activity: () => Record<string, ActivityItem[]>, running: () => boolean): void {
+  readActivity = activity
+  readQueueRunning = running
+}
+
+/** 主代理过程流快照（仅 mock 模式有数据） */
+export function getMockActivity(): Record<string, ActivityItem[]> {
+  return readActivity()
+}
+
+/** 队列模拟是否执行中（仅 mock 模式） */
+export function isMockQueueRunning(): boolean {
+  return readQueueRunning()
+}
+
+/** 核心代理对话的开场白（mock 演示用：口语化的需求→提案引入） */
+export function getMockCoreOpeners(slug: string): Array<{ who: 'human' | 'core'; text: string }> {
+  if (slug === 'daily-report') {
+    return [
+      { who: 'human', text: '导出能不能支持 Excel？财务那边想要带格式的月报。' },
+      { who: 'core', text: '可以。我核对了现有的规则和契约，整理成下面这张卡片——有一处破坏性变更（删了旧枚举），你重点看那一条：' },
+    ]
+  }
+  return []
 }
 
 /* ---------- mock 内部辅助 ---------- */

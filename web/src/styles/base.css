@@ -1,4 +1,4 @@
-/* 基础样式与通用原语（依赖 tokens.css 的设计令牌） */
+/* 基础样式与通用原语（Kimi Code 风：中性、克制、1px 边框分层、无阴影） */
 
 * {
   box-sizing: border-box;
@@ -14,8 +14,8 @@ body,
 
 body {
   font-family: system-ui, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
-  font-size: var(--fs-14);
-  line-height: 1.55;
+  font-size: var(--fs-13);
+  line-height: 1.6;
   color: var(--c-ink);
   background: var(--c-bg);
   -webkit-font-smoothing: antialiased;
@@ -38,82 +38,32 @@ ol {
   list-style: none;
 }
 
-/* ---- 徽标 ---- */
+/* ---- 徽标：默认中性描边小片；语义色只保留 ok / danger ---- */
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
-  border-radius: 999px;
+  padding: 0 7px;
+  border-radius: var(--radius-s);
   font-size: var(--fs-12);
   line-height: 18px;
   border: 1px solid var(--c-border);
   color: var(--c-ink-2);
-  background: var(--c-panel-2);
+  background: var(--c-panel);
   white-space: nowrap;
 }
-.badge--pending {
-  color: var(--c-warn);
-  background: var(--c-warn-bg);
-  border-color: var(--c-warn-border);
-}
-.badge--approved {
-  color: var(--c-ok);
-  background: var(--c-ok-bg);
-  border-color: var(--c-ok-border);
-}
-.badge--rejected {
-  color: var(--c-danger);
-  background: var(--c-danger-bg);
-  border-color: var(--c-danger-border);
-}
-.badge--ongoing {
-  color: var(--c-accent);
-  background: var(--c-accent-bg);
-  border-color: var(--c-accent-border);
-}
-.badge--closed {
-  color: var(--c-ink-3);
-  background: var(--c-panel-2);
-  border-color: var(--c-border);
-}
-.badge--mode-live {
-  color: var(--c-ok);
-  background: var(--c-ok-bg);
-  border-color: var(--c-ok-border);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-.badge--mode-mock {
-  color: var(--c-warn);
-  background: var(--c-warn-bg);
-  border-color: var(--c-warn-border);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-.badge--mode-probing {
-  color: var(--c-ink-3);
-  background: var(--c-panel-2);
-  border-color: var(--c-border);
-}
-
-/* ---- 任务状态徽标（DESIGN.md §9.3 状态机；timeout 标红） ---- */
-.badge--queued {
-  color: var(--c-ink-2);
-  background: var(--c-panel-2);
-  border-color: var(--c-border);
-}
-.badge--dispatched,
-.badge--running {
-  color: var(--c-accent);
-  background: var(--c-accent-bg);
-  border-color: var(--c-accent-border);
-}
+.badge--pending,
 .badge--reported,
-.badge--auditing {
-  color: var(--c-warn);
-  background: var(--c-warn-bg);
-  border-color: var(--c-warn-border);
+.badge--auditing,
+.badge--queued,
+.badge--dispatched,
+.badge--running,
+.badge--ongoing,
+.badge--closed {
+  color: var(--c-ink-2);
+  background: var(--c-panel);
+  border-color: var(--c-border-strong);
 }
+.badge--approved,
 .badge--done {
   color: var(--c-ok);
   background: var(--c-ok-bg);
@@ -125,24 +75,33 @@ ol {
   border-color: var(--c-danger-border);
 }
 .badge--timeout {
-  color: #ffffff;
-  background: var(--c-danger);
+  color: var(--c-danger);
+  background: var(--c-danger-bg);
   border-color: var(--c-danger);
   font-weight: 700;
 }
+.badge--mode-live {
+  color: var(--c-ok);
+  border-color: var(--c-ok-border);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.badge--mode-mock,
+.badge--mode-probing {
+  color: var(--c-ink-3);
+}
 
-/* ---- 按钮 ---- */
+/* ---- 按钮：主按钮近黑，次按钮描边，文字按钮无框 ---- */
 .btn {
-  padding: 5px 14px;
-  border-radius: var(--radius-s);
+  padding: 4px 12px;
+  border-radius: var(--radius-m);
   border: 1px solid var(--c-border-strong);
   background: var(--c-panel);
   color: var(--c-ink);
   font-size: var(--fs-13);
 }
 .btn:hover {
-  border-color: var(--c-accent);
-  color: var(--c-accent);
+  border-color: var(--c-ink-3);
 }
 .btn--primary {
   background: var(--c-accent);
@@ -151,7 +110,11 @@ ol {
 }
 .btn--primary:hover {
   background: var(--c-accent-strong);
-  color: var(--c-accent-ink);
+}
+.btn--primary:disabled {
+  background: var(--c-border-strong);
+  border-color: var(--c-border-strong);
+  color: #ffffff;
 }
 .btn--ghost {
   border-color: transparent;
@@ -159,14 +122,14 @@ ol {
   color: var(--c-ink-2);
 }
 .btn--ghost:hover {
-  color: var(--c-accent);
+  color: var(--c-ink);
 }
 .btn--sm {
-  padding: 3px 10px;
+  padding: 2px 9px;
   font-size: var(--fs-12);
 }
 
-/* ---- ops 行（审批卡内的 diff 行） ---- */
+/* ---- ops 行（审批卡 diff 行）：灰底等宽，破坏性才用红 ---- */
 .ops {
   display: grid;
   gap: 2px;
@@ -204,7 +167,7 @@ ol {
   margin-top: var(--sp-2);
 }
 
-/* ---- 子卡片骨架（派发 / 回执 / 裁决，S0 占位形态） ---- */
+/* ---- 子卡片（派发 / 回执 / 裁决）：白底 1px 边框，无阴影 ---- */
 .sub-card {
   border: 1px solid var(--c-border);
   border-radius: var(--radius-m);
@@ -212,7 +175,6 @@ ol {
   padding: var(--sp-3);
   display: grid;
   gap: 4px;
-  box-shadow: var(--shadow-card);
 }
 .sub-card__head {
   display: flex;

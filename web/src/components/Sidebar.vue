@@ -1,0 +1,331 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import type { ApiClient, MasterInfo, Project } from '../api/client'
+import type { SessionTarget } from '../types'
+
+/**
+ * 左侧栏（Kimi Code 风）：上半是项目列表（项目一、项目二…），
+ * 下半是当前项目的代理——核心代理（原"主主代理"，改名）+ 自建主代理（带职责，可添加）。
+ * 点击代理即切换主区会话：核心代理 = 口语化对话；主代理 = 工作过程流。
+ */
+const props = defineProps<{
+  client: ApiClient | null
+  projects: Project[]
+  currentSlug: string
+  masters: MasterInfo[]
+  session: SessionTarget
+}>()
+
+const emit = defineEmits<{
+  (e: 'select-project', slug: string): void
+  (e: 'select-session', target: SessionTarget): void
+  (e: 'masters-changed'): void
+}>()
+
+const adding = ref(false)
+const newName = ref('')
+const newDuty = ref('')
+const newDir = ref('')
+const addError = ref('')
+const creating = ref(false)
+
+function openAdd(): void {
+  adding.value = true
+  addError.value = ''
+}
+
+function cancelAdd(): void {
+  adding.value = false
+  newName.value = ''
+  newDuty.value = ''
+  newDir.value = ''
+  addError.value = ''
+}
+
+async function submitAdd(): Promise<void> {
+  if (!props.client || creating.value) return
+  if (!newName.value.trim() || !newDuty.value.trim()) {
+    addError.value = '名称与职责必填'
+    return
+  }
+  creating.value = true
+  addError.value = ''
+  try {
+    await props.client.createMaster(props.currentSlug, {
+      name: newName.value,
+      duty: newDuty.value,
+      dir: newDir.value || undefined,
+    })
+    cancelAdd()
+    emit('masters-changed')
+  } catch (err) {
+    addError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    creating.value = false
+  }
+}
+
+function avatarText(name: string): string {
+  return name.replace(/主代理$/, '').slice(0, 1) || '代'
+}
+</script>
+
+<template>
+  <aside class="sidebar">
+    <header class="sidebar__brand">
+      <span class="sidebar__logo">SL</span>
+      <span class="sidebar__name">SpecLock2</span>
+    </header>
+
+    <section class="sidebar__sec">
+      <h6 class="sidebar__sec-title">项目</h6>
+      <ul class="sidebar__list">
+        <li v-for="p in projects" :key="p.slug">
+          <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'is-active': p.slug === currentSlug }"
+            @click="emit('select-project', p.slug)"
+          >
+            <span class="sidebar__avatar" aria-hidden="true">{{ p.name.slice(0, 1) }}</span>
+            <span class="sidebar__item-text">
+              <span class="sidebar__item-name">{{ p.name }}</span>
+              <span class="sidebar__item-sub">{{ p.slug }}</span>
+            </span>
+          </button>
+        </li>
+        <li v-if="projects.length === 0" class="sidebar__empty">（暂无项目）</li>
+      </ul>
+    </section>
+
+    <section class="sidebar__sec">
+      <h6 class="sidebar__sec-title">代理 · {{ currentSlug || '—' }}</h6>
+      <ul class="sidebar__list">
+        <li>
+          <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'is-active': session.kind === 'core' }"
+            title="需求澄清、提案起草、汇报与决策支持——平时只看它"
+            @click="emit('select-session', { kind: 'core' })"
+          >
+            <span class="sidebar__avatar" aria-hidden="true">核</span>
+            <span class="sidebar__item-text">
+              <span class="sidebar__item-name">核心代理</span>
+              <span class="sidebar__item-sub">需求澄清 · 提案起草 · 汇报</span>
+            </span>
+          </button>
+        </li>
+
+        <li v-for="m in masters" :key="m.id">
+          <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'is-active': session.kind === 'master' && session.masterId === m.id }"
+            :title="`${m.duty}（${m.dir}）`"
+            @click="emit('select-session', { kind: 'master', masterId: m.id })"
+          >
+            <span class="sidebar__avatar" aria-hidden="true">{{ avatarText(m.name) }}</span>
+            <span class="sidebar__item-text">
+              <span class="sidebar__item-name">{{ m.name }}</span>
+              <span class="sidebar__item-sub">{{ m.duty }}</span>
+            </span>
+          </button>
+        </li>
+      </ul>
+
+      <button v-if="!adding" type="button" class="sidebar__add" :disabled="!client" @click="openAdd">＋ 添加主代理</button>
+      <form v-else class="sidebar__form" @submit.prevent="submitAdd">
+        <input v-model="newName" class="sidebar__input" type="text" placeholder="名称（如 数据主代理）" :disabled="creating" />
+        <input v-model="newDuty" class="sidebar__input" type="text" placeholder="职责：一句话说清负责什么" :disabled="creating" />
+        <input v-model="newDir" class="sidebar__input" type="text" placeholder="目录（可选，如 data/）" :disabled="creating" />
+        <p v-if="addError" class="sidebar__form-error">{{ addError }}</p>
+        <div class="sidebar__form-actions">
+          <button type="submit" class="btn btn--primary btn--sm" :disabled="creating">
+            {{ creating ? '创建中…' : '创建' }}
+          </button>
+          <button type="button" class="btn btn--ghost btn--sm" :disabled="creating" @click="cancelAdd">取消</button>
+        </div>
+      </form>
+    </section>
+
+    <footer class="sidebar__foot">
+      <slot name="foot" />
+    </footer>
+  </aside>
+</template>
+
+<style scoped>
+.sidebar {
+  width: var(--sidebar-w);
+  border-right: 1px solid var(--c-border);
+  background: var(--c-panel-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+}
+
+.sidebar__logo {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-s);
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar__name {
+  font-size: var(--fs-14);
+  font-weight: 700;
+}
+
+.sidebar__sec {
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.sidebar__sec-title {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  font-weight: 600;
+  padding: 0 var(--sp-1) var(--sp-1);
+}
+
+.sidebar__list {
+  display: grid;
+  gap: 1px;
+}
+
+.sidebar__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-2);
+  border-radius: var(--radius-m);
+  text-align: left;
+}
+
+.sidebar__item:hover {
+  background: var(--c-border);
+}
+
+.sidebar__item.is-active {
+  background: var(--c-panel);
+  box-shadow: inset 0 0 0 1px var(--c-border-strong);
+}
+
+.sidebar__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-panel);
+  color: var(--c-ink-2);
+  font-size: var(--fs-12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.sidebar__item-text {
+  display: grid;
+  min-width: 0;
+}
+
+.sidebar__item-name {
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__item-sub {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__empty {
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.sidebar__add {
+  justify-self: start;
+  margin: var(--sp-1) var(--sp-1) 0;
+  color: var(--c-ink-2);
+  font-size: var(--fs-12);
+  padding: 3px 8px;
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-m);
+}
+
+.sidebar__add:hover:not(:disabled) {
+  color: var(--c-ink);
+  border-color: var(--c-ink-3);
+}
+
+.sidebar__add:disabled {
+  color: var(--c-ink-3);
+  cursor: not-allowed;
+}
+
+.sidebar__form {
+  margin: var(--sp-1) var(--sp-1) 0;
+  display: grid;
+  gap: var(--sp-1);
+  background: var(--c-panel);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-m);
+  padding: var(--sp-2);
+}
+
+.sidebar__input {
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 4px 8px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-s);
+  background: var(--c-panel);
+  color: var(--c-ink);
+}
+
+.sidebar__form-error {
+  color: var(--c-danger);
+  font-size: var(--fs-12);
+  word-break: break-all;
+}
+
+.sidebar__form-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.sidebar__foot {
+  margin-top: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--c-border);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+</style>

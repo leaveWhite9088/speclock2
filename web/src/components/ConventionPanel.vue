@@ -211,7 +211,7 @@ async function approve(): Promise<void> {
 }
 
 .conv__hint {
-  color: var(--c-warn);
+  color: var(--c-ink-2);
   font-size: var(--fs-12);
 }
 

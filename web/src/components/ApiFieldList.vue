@@ -62,7 +62,8 @@ defineProps<{
 }
 
 .field-list__req--yes {
-  color: var(--c-warn);
+  color: var(--c-ink);
+  font-weight: 600;
 }
 
 .field-list__desc {

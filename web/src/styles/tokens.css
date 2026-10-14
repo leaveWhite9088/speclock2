@@ -1,46 +1,44 @@
-/* 设计令牌（M1-S0）：颜色 / 字体 / 字号 / 间距 / 圆角 / 阴影 / 布局尺寸。全局唯一视觉事实源。 */
+/* 设计令牌（Kimi Code 风格改版）：中性浅色 + 单一强调色，克制用色。
+   全局唯一视觉事实源：颜色只允许 面板灰阶 / 文字灰阶 / 强调 / 成功 / 危险 五组。 */
 :root {
-  /* 颜色 —— 面与线 */
-  --c-bg: #eef0f4;
+  /* 颜色 —— 面与线（灰阶） */
+  --c-bg: #f7f7f8;
   --c-panel: #ffffff;
-  --c-panel-2: #f7f8fa;
-  --c-mono-bg: #f3f5f8;
-  --c-border: #d8dce4;
-  --c-border-strong: #b7becb;
+  --c-panel-2: #f2f3f5;
+  --c-mono-bg: #f6f7f8;
+  --c-border: #e4e6ea;
+  --c-border-strong: #cfd3da;
 
-  /* 颜色 —— 文本 */
-  --c-ink: #1d2530;
-  --c-ink-2: #59637a;
-  --c-ink-3: #8b93a7;
+  /* 颜色 —— 文字（灰阶） */
+  --c-ink: #1f2328;
+  --c-ink-2: #57606a;
+  --c-ink-3: #8b949e;
 
-  /* 颜色 —— 语义（主色 / 通过 / 警示 / 破坏性），各含浅底与描边变体 */
-  --c-accent: #2f5fd0;
-  --c-accent-strong: #274ea8;
+  /* 颜色 —— 语义（各仅一组，用满即止） */
+  --c-accent: #1f2328;            /* 主按钮/选中态：近黑，不用彩色 */
+  --c-accent-strong: #000000;
   --c-accent-ink: #ffffff;
-  --c-accent-bg: #e9effb;
-  --c-accent-border: #b9c9ee;
+  --c-accent-bg: #f0f1f3;         /* 选中底：中性灰，不用蓝 */
+  --c-accent-border: #d8dce2;
 
-  --c-ok: #217a47;
-  --c-ok-bg: #e5f3ea;
-  --c-ok-border: #b1ddc1;
+  --c-ok: #1a7f37;
+  --c-ok-bg: #f0f7f1;
+  --c-ok-border: #cfe3d2;
 
-  --c-warn: #96690e;
-  --c-warn-bg: #fcf2dd;
-  --c-warn-border: #e8d4a1;
+  --c-danger: #cf222e;
+  --c-danger-bg: #fdf0f0;
+  --c-danger-border: #f0cdcf;
 
-  --c-danger: #b23a3a;
-  --c-danger-bg: #fbebeb;
-  --c-danger-border: #efbcbc;
+  /* 警示色并入中性/危险：不再单独使用黄橙 */
 
   /* 字体 */
   --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
 
-  /* 字号 */
+  /* 字号（收紧） */
   --fs-12: 12px;
   --fs-13: 13px;
   --fs-14: 14px;
   --fs-16: 16px;
-  --fs-18: 18px;
 
   /* 间距 */
   --sp-1: 4px;
@@ -49,11 +47,11 @@
   --sp-4: 16px;
   --sp-5: 24px;
 
-  /* 圆角 / 阴影 / 布局尺寸 */
+  /* 圆角（小而统一）/ 分割 / 布局 */
   --radius-s: 4px;
-  --radius-m: 8px;
-  --shadow-card: 0 1px 2px rgba(29, 37, 48, 0.05), 0 1px 8px rgba(29, 37, 48, 0.05);
-  --topbar-h: 48px;
-  --left-panel-w: 280px;
-  --right-panel-w: 320px;
+  --radius-m: 6px;
+  --shadow-card: none;              /* 去阴影，靠 1px 边框分层 */
+  --topbar-h: 44px;
+  --sidebar-w: 248px;
+  --drawer-w: 400px;
 }

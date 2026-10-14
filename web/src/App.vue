@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createApiClient } from './api/client'
 import type {
   ApiClient,
   Card,
   FeedVersion,
+  MasterInfo,
   Package,
   Project,
   ProjectDetail,
@@ -12,17 +13,18 @@ import type {
   TaskReceipt,
   TechOrder,
 } from './api/client'
-import { createMockApiClient } from './api/mock'
-import type { FeedRound, PanelKey } from './types'
+import { createMockApiClient, getMockActivity, getMockCoreOpeners, isMockQueueRunning } from './api/mock'
+import type { DrawerKey, FeedRound, SessionTarget } from './types'
+import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
-import PanelShell from './components/PanelShell.vue'
-import LeftPanel from './components/LeftPanel.vue'
-import RightPanel from './components/RightPanel.vue'
-import ChatStream from './components/ChatStream.vue'
-import PackageList from './components/PackageList.vue'
+import CoreChat from './components/CoreChat.vue'
+import MasterSession from './components/MasterSession.vue'
+import RightDrawer from './components/RightDrawer.vue'
+import VersionPanel from './components/VersionPanel.vue'
+import QueuePanel from './components/QueuePanel.vue'
+import DocsPanel from './components/DocsPanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
 import DashboardPanel from './components/DashboardPanel.vue'
-import MastersPanel from './components/MastersPanel.vue'
 import CardComposer from './components/CardComposer.vue'
 import TechOrderComposer from './components/TechOrderComposer.vue'
 
@@ -35,26 +37,71 @@ const currentSlug = ref('')
 const detail = ref<ProjectDetail | null>(null)
 const loadError = ref('')
 
-// 对话流（轮次分段）与任务包
+// 账本投影（核心会话与抽屉共用）
 const feed = ref<FeedRound[]>([])
 const feedError = ref('')
 const packages = ref<Package[]>([])
 const blockTitles = ref<Record<string, string>>({})
+const masters = ref<MasterInfo[]>([])
 
-// 面板与表单
-const activePanel = ref<PanelKey | null>(null)
+// 会话与抽屉
+const session = ref<SessionTarget>({ kind: 'core' })
+const drawer = ref<DrawerKey | null>(null)
 const showCardComposer = ref(false)
 const showTechComposer = ref(false)
 
-// 动作进行中/错误状态（按 id）
+// 动作状态
 const cardBusy = ref<Record<string, boolean>>({})
 const cardError = ref<Record<string, string>>({})
 const taskBusy = ref<Record<string, boolean>>({})
 const taskError = ref<Record<string, string>>({})
+const queueError = ref('')
 
 const allVersions = computed<FeedVersion[]>(() => feed.value.flatMap((fr) => fr.versions))
 
-/** 启动探测：GET /api/health 成功 → live；失败 → 自动切 mock（顶栏徽标随之变化） */
+const coreOpeners = computed(() => (mode.value === 'mock' ? getMockCoreOpeners(currentSlug.value) : []))
+
+const sessionTitle = computed(() => {
+  const target = session.value
+  if (target.kind === 'core') return '核心代理'
+  const m = masters.value.find((x) => x.id === target.masterId)
+  return m ? `${m.name} · 工作流` : '主代理'
+})
+
+const activeMaster = computed<MasterInfo | null>(() => {
+  const target = session.value
+  if (target.kind !== 'master') return null
+  return masters.value.find((m) => m.id === target.masterId) ?? null
+})
+
+const masterActivity = computed(() => {
+  const target = session.value
+  if (target.kind !== 'master') return []
+  return getMockActivity()[target.masterId] ?? []
+})
+
+const modeBadge = computed(() => (mode.value === 'live' ? 'LIVE' : mode.value === 'mock' ? 'MOCK' : '…'))
+
+/** mock 队列模拟需要界面跟着走：轮询刷新（本地状态，开销可忽略） */
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function startPolling(): void {
+  stopPolling()
+  pollTimer = setInterval(() => {
+    if (isMockQueueRunning()) void refreshAll()
+  }, 1200)
+}
+
+function stopPolling(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+onUnmounted(stopPolling)
+
+/** 启动探测：GET /api/health 成功 → live；失败 → 自动切 mock */
 async function bootstrap(): Promise<void> {
   const live = createApiClient()
   try {
@@ -71,11 +118,12 @@ async function bootstrap(): Promise<void> {
   if (projects.value.length > 0) await selectProject(projects.value[0].slug)
 }
 
-/** 项目切换 = 换工作区，不是页面导航（DESIGN.md §14.3）：全部状态重置刷新 */
+/** 切换项目 = 换工作区（DESIGN.md §14.3）：会话回核心代理，全部状态重置刷新 */
 async function selectProject(slug: string): Promise<void> {
   if (!client.value) return
   currentSlug.value = slug
-  activePanel.value = null
+  session.value = { kind: 'core' }
+  drawer.value = null
   showCardComposer.value = false
   showTechComposer.value = false
   loadError.value = ''
@@ -83,10 +131,12 @@ async function selectProject(slug: string): Promise<void> {
   feedError.value = ''
   packages.value = []
   blockTitles.value = {}
+  masters.value = []
   cardBusy.value = {}
   cardError.value = {}
   taskBusy.value = {}
   taskError.value = {}
+  queueError.value = ''
   try {
     detail.value = await client.value.getProject(slug)
   } catch (err) {
@@ -96,7 +146,7 @@ async function selectProject(slug: string): Promise<void> {
   await refreshAll()
 }
 
-/** 刷新对话流 + 任务包 + 模块标题（版本链/徽标用） */
+/** 刷新对话流 + 任务包 + 模块标题 + 主代理列表 */
 async function refreshAll(): Promise<void> {
   if (!client.value || !currentSlug.value) return
   const slug = currentSlug.value
@@ -130,9 +180,27 @@ async function refreshAll(): Promise<void> {
   } catch {
     blockTitles.value = {}
   }
+  try {
+    masters.value = (await client.value.listMasters(slug)).items
+  } catch {
+    // 后端未提供 masters 端点：退回内置两席
+    masters.value = [
+      { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code' },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code' },
+    ]
+  }
 }
 
-/* ---------- 卡片动作（批准/打回） ---------- */
+async function reloadMasters(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  try {
+    masters.value = (await client.value.listMasters(currentSlug.value)).items
+  } catch {
+    /* 保持现状 */
+  }
+}
+
+/* ---------- 卡片动作 ---------- */
 
 async function approveCard(cardId: string): Promise<void> {
   if (!client.value) return
@@ -162,7 +230,7 @@ async function rejectCard(cardId: string): Promise<void> {
   }
 }
 
-/* ---------- 任务动作（派发/回执/审计） ---------- */
+/* ---------- 任务动作 ---------- */
 
 async function runTaskAction(taskId: string, fn: () => Promise<unknown>): Promise<void> {
   if (!client.value) return
@@ -199,7 +267,18 @@ function onAudit(payload: { taskId: string; result: 'pass' | 'fail'; note: strin
   )
 }
 
-/* ---------- 起草/建单 ---------- */
+async function startQueue(): Promise<void> {
+  if (!client.value) return
+  queueError.value = ''
+  try {
+    await client.value.startQueue(currentSlug.value)
+    if (mode.value === 'mock') startPolling()
+  } catch (err) {
+    queueError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+/* ---------- 起草 / 建单 / 抽屉 ---------- */
 
 function onCardCreated(_card: Card): void {
   showCardComposer.value = false
@@ -211,9 +290,19 @@ function onTechCreated(_order: TechOrder): void {
   void refreshAll()
 }
 
-function onTogglePanel(key: PanelKey): void {
-  activePanel.value = activePanel.value === key ? null : key
+function onToggleDrawer(key: DrawerKey): void {
+  drawer.value = drawer.value === key ? null : key
 }
+
+watch(
+  () => isMockQueueRunning(),
+  (running) => {
+    if (!running && pollTimer !== null) {
+      void refreshAll()
+      stopPolling()
+    }
+  },
+)
 
 onMounted(() => {
   void bootstrap()
@@ -222,77 +311,86 @@ onMounted(() => {
 
 <template>
   <div class="app">
-    <TopBar
-      :mode="mode"
+    <Sidebar
+      :client="client"
       :projects="projects"
       :current-slug="currentSlug"
+      :masters="masters"
+      :session="session"
       @select-project="selectProject"
-      @toggle-panel="onTogglePanel"
-    />
+      @select-session="session = $event"
+      @masters-changed="reloadMasters"
+    >
+      <template #foot>
+        <span
+          class="badge"
+          :class="`badge--mode-${mode}`"
+          :title="mode === 'live' ? '已连接后端，使用真实接口' : mode === 'mock' ? '后端不可达，使用内置演示数据' : '正在探测后端'"
+        >{{ modeBadge }}</span>
+      </template>
+    </Sidebar>
 
-    <!-- 顶栏入口的停靠面板（队列 / 仪表盘 / 约定 / 代理） -->
-    <PanelShell v-if="activePanel === 'queue'" title="队列 · 任务包与任务状态" @close="activePanel = null">
-      <PackageList
-        :packages="packages"
-        :task-busy="taskBusy"
-        :task-error="taskError"
-        @dispatch="onDispatch"
-        @receipt="onReceipt"
-        @audit="onAudit"
-      />
-    </PanelShell>
-    <PanelShell v-else-if="activePanel === 'dashboard'" title="仪表盘" @close="activePanel = null">
-      <DashboardPanel :client="client" :slug="currentSlug" />
-    </PanelShell>
-    <PanelShell v-else-if="activePanel === 'convention'" title="全局约定" @close="activePanel = null">
-      <ConventionPanel :client="client" :slug="currentSlug" />
-    </PanelShell>
-    <PanelShell v-else-if="activePanel === 'masters'" title="代理" @close="activePanel = null">
-      <MastersPanel />
-    </PanelShell>
+    <div class="app__main">
+      <TopBar :session-title="sessionTitle" :drawer="drawer" @toggle-drawer="onToggleDrawer" />
 
-    <!-- chat-first 三区：左面板（可折叠）/ 中央对话流 / 右面板（可折叠） -->
-    <div class="app-body">
-      <LeftPanel
-        :key="currentSlug"
-        :client="client"
-        :slug="currentSlug"
-        :versions="allVersions"
-        :block-titles="blockTitles"
-        @open-convention="activePanel = 'convention'"
-      />
+      <div class="app__body">
+        <main class="app__chat">
+          <div v-if="mode === 'probing'" class="chat-note">正在探测后端（GET /api/health）…</div>
+          <div v-else-if="loadError" class="chat-note chat-note--error">加载项目失败：{{ loadError }}</div>
+          <div v-else-if="projects.length === 0" class="chat-note">项目列表为空。</div>
+          <MasterSession
+            v-else-if="activeMaster"
+            :key="`${currentSlug}-${activeMaster.id}`"
+            :master="activeMaster"
+            :activity="masterActivity"
+            :packages="packages"
+          />
+          <CoreChat
+            v-else
+            :feed="feed"
+            :openers="coreOpeners"
+            :empty-note="feedError ? `账本数据不可用：${feedError}` : undefined"
+            :card-busy="cardBusy"
+            :card-error="cardError"
+            @approve="approveCard"
+            @reject="rejectCard"
+            @open-card="showCardComposer = true"
+            @open-tech="showTechComposer = true"
+          />
+        </main>
 
-      <main class="app-body__chat">
-        <div v-if="mode === 'probing'" class="chat-note">正在探测后端（GET /api/health）…</div>
-        <div v-else-if="loadError" class="chat-note chat-note--error">加载项目失败：{{ loadError }}</div>
-        <div v-else-if="projects.length === 0" class="chat-note">
-          项目列表为空。live 模式下可经 POST /api/projects 创建（S0 前端未提供入口）。
-        </div>
-        <ChatStream
-          v-else
-          :feed="feed"
-          :empty-note="feedError ? `轮次/时间线数据不可用：${feedError}` : undefined"
-          :card-busy="cardBusy"
-          :card-error="cardError"
-          @approve="approveCard"
-          @reject="rejectCard"
-          @open-card="showCardComposer = true"
-          @open-tech="showTechComposer = true"
-        />
-      </main>
-
-      <RightPanel
-        :key="`${currentSlug}-r`"
-        :packages="packages"
-        :task-busy="taskBusy"
-        :task-error="taskError"
-        @dispatch="onDispatch"
-        @receipt="onReceipt"
-        @audit="onAudit"
-      />
+        <RightDrawer
+          v-if="drawer === 'versions'"
+          title="查看版本"
+          @close="drawer = null"
+        >
+          <VersionPanel :client="client" :slug="currentSlug" :versions="allVersions" :block-titles="blockTitles" />
+        </RightDrawer>
+        <RightDrawer v-else-if="drawer === 'queue'" title="队列" @close="drawer = null">
+          <QueuePanel
+            :packages="packages"
+            :task-busy="taskBusy"
+            :task-error="taskError"
+            :queue-running="mode === 'mock' && isMockQueueRunning()"
+            :queue-error="queueError"
+            @start-queue="startQueue"
+            @dispatch="onDispatch"
+            @receipt="onReceipt"
+            @audit="onAudit"
+          />
+        </RightDrawer>
+        <RightDrawer v-else-if="drawer === 'docs'" title="文档 · 模块全景" @close="drawer = null">
+          <DocsPanel :client="client" :slug="currentSlug" />
+        </RightDrawer>
+        <RightDrawer v-else-if="drawer === 'convention'" title="全局约定" @close="drawer = null">
+          <ConventionPanel :client="client" :slug="currentSlug" />
+        </RightDrawer>
+        <RightDrawer v-else-if="drawer === 'stats'" title="统计" @close="drawer = null">
+          <DashboardPanel :client="client" :slug="currentSlug" />
+        </RightDrawer>
+      </div>
     </div>
 
-    <!-- 起草卡片 / 技术任务单 -->
     <CardComposer
       v-if="showCardComposer"
       :client="client"
@@ -313,18 +411,25 @@ onMounted(() => {
 <style scoped>
 .app {
   height: 100vh;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.app__main {
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.app-body {
+.app__body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.app-body__chat {
+.app__chat {
   min-width: 0;
   min-height: 0;
   display: flex;

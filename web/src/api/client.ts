@@ -295,6 +295,35 @@ export interface Stats {
   tasks: { rejected: number; timeout: number }
 }
 
+/* ---------- 主代理注册（R-M2 前由前端 mock 承载；端点为提议形状） ---------- */
+
+export interface MasterInfo {
+  id: string
+  name: string
+  /** 职责：一句话说清负责什么 */
+  duty: string
+  /** 目录所有权，如 backend/ */
+  dir: string
+  harness: string
+}
+
+export interface CreateMasterBody {
+  name: string
+  duty: string
+  dir?: string
+}
+
+/* ---------- 版本快照详情（查看版本：当时那份 API/业务；端点为提议形状） ---------- */
+
+export interface VersionDetail {
+  block_id: string
+  version: string
+  round: number
+  statement: Statement
+  delta_summary: string | null
+  draft: BlockDraft
+}
+
 /* ---------- 请求体 ---------- */
 
 export interface CreateProjectBody {
@@ -437,6 +466,10 @@ export interface ApiClient {
   updateConventionDraft(slug: string, body: ConventionDraftBody): Promise<Convention>
   approveConvention(slug: string, body: ApproveConventionBody): Promise<Convention>
   getStats(slug: string): Promise<Stats>
+  listMasters(slug: string): Promise<{ items: MasterInfo[] }>
+  createMaster(slug: string, body: CreateMasterBody): Promise<MasterInfo>
+  getBlockVersion(slug: string, blockId: string, version: string): Promise<VersionDetail>
+  startQueue(slug: string): Promise<{ started: number }>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -505,5 +538,12 @@ export function createApiClient(): ApiClient {
         body: JSON.stringify({ ...body, statement: { 说明: body.说明, 动机: body.动机 } }),
       }),
     getStats: (slug) => request<Stats>(`${p(slug)}/stats`),
+    // 以下为 R-M2 前的前端提议端点：后端未提供时 UI 优雅降级（记回执）
+    listMasters: (slug) => request<{ items: MasterInfo[] }>(`${p(slug)}/masters`),
+    createMaster: (slug, body) =>
+      request<MasterInfo>(`${p(slug)}/masters`, { method: 'POST', body: JSON.stringify(body) }),
+    getBlockVersion: (slug, blockId, version) =>
+      request<VersionDetail>(`${p(slug)}/blocks/${blockId}/versions/${version}`),
+    startQueue: (slug) => request<{ started: number }>(`${p(slug)}/queue/start`, { method: 'POST' }),
   }
 }

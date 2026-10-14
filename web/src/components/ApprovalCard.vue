@@ -284,9 +284,9 @@ function toggleL2(): void {
 }
 
 .approval-card__risk {
-  border: 1px solid var(--c-warn-border);
-  background: var(--c-warn-bg);
-  color: var(--c-warn);
+  border: 1px solid var(--c-border);
+  background: var(--c-panel-2);
+  color: var(--c-ink-2);
   border-radius: var(--radius-s);
   padding: var(--sp-2) var(--sp-3);
   font-size: var(--fs-13);

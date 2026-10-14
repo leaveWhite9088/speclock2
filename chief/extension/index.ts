@@ -10,9 +10,14 @@
 
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const API = process.env.SPECLOCK2_API_BASE || "http://127.0.0.1:8000";
 const SLUG = process.env.SPECLOCK2_SLUG || "";
+const DATA_DIR = process.env.SPECLOCK2_DATA_DIR || "";
+const REPO_ROOT = process.env.SPECLOCK2_REPO_ROOT || process.cwd();
 
 /** 调工作台 REST；非 2xx 抛错（工具结果向模型暴露失败原因）。 */
 async function api(method: string, path: string, body?: unknown): Promise<any> {
@@ -76,7 +81,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	/** 通用上报：过程记录落 pi 会话条目（appendEntry，可钻取）；REST 端点待契约补录。 */
+/** 通用上报：过程记录落 pi 会话条目（appendEntry，可钻取）；REST 端点待契约补录。 */
 	pi.registerTool(
 		defineTool({
 			name: "workbench_report",
@@ -93,6 +98,110 @@ export default function (pi: ExtensionAPI) {
 					ts: new Date().toISOString(),
 				});
 				return { content: [{ type: "text", text: `已上报（${params.kind}）` }] };
+			},
+		}),
+	);
+
+	/** 派发：spawn 被派发 harness 真实进程（NDJSON 解析，骨架参考官方 subagent 示例）。 */
+	pi.registerTool(
+		defineTool({
+			name: "dispatch",
+			label: "派发任务",
+			description:
+				"把任务派发给主代理：启动其 harness 真实进程执行任务说明，监控完成并上报回执。" +
+				"批准卡片后收到派发通知时使用本工具。",
+			promptGuidelines: [
+				"派发任务必须使用 dispatch 工具，不要在回复里描述派发细节代替执行。",
+				"prompt 参数写清任务说明：实现范围（版本参照）+ 完成标准 + 回执要求。",
+			],
+			parameters: Type.Object({
+				task_id: Type.String({ description: "任务 id，如 T-0001" }),
+				prompt: Type.String({ description: "给主代理的任务说明（实现范围与完成标准）" }),
+				watchdog_minutes: Type.Number({ default: 60, description: "看门狗超时（分钟）" }),
+			}),
+			async execute(_toolCallId, p) {
+				// 1. 查任务（master 决定 harness）
+				const pkgs = await api("GET", "/packages");
+				const pkg = pkgs.items.find((x: any) => x.tasks.some((t: any) => t.task_id === p.task_id));
+				const task = pkg?.tasks.find((t: any) => t.task_id === p.task_id);
+				if (!task) throw new Error(`任务 ${p.task_id} 不存在`);
+
+				// 2. 状态机推进 + 看门狗
+				await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: p.watchdog_minutes });
+
+				// 3. harness 映射（与 mock 执行器共用同一配置文件）
+				const map = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "harness-map.json"), "utf-8"));
+				const harnessName = map.masters?.[task.master ?? ""] ?? "sl2-fake";
+				const harness = map.harnesses?.[harnessName] ?? map.harnesses?.["sl2-fake"];
+				if (!harness) throw new Error(`harness 映射缺失：${harnessName}`);
+				let argv: string[] = (harness.args ?? []).map((a: string) => a.replace("{prompt}", p.prompt));
+				if ((harness.prompt_mode ?? "arg") === "arg") argv = [...argv, p.prompt];
+
+				// 4. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
+				const started = Date.now();
+				const result = await new Promise<{ exitCode: number; text: string; usage: any }>((resolve) => {
+					const isCmd = /\.cmd$/i.test(harness.command);
+					const finalArgv = isCmd ? ["cmd", "/c", harness.command, ...argv] : argv;
+					const command = isCmd ? "cmd" : harness.command;
+					const proc = spawn(command, finalArgv, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+					let buffer = "";
+					let text = "";
+					let usage: any = null;
+					const processLine = (line: string) => {
+						if (!line.trim()) return;
+						let event: any;
+						try {
+							event = JSON.parse(line);
+						} catch {
+							return;
+						}
+						if (event.type === "message_end" && event.message?.role === "assistant") {
+							text = (event.message.content ?? [])
+								.filter((b: any) => b.type === "text")
+								.map((b: any) => b.text)
+								.join("");
+							usage = event.message.usage ?? usage;
+						}
+					};
+					proc.stdout.on("data", (data: Buffer) => {
+						buffer += data.toString("utf-8");
+						const lines = buffer.split("\n");
+						buffer = lines.pop() ?? "";
+						for (const line of lines) processLine(line);
+					});
+					proc.stderr.on("data", () => {}); // 防背压
+					proc.on("close", (code) => {
+						if (buffer.trim()) processLine(buffer);
+						resolve({ exitCode: code ?? 1, text, usage });
+					});
+					proc.on("error", () => resolve({ exitCode: 1, text, usage }));
+				});
+
+				if (result.exitCode !== 0) {
+					return {
+						content: [{ type: "text", text: `任务 ${p.task_id} 进程异常退出（码 ${result.exitCode}），未回执，等待看门狗标记 timeout` }],
+						details: { outcome: "crashed", exit_code: result.exitCode },
+					};
+				}
+
+				// 5. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
+				const files = (text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+				const receipt = await api("POST", `/tasks/${p.task_id}/receipt`, {
+					files_changed: files,
+					self_check: `主代理进程退出码 0`,
+					summary: text.slice(0, 200),
+					telemetry: {
+						duration_ms: Date.now() - started,
+						tokens: result.usage
+							? { input: result.usage.input, output: result.usage.output }
+							: null,
+						token_source: result.usage ? "exact" : "estimated",
+					},
+				});
+				return {
+					content: [{ type: "text", text: `任务 ${p.task_id} 完成：${files.length} 个文件改动，已回执（${receipt.status}）` }],
+					details: { outcome: "reported", files_changed: files },
+				};
 			},
 		}),
 	);

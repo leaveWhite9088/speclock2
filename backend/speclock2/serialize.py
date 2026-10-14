@@ -94,6 +94,7 @@ def receipt_out(r: models.Receipt) -> dict:
         "files_changed": r.files_changed or [],
         "self_check": r.self_check,
         "summary": r.summary,
+        "telemetry": r.telemetry,  # 过程遥测（时长/token，§13.5）
         "created_at": r.created_at,
     }
 

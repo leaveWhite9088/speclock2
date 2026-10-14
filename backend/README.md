@@ -1,6 +1,6 @@
-# SpecLock 2 后端（M1 · S0~S2）
+# SpecLock 2 后端（M1 · S0~S2 + R-M2 接入轮）
 
-技术栈：Python 3.11+ / FastAPI / SQLAlchemy 2 / SQLite / pytest。
+技术栈：Python 3.11+ / FastAPI / SQLAlchemy 2 / SQLite / pytest；核心代理宿主 pi 1.2.0（Node ≥ 22）。
 
 已交付切片：
 
@@ -55,6 +55,63 @@ PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则�
 - **rules**：每条 `{id?, name, detail}`，name/detail 非空。无 id 条目由服务端分配稳定 id（`R` + 模块内单调递增计数器，**永不复用**：已删除的 id 不会再分配、也不可再引用，引用不存在的 id → 422）；带 id 条目按 id 匹配当前草稿更新；GET 回读的 rules 总是带 id；
 - **apis**：`api` 形如 `"METHOD /path"`（METHOD 大写且属于 GET/POST/PUT/PATCH/DELETE，path 以 `/` 开头）、`desc` 非空、name 非空；字段（request/response 递归 children）校验 name 非空、type ∈ {string, number, integer, boolean, array, object}、children 仅允许挂在 object/array 下（array 的 children 描述元素结构）；模块内 method+path 唯一。
 
+## 核心代理接入（R-M2）
+
+架构（DESIGN.md §13）：`backend/speclock2/pi_runtime.py` 经 **pi RPC 模式**（stdin/stdout JSONL，严格 LF 二进制分帧，回合完成判据 `agent_settled`）驱动每项目一个常驻核心代理子进程；扩展 `chief/extension/index.ts`（jiti 加载）注册 `draft_card` / `dispatch` / `workbench_report` 三工具；宪法 `chief/constitution.md` 经 `--append-system-prompt` 注入。
+
+### 安装与配置
+
+```bash
+npm i -g @earendil-works/pi-coding-agent@1.2.0   # 锁版本；pi --version 确认
+```
+
+环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `SPECLOCK2_CHIEF_MOCK=1` | **降级开关**：无 provider key 时核心代理走本地模拟（含工具效果），全流程可自测 |
+| `SPECLOCK2_CHIEF_PROVIDER` / `SPECLOCK2_CHIEF_MODEL` | 真模型（如 `zai-coding-cn` / 模型名）；对应 provider 的 API key 按 pi 的环境变量约定设置 |
+| `SPECLOCK2_PI_CMD` | 覆盖 pi 启动命令（默认自动解析 `npm root -g` 下的 node + cli.js） |
+
+### harness 映射（`data/harness-map.json`，首次自动生成）
+
+```jsonc
+{
+  "watchdog_minutes_default": 60,
+  "masters":   {"backend": "sl2-fake", "frontend": "sl2-fake"},   // 装了真 CLI 后改指 pi/claude-code/codex
+  "harnesses": {
+    "sl2-fake":    {"command": "<python>", "args": ["<backend>/scripts/fake_harness.py"], "prompt_mode": "arg"},
+    "pi":          {"command": "node", "args": ["<cli.js>", "--mode", "json", "-p", "{prompt}", "--no-session"], "prompt_mode": "inline"},
+    "claude-code": {"command": "claude", "args": ["-p", "{prompt}", "--output-format", "stream-json", "--verbose"], "prompt_mode": "inline"},
+    "codex":       {"command": "codex", "args": ["exec", "--json", "{prompt}"], "prompt_mode": "inline"}
+  }
+}
+```
+
+`sl2-fake` 是被派发 harness 替身（模拟 pi 的 NDJSON 输出、真实写文件、支持 `--sleep/--fail`），无 key 自测用。`prompt_mode=arg` 追加尾参、`inline` 替换 `{prompt}` 占位符（不经 shell，防注入）。
+
+### R-M2 自检（mock 模式全流程）
+
+```bash
+SPECLOCK2_CHIEF_MOCK=1 python run.py     # 另开 Git Bash：
+BASE=http://127.0.0.1:8000
+# A：对话与起草
+curl -s -N $BASE/api/p/a/chat/stream &                  # SSE：ready/message_delta/message_final/card_proposed
+curl -s -X POST $BASE/api/p/a/chat -H "Content-Type: application/json" \
+  -d '{"message":"我需要导出支持 Excel"}'                # {"ok":true,"reply":"收到需求：..."}
+curl -s $BASE/api/p/a/agent                              # {"running":true,"model":"mock","context_usage_percent":0,...}
+#   含 draft 的起草（中文 JSON 走 UTF-8 文件 --data-binary @file，做法同 M1 自检）
+#   → 卡片出现在 /api/p/a/cards?status=pending；events?type=chat.human 可回放
+# B：批准 → 自动派发（真实 fake_harness 进程）→ 回执 → 验收
+curl -s -X POST $BASE/api/p/a/cards/C-0001/approve
+sleep 6 && curl -s $BASE/api/p/a/packages                # 两任务 reported，receipt 含 files_changed 与 telemetry(tokens)
+curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/json" -d '{"result":"pass"}'   # done
+#   崩溃超时：harness-map.json 里 args 加 "--fail"、watchdog_minutes_default 改 0.05 →
+#   进程 exit 1 不回执 → 约 3 秒后任务 timeout + events?type=task.timeout
+```
+
+真模型模式：设好 provider/model/key 环境变量后同样流程（核心代理经 `draft_card`/`dispatch` 工具真实起草与派发）；无 key 时 `agent/start` 可启动 pi 子进程，`chat` 返回 502 agent_error（降级路径）。
+
 ## 数据目录
 
 - 默认 `backend/data/`：`registry.db`（全局注册表）+ `ledgers/{slug}.db`（每项目独立账本）；
@@ -62,7 +119,12 @@ PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则�
 - 无迁移框架：应用启动建注册表，创建项目/打开账本时幂等建表（沿用 v1 做法）；
 - `data/` 已被仓库根 `.gitignore` 排除，属运行时产物，可随时删除重建。
 
-## 端点一览（契约 v0.2，全部真实现）
+## 端点一览（契约 v0.3，全部真实现）
+
+在 v0.2 基础上新增：`GET /blocks/{id}/versions/{version}`（版本快照，`version=draft` 为当前草稿）、
+`POST /chat`、`GET /chat/stream`（SSE：message_delta / message_final / card_proposed / agent_error / ready）、
+`GET /agent`（含 context_usage_percent，>80 落 chief.context_warning 事件）、`POST /agent/start`（幂等）、
+`POST /agent/stop`；`receipt` 支持可选 `telemetry` 字段（时长/token，token_source: exact|estimated）。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

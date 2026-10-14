@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -107,7 +109,7 @@ def list_cards(slug: str, request: Request, status: str | None = Query(default=N
 
 
 @router.post("/cards/{card_id}/approve")
-def approve_card(slug: str, card_id: str, request: Request) -> dict:
+async def approve_card(slug: str, card_id: str, request: Request) -> dict:
     _project_or_404(request, slug)
     db = request.app.state.db
     with db.ledger_session(slug) as session:
@@ -207,7 +209,25 @@ def approve_card(slug: str, card_id: str, request: Request) -> dict:
             "closed_round": round_.n,
             "package_id": fmt_id("P", package.id),
         }
+    # 批准 → 通知核心代理派发（§13.2 时序：批准后"起草派发提示词"→派发；
+    # mock 模式服务端模拟 dispatch 工具跑真实派发链，真模式由核心代理调 dispatch 工具）
+    session_ = request.app.state.pi.get(slug)
+    if session_ is not None:
+        asyncio.create_task(_notify_chief(request, session_, slug, package.id))
     return response
+
+
+async def _notify_chief(request, session, slug: str, package_id: int) -> None:
+    """批准 → 核心代理派发。回复（含派发结果汇报）落 chat.chief 事件并推 SSE。"""
+    try:
+        reply = await session.prompt(f"任务包 P-{package_id:04d} 已批准，请派发。")
+    except Exception:
+        return  # 通知/派发失败不影响批准事务；任务保持 queued 可手工派发
+    session.broadcast("message_final", {"message": reply})
+    with request.app.state.db.ledger_session(slug) as s:
+        round_ = flow.get_open_round(s)
+        flow.add_event(s, round_.n if round_ else 0, "chief", "chat.chief", {}, {"message": reply})
+        s.commit()
 
 
 @router.post("/cards/{card_id}/reject")

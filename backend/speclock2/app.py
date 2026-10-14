@@ -26,8 +26,9 @@ def create_app() -> FastAPI:
     app.state.db = Database(settings)
     app.state.db.init_registry()  # 启动时建表
     app.state.timers = set()  # 看门狗定时器（防 GC）
-    app.state.pi = PiManager(settings)  # 核心代理会话管理（按需注入 create_card_fn）
+    app.state.pi = PiManager(settings)  # 核心代理会话管理（mock 工具效果按需注入）
     app.state.pi.create_card_fn = chat.make_create_card_fn(app)
+    app.state.pi.dispatch_fn = chat.make_dispatch_fn(app)
 
     register_error_handlers(app)
     app.include_router(health.router)

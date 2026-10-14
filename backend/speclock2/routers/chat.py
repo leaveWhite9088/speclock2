@@ -55,6 +55,17 @@ def make_create_card_fn(app) -> object:
     return _create
 
 
+def make_dispatch_fn(app) -> object:
+    """mock 核心代理的 dispatch 工具效果：真实派发链（spawn harness → 遥测/回执）。"""
+
+    async def _dispatch(slug: str, package_id: int):
+        from .. import dispatcher
+
+        return await dispatcher.run_package(app, slug, package_id)
+
+    return _dispatch
+
+
 @asynccontextmanager
 async def lifespan(app):
     yield

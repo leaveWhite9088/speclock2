@@ -182,7 +182,8 @@ class PiSession(BaseSession):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "SPECLOCK2_SLUG": self.slug},
+            env={**os.environ, "SPECLOCK2_SLUG": self.slug,
+                 "SPECLOCK2_REPO_ROOT": str(self._repo_root)},
         )
         asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._drain_stderr())
@@ -286,13 +287,14 @@ class PiSession(BaseSession):
 
 
 class MockSession(BaseSession):
-    """模拟核心代理：流式回复 + 模拟 draft_card 工具效果（服务端直接建卡）。"""
+    """模拟核心代理：流式回复 + 模拟 draft_card/dispatch 工具效果（服务端执行）。"""
 
-    def __init__(self, slug: str, create_card_fn=None) -> None:
+    def __init__(self, slug: str, create_card_fn=None, dispatch_fn=None) -> None:
         super().__init__()
         self.slug = slug
         self.session_id = f"mock-{slug}"
-        self.create_card_fn = create_card_fn  # async (slug, body) -> card dict
+        self.create_card_fn = create_card_fn  # async (slug, draft) -> card dict
+        self.dispatch_fn = dispatch_fn  # async (slug, package_id) -> [task 结果]
 
     @property
     def model(self) -> str:
@@ -303,6 +305,22 @@ class MockSession(BaseSession):
         return True
 
     async def prompt(self, message: str, draft: dict | None = None) -> str:
+        # 模拟 dispatch 工具：批准通知消息触发真实派发链（§13.2）
+        if "请派发" in message and self.dispatch_fn is not None:
+            import re
+            m = re.search(r"P-(\d+)", message)
+            if m:
+                package_id = int(m.group(1))
+                results = await self.dispatch_fn(self.slug, package_id)
+                summary = "；".join(
+                    f"T-{r['task_id']:04d}→{r['outcome']}" for r in results
+                ) or "无可派发任务"
+                reply = f"任务包 P-{package_id:04d} 已派发：{summary}。"
+                self.broadcast("message_delta", {"delta": reply[: len(reply) // 2]})
+                await asyncio.sleep(0.01)
+                self.broadcast("message_delta", {"delta": reply[len(reply) // 2:]})
+                return reply
+
         card = None
         if draft is not None:
             if self.create_card_fn is None:
@@ -339,10 +357,11 @@ def mock_enabled() -> bool:
 class PiManager:
     """每项目一个核心代理会话（A8/A1：会话可丢，账本永恒）。"""
 
-    def __init__(self, settings: Settings, create_card_fn=None) -> None:
+    def __init__(self, settings: Settings, create_card_fn=None, dispatch_fn=None) -> None:
         self.settings = settings
         self.sessions: dict[str, BaseSession] = {}
-        self.create_card_fn = create_card_fn
+        self.create_card_fn = create_card_fn  # mock 的 draft_card 工具效果
+        self.dispatch_fn = dispatch_fn  # mock 的 dispatch 工具效果（真实派发链）
         self._pi_cmd_cache: list[str] | None | None = None  # None=未解析
 
     def _resolve_cmd(self) -> list[str] | None:
@@ -355,7 +374,7 @@ class PiManager:
         if session is not None and session.running:
             return session
         if mock_enabled():
-            session = MockSession(slug, self.create_card_fn)
+            session = MockSession(slug, self.create_card_fn, self.dispatch_fn)
         else:
             session = PiSession(slug, self.settings)
             if model:

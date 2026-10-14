@@ -34,6 +34,7 @@ class ReceiptBody(BaseModel):
     files_changed: list = []
     self_check: str = ""
     summary: str = ""
+    telemetry: dict | None = None  # 过程遥测（时长/token，解析不到标估算）——契约扩展见回执
 
 
 class AuditBody(BaseModel):
@@ -66,14 +67,12 @@ def _transition(task: models.Task, to_status: str) -> None:
         raise ApiError(409, "conflict", f"非法状态迁移：{task.status} → {to_status}")
 
 
-def _start_watchdog(request: Request, slug: str, task_id: int, deadline: datetime) -> None:
+def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime) -> None:
     """内存看门狗：到期仍未回执（dispatched）→ timeout + task.timeout 事件（§9.4）。"""
     delay = max((deadline - datetime.now().astimezone()).total_seconds(), 0.1)
-    timers: set = request.app.state.timers
 
     def fire() -> None:
         timers.discard(timer)
-        db = request.app.state.db
         try:
             with db.ledger_session(slug) as session:
                 task = session.get(models.Task, task_id)
@@ -96,6 +95,59 @@ def _start_watchdog(request: Request, slug: str, task_id: int, deadline: datetim
     timer.start()
 
 
+def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes: float) -> models.Task:
+    """queued→dispatched + deadline + 事件 + 启动看门狗（端点与派发执行器共用）。"""
+    with db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is None:
+            raise ApiError(404, "not_found", f"任务不存在：{task_id}")
+        _transition(task, "dispatched")
+        deadline = datetime.now().astimezone() + timedelta(minutes=watchdog_minutes)
+        task.status = "dispatched"
+        task.watchdog_deadline = deadline.isoformat(timespec="seconds")
+        task.updated_at = now_iso()
+        round_ = flow.get_open_round(session)
+        flow.add_event(
+            session, round_.n if round_ else 0, "human", "task.dispatched",
+            {"task": fmt_id("T", task.id)}, {"watchdog_deadline": task.watchdog_deadline},
+        )
+        session.commit()
+        session.refresh(task)
+        snapshot = task
+    _start_watchdog(db, timers, slug, task_id, deadline)
+    return snapshot
+
+
+def receipt_service(db, slug: str, task_id: int, body: ReceiptBody) -> models.Receipt:
+    """dispatched→reported + 回执落库 + 事件（端点与派发执行器共用）。"""
+    with db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is None:
+            raise ApiError(404, "not_found", f"任务不存在：{task_id}")
+        _transition(task, "reported")
+        receipt = models.Receipt(
+            task_id=task.id,
+            files_changed=body.files_changed,
+            self_check=body.self_check,
+            summary=body.summary,
+            telemetry=body.telemetry,
+            created_at=now_iso(),
+        )
+        session.add(receipt)
+        task.status = "reported"
+        task.updated_at = now_iso()
+        round_ = flow.get_open_round(session)
+        flow.add_event(
+            session, round_.n if round_ else 0, "human", "task.receipt",
+            {"task": fmt_id("T", task.id)},
+            {"files_changed": body.files_changed, "self_check": body.self_check,
+             "summary": body.summary, "telemetry": body.telemetry},
+        )
+        session.commit()
+        session.refresh(receipt)
+        return receipt
+
+
 @router.get("/packages")
 def list_packages(slug: str, request: Request) -> dict:
     _project_or_404(request, slug)
@@ -115,50 +167,19 @@ def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request)
     _project_or_404(request, slug)
     if body.watchdog_minutes <= 0:
         raise ApiError(422, "validation_error", "watchdog_minutes 必须为正数")
-    with request.app.state.db.ledger_session(slug) as session:
-        task = _task_or_404(session, task_id)
-        _transition(task, "dispatched")
-        deadline = datetime.now().astimezone() + timedelta(minutes=body.watchdog_minutes)
-        task.status = "dispatched"
-        task.watchdog_deadline = deadline.isoformat(timespec="seconds")
-        task.updated_at = now_iso()
-        round_ = flow.get_open_round(session)
-        flow.add_event(
-            session, round_.n if round_ else 0, "human", "task.dispatched",
-            {"task": fmt_id("T", task.id)}, {"watchdog_deadline": task.watchdog_deadline},
-        )
-        session.commit()
-        session.refresh(task)
-        data = serialize.task_out(task)
-    _start_watchdog(request, slug, task.id, deadline)
-    return data
+    task = dispatch_service(
+        request.app.state.db, request.app.state.timers, slug,
+        parse_prefixed_id(task_id, "T") or -1, body.watchdog_minutes,
+    )
+    return serialize.task_out(task)
 
 
 @router.post("/tasks/{task_id}/receipt")
 def submit_receipt(slug: str, task_id: str, body: ReceiptBody, request: Request) -> dict:
     _project_or_404(request, slug)
+    receipt = receipt_service(request.app.state.db, slug, parse_prefixed_id(task_id, "T") or -1, body)
     with request.app.state.db.ledger_session(slug) as session:
-        task = _task_or_404(session, task_id)
-        _transition(task, "reported")
-        receipt = models.Receipt(
-            task_id=task.id,
-            files_changed=body.files_changed,
-            self_check=body.self_check,
-            summary=body.summary,
-            created_at=now_iso(),
-        )
-        session.add(receipt)
-        task.status = "reported"
-        task.updated_at = now_iso()
-        round_ = flow.get_open_round(session)
-        flow.add_event(
-            session, round_.n if round_ else 0, "human", "task.receipt",
-            {"task": fmt_id("T", task.id)},
-            {"files_changed": body.files_changed, "self_check": body.self_check, "summary": body.summary},
-        )
-        session.commit()
-        session.refresh(receipt)
-        session.refresh(task)
+        task = session.get(models.Task, receipt.task_id)
         data = serialize.task_out(task, receipt)
     return data
 

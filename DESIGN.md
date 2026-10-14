@@ -191,7 +191,7 @@ BlockVersion:
 
 ```json
 {
-  "order_id": "T-0007",
+  "order_id": "O-0007",
   "intent": "前端视觉重设计，按新设计稿",
   "scope": ["web/src/"],
   "baseline": { "设计稿": "path/to/mock.png" },

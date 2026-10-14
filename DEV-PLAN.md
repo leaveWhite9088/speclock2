@@ -1,7 +1,7 @@
 # SpecLock 2 开发计划（M1 账本核心）
 
 - 版本：0.1　日期：2026-10-14　PM：主主代理（本会话）
-- 关联：DESIGN.md v0.4（设计事实源）、PI-ASSESSMENT.md（pi 选型核查）
+- 关联：DESIGN.md v0.6（设计事实源）、PI-ASSESSMENT.md（pi 选型核查）
 - 当前阶段：**M1 账本核心**——不接任何 AI，人工模拟主主代理，验证数据模型与全流程
 
 ---
@@ -31,7 +31,7 @@ speclock2/
 
 ---
 
-## 2. API 契约 v0
+## 2. API 契约 v0.2（S2 扩充：卡片 ops 携带 block_id；新增任务流转/约定/统计端点）
 
 **通用约定**（与 DESIGN.md §5.5 全局约定的子集一致）：
 
@@ -46,9 +46,9 @@ speclock2/
 Event:   { "id": "E-0001", "ts": "...", "round": 12, "actor": "human|chief|audit|master:backend|system",
            "type": "...", "ref": {}, "payload": {} }
 Card:    { "card_id": "C-0031", "round": 12, "status": "pending|approved|rejected",
-           "statement": { "说明": "...", "动机": "..." },
-           "rule_ops":  [ { "op": "add|modify|remove", "id": "R3", "before": {...}, "after": {...} } ],
-           "api_ops":   [ { "op": "upsert|remove", "key": "GET /export", "entry": {...}, "breaking": false } ],
+           "statement": { "说明": "...", "动机": "..." },          // 必填
+           "rule_ops":  [ { "block_id": "1", "op": "add|modify|remove", "id": "R3", "before": {...}, "after": {...} } ],
+           "api_ops":   [ { "block_id": "1", "op": "upsert|remove", "key": "GET /export", "entry": {...}, "breaking": false } ],
            "breaking_count": 1, "impact": ["frontend","backend"],
            "risk": { "text": "...", "verified_by": null } }
 Rule:    { "id": "R3", "name": "导出格式", "detail": "..." }
@@ -57,35 +57,50 @@ Block:   { "id": "...", "title": "...", "status": "draft|published",
            "current_published_version": "1.3.0",
            "draft": { "content_md": "...", "rules": [Rule], "apis": [ApiEntry], "nfr_md": "..." },
            "versions": [ { "version": "1.3.0", "round": 12, "statement": {...}, "delta_summary": "2改1增" } ] }
+Package: { "package_id": "P-0012", "origin": "approval|tech", "round": 12,
+           "version_refs": { "block_id": "1.3.0" }, "tasks": [Task] }
+Task:    { "task_id": "T-0045", "master": "backend|frontend",
+           "status": "queued|dispatched|running|reported|auditing|done|rejected|timeout",
+           "watchdog_deadline": "...|null", "receipt": { "files_changed": [...], "self_check": "...", "summary": "..." }|null }
+TechOrder:{ "order_id": "O-0007", "intent": "...", "scope": ["web/src/"], "baseline": {...}|null,
+           "acceptance": ["..."], "package_id": "P-0013" }
+Convention:{ "version": "1.0.0", "content_md": "...", "draft_md": "...|null", "statement": {...} }
+Stats:   { "rounds": {"count": 13, "open": 14}, "cards": {"pending":1,"approved":12,"rejected":2},
+           "packages": {"done": 11, "active": 1}, "tasks": {"rejected": 3, "timeout": 1} }
+approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false}],
+              "closed_round": 12, "package_id": "P-0012" }
 ```
 
-**端点表**（状态列：`S0`=骨架切片实现真逻辑；`桩`=S0 注册但返回 501；`S1`~`S5`=后续切片实现）：
+**端点表**（`S0 ✅` 已实现并验收；`S2` = M1 收尾整包轮实现）：
 
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
-| GET | `/api/health` | 健康检查 `{ok:true}` | S0 |
-| GET | `/api/projects` | 项目清单（全局注册表） | S0 |
-| POST | `/api/projects` | `{slug,name}` 创建；slug 冲突 409；创建即初始化独立账本 | S0 |
-| GET | `/api/p/{slug}` | 项目详情：`{slug,name,current_round,open_card}` | S0 |
-| GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks（含 status/版本号） | S0 |
-| POST | `/api/p/{slug}/domains` | `{title}` | S0 |
-| POST | `/api/p/{slug}/documents` | `{domain_id,title}` | S0 |
-| POST | `/api/p/{slug}/blocks` | `{document_id,title}`，草稿态 | S0 |
-| GET | `/api/p/{slug}/blocks/{id}` | 草稿 + 版本列表 | S0 |
-| PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套读写（**不产生版本**） | S0 |
-| POST | `/api/p/{slug}/cards` | 人工模拟"主主代理起草"：提交 Card | 桩 |
-| GET | `/api/p/{slug}/cards` | `?status=` 筛选 | 桩 |
-| POST | `/api/p/{slug}/cards/{id}/approve` | 应用 ops→快照→轮次推进→建任务包 | S3 |
-| POST | `/api/p/{slug}/cards/{id}/reject` | `{reason?}` | S3 |
-| GET | `/api/p/{slug}/rounds` | 轮次清单 | S3 |
-| GET | `/api/p/{slug}/rounds/{n}` | 时间线渲染源（events+versions+cards） | S3 |
-| GET | `/api/p/{slug}/events` | `?since=&type=` | S3 |
-| GET | `/api/p/{slug}/packages` | 任务包与任务状态 | S4 |
-| POST | `/api/p/{slug}/tasks/{id}/receipt` | `{files_changed,self_check,summary}`（M1 手工模拟） | S4 |
-| POST | `/api/p/{slug}/tech-orders` | 技术任务单（DESIGN §6.4）：`{intent,scope[],baseline?,acceptance[]}` → 确认后生成 origin=tech 任务包 | S4 |
-| GET | `/api/p/{slug}/conventions` | 全局约定当前版 | S5 |
-| PUT | `/api/p/{slug}/conventions/draft` | 草稿 | S5 |
-| POST | `/api/p/{slug}/conventions/approve` | 产生 ConventionVersion | S5 |
+| GET | `/api/health` | 健康检查 `{ok:true}` | S0 ✅ |
+| GET | `/api/projects` | 项目清单（全局注册表） | S0 ✅ |
+| POST | `/api/projects` | `{slug,name}` 创建；slug 冲突 409；创建即初始化独立账本 | S0 ✅ |
+| GET | `/api/p/{slug}` | 项目详情：`{slug,name,current_round,open_card}` | S0 ✅ |
+| GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks（含 status/版本号） | S0 ✅ |
+| POST | `/api/p/{slug}/domains` | `{title}` | S0 ✅ |
+| POST | `/api/p/{slug}/documents` | `{domain_id,title}` | S0 ✅ |
+| POST | `/api/p/{slug}/blocks` | `{document_id,title}`，草稿态 | S0 ✅ |
+| GET | `/api/p/{slug}/blocks/{id}` | 草稿 + 版本列表 | S0 ✅ |
+| PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套读写（**不产生版本**）；rules/apis 校验、规则稳定 ID | S1 |
+| POST | `/api/p/{slug}/cards` | 人工模拟"主主代理起草"：提交 Card（校验 ops 与 block 存在性，statement 必填） | S2 |
+| GET | `/api/p/{slug}/cards` | `?status=` 筛选 | S2 |
+| POST | `/api/p/{slug}/cards/{id}/approve` | 应用 ops→快照→轮次关闭/开启→建任务包（origin=approval） | S2 |
+| POST | `/api/p/{slug}/cards/{id}/reject` | `{reason?}` | S2 |
+| GET | `/api/p/{slug}/rounds` | 轮次清单 | S2 |
+| GET | `/api/p/{slug}/rounds/{n}` | 时间线渲染源（events+versions+cards） | S2 |
+| GET | `/api/p/{slug}/events` | `?since=&type=`（append-only，回放） | S2 |
+| GET | `/api/p/{slug}/packages` | 任务包与任务状态 | S2 |
+| POST | `/api/p/{slug}/tasks/{id}/dispatch` | `{watchdog_minutes?}`（默认60）：queued→dispatched，启动看门狗 | S2 |
+| POST | `/api/p/{slug}/tasks/{id}/receipt` | `{files_changed,self_check,summary}`：→reported（M1 手工模拟） | S2 |
+| POST | `/api/p/{slug}/tasks/{id}/audit` | `{result:"pass"\|"fail",note?}`：auditing→done/rejected（M1 人工模拟审计） | S2 |
+| POST | `/api/p/{slug}/tech-orders` | 技术任务单（DESIGN §6.4）：`{intent,scope[],baseline?,acceptance[]}` → 生成 origin=tech 任务包 | S2 |
+| GET | `/api/p/{slug}/conventions` | 全局约定当前版 + 草稿 | S2 |
+| PUT | `/api/p/{slug}/conventions/draft` | 草稿 `content_md` | S2 |
+| POST | `/api/p/{slug}/conventions/approve` | `{说明,动机}` → 产生 ConventionVersion | S2 |
+| GET | `/api/p/{slug}/stats` | 仪表盘聚合（形状见 Stats） | S2 |
 
 ---
 

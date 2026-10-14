@@ -1,12 +1,12 @@
-"""/api/p/{slug}/...：项目内端点。
+"""/api/p/{slug}/...：项目详情、三层树、domain/document/block 草稿态创建、草稿四件套读写。
 
-S0 真实现：项目详情、三层树、domain/document/block 草稿态创建、草稿四件套读写。
-其余契约端点全部为桩：501 + not_implemented envelope。
+卡片/轮次/事件/队列/约定/统计端点在 cards.py / timeline.py / queue.py /
+conventions.py / stats.py（S2 实现）。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 from sqlalchemy import func, select
 
 from .. import models, schemas, serialize, validation
@@ -177,6 +177,8 @@ def update_block_draft(slug: str, block_id: str, body: schemas.BlockDraftUpdate,
         if errors:
             raise ApiError(422, "validation_error", "草稿校验失败", details={"errors": errors})
         # 只存草稿，不产生任何版本；版本只在批准时产生（DESIGN.md §6.1）
+        # 批准后再编辑草稿 → 模块回到草稿态（有未发布改动）
+        block.status = "draft"
         if body.content_md is not None:
             block.draft_content_md = body.content_md
         if body.rules is not None:
@@ -192,70 +194,3 @@ def update_block_draft(slug: str, block_id: str, body: schemas.BlockDraftUpdate,
         versions = _versions_of(session, block.id)
         data = serialize.block_out(block, versions)
     return data
-
-
-# ---------- 契约 v0 其余端点：桩（501） ----------
-
-
-def _not_implemented(what: str) -> None:
-    raise ApiError(501, "not_implemented", f"{what} 尚未实现，将在后续切片提供")
-
-
-@router.post("/cards")
-def create_card(slug: str) -> None:
-    _not_implemented("POST /api/p/{slug}/cards（卡片起草，S2）")
-
-
-@router.get("/cards")
-def list_cards(slug: str, status: str | None = Query(default=None)) -> None:
-    _not_implemented("GET /api/p/{slug}/cards（卡片清单，S2）")
-
-
-@router.post("/cards/{card_id}/approve")
-def approve_card(slug: str, card_id: str) -> None:
-    _not_implemented("POST /api/p/{slug}/cards/{id}/approve（批准闭环，S3）")
-
-
-@router.post("/cards/{card_id}/reject")
-def reject_card(slug: str, card_id: str) -> None:
-    _not_implemented("POST /api/p/{slug}/cards/{id}/reject（批准闭环，S3）")
-
-
-@router.get("/rounds")
-def list_rounds(slug: str) -> None:
-    _not_implemented("GET /api/p/{slug}/rounds（轮次清单，S3）")
-
-
-@router.get("/rounds/{n}")
-def round_detail(slug: str, n: str) -> None:
-    _not_implemented("GET /api/p/{slug}/rounds/{n}（轮次时间线，S3）")
-
-
-@router.get("/events")
-def list_events(slug: str, since: str | None = Query(default=None), type_: str | None = Query(default=None, alias="type")) -> None:
-    _not_implemented("GET /api/p/{slug}/events（事件日志，S3）")
-
-
-@router.get("/packages")
-def list_packages(slug: str) -> None:
-    _not_implemented("GET /api/p/{slug}/packages（任务包，S4）")
-
-
-@router.post("/tasks/{task_id}/receipt")
-def submit_receipt(slug: str, task_id: str) -> None:
-    _not_implemented("POST /api/p/{slug}/tasks/{id}/receipt（回执，S4）")
-
-
-@router.get("/conventions")
-def get_conventions(slug: str) -> None:
-    _not_implemented("GET /api/p/{slug}/conventions（全局约定，S5）")
-
-
-@router.put("/conventions/draft")
-def put_conventions_draft(slug: str) -> None:
-    _not_implemented("PUT /api/p/{slug}/conventions/draft（约定草稿，S5）")
-
-
-@router.post("/conventions/approve")
-def approve_conventions(slug: str) -> None:
-    _not_implemented("POST /api/p/{slug}/conventions/approve（约定批准，S5）")

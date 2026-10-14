@@ -96,6 +96,7 @@ class Convention(LedgerBase):
     __tablename__ = "conventions"  # 项目内全局唯一一份
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    draft_md: Mapped[str | None] = mapped_column(sa.Text)  # 待批准草稿
     created_at: Mapped[str] = mapped_column(sa.Text)
 
 
@@ -163,6 +164,7 @@ class TaskPackage(LedgerBase):
     __tablename__ = "task_packages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    origin: Mapped[str] = mapped_column(sa.Text, default="approval")  # approval | tech（§9.1 双入口）
     round: Mapped[int] = mapped_column(sa.Integer)
     version_refs: Mapped[dict] = mapped_column(sa.JSON)
     created_at: Mapped[str] = mapped_column(sa.Text)
@@ -173,7 +175,7 @@ class Task(LedgerBase):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     package_id: Mapped[int] = mapped_column(sa.ForeignKey("task_packages.id"))
-    master: Mapped[str] = mapped_column(sa.Text)
+    master: Mapped[str | None] = mapped_column(sa.Text)  # 技术单任务 master 待定（null）
     depends_on: Mapped[list] = mapped_column(sa.JSON, default=list)
     status: Mapped[str] = mapped_column(sa.Text, default="queued")
     harness: Mapped[str | None] = mapped_column(sa.Text)
@@ -237,4 +239,18 @@ class Master(LedgerBase):
     working_dir: Mapped[str | None] = mapped_column(sa.Text)
     agents_md: Mapped[str | None] = mapped_column(sa.Text)
     session_policy: Mapped[dict | None] = mapped_column(sa.JSON)
+    created_at: Mapped[str] = mapped_column(sa.Text)
+
+
+class TechOrder(LedgerBase):
+    """技术任务单（DESIGN.md §6.4）：不动业务的变更走此通道，不进版本链。"""
+
+    __tablename__ = "tech_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    intent: Mapped[str] = mapped_column(sa.Text)
+    scope: Mapped[list] = mapped_column(sa.JSON, default=list)  # 范围声明 = 技术任务的"契约"
+    baseline: Mapped[dict | None] = mapped_column(sa.JSON)
+    acceptance: Mapped[list] = mapped_column(sa.JSON, default=list)
+    package_id: Mapped[int] = mapped_column(sa.ForeignKey("task_packages.id"))
     created_at: Mapped[str] = mapped_column(sa.Text)

@@ -32,3 +32,16 @@ def parse_int_or_none(value: str) -> int | None:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def fmt_id(prefix: str, n: int) -> str:
+    """对外 id 格式：E-0001 / C-0001 / P-0001 / T-0001 / O-0001（DESIGN.md §7.2、§6.4）。"""
+    return f"{prefix}-{n:04d}"
+
+
+def parse_prefixed_id(value: str, prefix: str) -> int | None:
+    """'C-0001' 或 '1' -> 1；不合法返回 None。"""
+    s = str(value).strip()
+    if s.upper().startswith(f"{prefix}-"):
+        s = s[len(prefix) + 1:]
+    return parse_int_or_none(s)

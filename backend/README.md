@@ -1,14 +1,14 @@
-# SpecLock 2 后端（M1-S0 骨架）
+# SpecLock 2 后端（M1 · S0~S2）
 
 技术栈：Python 3.11+ / FastAPI / SQLAlchemy 2 / SQLite / pytest。
 
-本切片（S0）交付：
+已交付切片：
 
-- FastAPI 应用工厂（`speclock2/app.py::create_app`）与 uvicorn 启动入口（`run.py`）；
-- 全局注册表 `data/registry.db`：`projects(slug PK, name, created_at, status)`；
-- 每项目独立账本 `data/ledgers/{slug}.db`：创建项目时初始化，含 DESIGN.md §17 全部 15 张表的骨架；
-- 契约 v0（DEV-PLAN §2）中标注 S0 的端点（真逻辑），其余端点全部为桩（501）；
-- 统一错误 envelope、ISO 8601 带时区时间、对外 id 字符串、列表 `{"items":[...]}` 包裹。
+- **S0 骨架**：应用工厂、全局注册表、每项目独立账本（16 张表）、S0 端点、统一错误 envelope；
+- **S1 文档系统**：草稿校验（apis 递归 / rules 稳定 id 分配永不复用）、逐条错误定位；
+- **S2 M1 收尾整包**：卡片起草/批准/打回 → 版本快照（semver）→ 轮次推进 → 事件链（append-only，增量回放）→ 任务包双入口（批准卡片 / 技术任务单）→ 任务状态机（dispatch/receipt/audit + 看门狗超时）→ 全局约定 → 统计聚合。
+
+M1 全程无 AI 参与：卡片、派发、回执、审计均由人工经这些端点模拟。
 
 ## 环境
 
@@ -62,50 +62,50 @@ PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则�
 - 无迁移框架：应用启动建注册表，创建项目/打开账本时幂等建表（沿用 v1 做法）；
 - `data/` 已被仓库根 `.gitignore` 排除，属运行时产物，可随时删除重建。
 
-## 端点一览（契约 v0）
-
-真实现（S0）：
+## 端点一览（契约 v0.2，全部真实现）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | `{"ok":true}` |
 | GET | `/api/projects` | 项目清单 `{"items":[...]}` |
 | POST | `/api/projects` | `{slug,name}`；slug 冲突 409；创建即初始化独立账本 |
-| GET | `/api/p/{slug}` | `{slug,name,current_round,open_card}`，初始 `current_round=0`、`open_card=null` |
-| GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks（含 status/版本号） |
-| POST | `/api/p/{slug}/domains` | `{title}` |
-| POST | `/api/p/{slug}/documents` | `{domain_id,title}` |
-| POST | `/api/p/{slug}/blocks` | `{document_id,title}`，草稿态 |
-| GET | `/api/p/{slug}/blocks/{id}` | 草稿 + 版本列表（S0 恒为空） |
-| PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套写入（只存草稿，不产生版本）；支持部分字段更新；rules/apis 走服务端校验（见下） |
+| GET | `/api/p/{slug}` | `{slug,name,current_round,open_card}` |
+| GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks |
+| POST | `/api/p/{slug}/domains` `/documents` `/blocks` | 草稿态创建 |
+| GET/PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套读写（PUT 只存草稿不产生版本；校验见 S1 节） |
+| POST | `/api/p/{slug}/cards` | 卡片起草：statement{说明,动机} 必填；ops 逐条校验（block_id 存在性、modify id 匹配、upsert 唯一性预演）；落 `draft.proposed` |
+| GET | `/api/p/{slug}/cards` | `?status=` 筛选 |
+| POST | `/api/p/{slug}/cards/{id}/approve` | 应用 ops → BlockVersion 快照（semver：破坏 MAJOR/新增 MINOR/其余 PATCH/首版 1.0.0）→ 关闭当前轮开启下一轮（批准属于它关闭的那一轮）→ 建任务包（origin=approval，按 impact）→ `approval.granted`+`version.published`+`package.created` |
+| POST | `/api/p/{slug}/cards/{id}/reject` | `{reason?}` → `approval.rejected`，轮次不动 |
+| GET | `/api/p/{slug}/rounds`、`/rounds/{n}` | 轮次清单；轮次详情（events+versions+cards 聚合，时间线渲染源） |
+| GET | `/api/p/{slug}/events` | `?since=&type=`：append-only，增量回放 |
+| GET | `/api/p/{slug}/packages` | 任务包与任务状态 |
+| POST | `/api/p/{slug}/tasks/{id}/dispatch` | `{watchdog_minutes?=60}`：queued→dispatched，启动看门狗；超时未回执 → timeout + `task.timeout` |
+| POST | `/api/p/{slug}/tasks/{id}/receipt` | `{files_changed,self_check,summary}`：→reported |
+| POST | `/api/p/{slug}/tasks/{id}/audit` | `{result:"pass"\|"fail",note?}`：→done/rejected；非法迁移 409 |
+| POST | `/api/p/{slug}/tech-orders` | 技术任务单 `{intent,scope[],baseline?,acceptance[]}` → origin=tech 任务包（不进版本链）→ `tech.order` |
+| GET/PUT/POST | `/api/p/{slug}/conventions`、`/conventions/draft`、`/conventions/approve` | 全局约定：当前版+草稿 / 草稿写入 / `{说明,动机}` 产生 ConventionVersion（首版 1.0.0，后续 PATCH） |
+| GET | `/api/p/{slug}/stats` | 仪表盘聚合（轮次/卡片/任务包/任务状态） |
 
-桩（全部返回 501 + `{"code":"not_implemented","message":"..."}`）：
+对外 id 格式：`E-0001`（事件）/ `C-0001`（卡片）/ `P-0001`（任务包）/ `T-0001`（任务）/ `O-0001`（技术单）；block/domain/document id 为纯数字字符串。
 
-`POST /api/p/{slug}/cards`、`GET /api/p/{slug}/cards`、`POST /api/p/{slug}/cards/{id}/approve`、
-`POST /api/p/{slug}/cards/{id}/reject`、`GET /api/p/{slug}/rounds`、`GET /api/p/{slug}/rounds/{n}`、
-`GET /api/p/{slug}/events`、`GET /api/p/{slug}/packages`、`POST /api/p/{slug}/tasks/{id}/receipt`、
-`GET /api/p/{slug}/conventions`、`PUT /api/p/{slug}/conventions/draft`、`POST /api/p/{slug}/conventions/approve`
+## 账本表
 
-## 验收自检脚本（对应 S0 验收标准）
+16 张（DESIGN.md §17 的 15 张 + `tech_orders` 技术任务单表，见 S2 回执说明）。
+
+## 验收自检脚本（M1 全流程）
 
 后端启动后，在 Git Bash 中依次执行。
 
-注意：Git Bash 里 curl 的 `-d '...中文...'` 会按本地代码页编码导致 422，**含中文的 JSON 必须写成 UTF-8 文件再用 `--data-binary @文件` 提交**（下面脚本用 python 生成，保证 UTF-8）：
+注意：Git Bash 里 curl 的 `-d '...中文...'` 会按本地代码页编码导致 422，**含中文的 JSON 必须写成 UTF-8 文件再用 `--data-binary @文件` 提交**（下面脚本用 python 生成，保证 UTF-8）。脚本在仓库根目录执行（`ls backend/data` 才对得上）：
 
 ```bash
 BASE=http://127.0.0.1:8000
 
-# 1. 健康检查
+# 0. 准备：清空运行数据、重启后端，然后健康检查
 curl -s $BASE/api/health                                   # {"ok":true}
 
-# 2. 创建两个项目 -> data/ledgers/ 下出现 a.db、b.db（纯 ASCII 可直接 -d）
-curl -s -X POST $BASE/api/projects -H "Content-Type: application/json" -d '{"slug":"a","name":"ProjectA"}'
-curl -s -X POST $BASE/api/projects -H "Content-Type: application/json" -d '{"slug":"b","name":"ProjectB"}'
-curl -s -X POST $BASE/api/projects -H "Content-Type: application/json" -d '{"slug":"a","name":"dup"}'   # 409
-ls backend/data/ledgers                                     # a.db  b.db（若设过 SPECLOCK2_DATA_DIR 则看对应目录）
-curl -s $BASE/api/projects                                  # 两条
-
-# 3. a 中 domain -> document -> block，PUT 草稿后 GET 回读一致；b 的 tree 为空
+# 1. 建链 + 草稿
 python - <<'PY'
 import json, pathlib
 d = pathlib.Path("backend/.selfcheck")
@@ -116,26 +116,96 @@ files = {
     "blk.json": {"document_id": "1", "title": "导出模块"},
     "draft.json": {
         "content_md": "# 背景\n日报导出",
-        "rules": [{"name": "导出格式", "detail": "支持 CSV 与 Excel"}],
+        "rules": [{"name": "导出格式", "detail": "CSV"}],
         "apis": [{"name": "导出", "api": "GET /api/daily-report", "desc": "日报导出", "request": [], "response": []}],
-        "nfr_md": "导出 1 秒内完成",
+        "nfr_md": "",
     },
+    # 卡片1：改规则 + 契约加 format 参数（首版 1.0.0）
+    "card1.json": {
+        "statement": {"说明": "导出支持 Excel", "动机": "财务需要带格式月报"},
+        "rule_ops": [{"block_id": "1", "op": "modify", "id": "R1",
+                       "after": {"name": "导出格式", "detail": "CSV 与 Excel"}}],
+        "api_ops": [{"block_id": "1", "op": "upsert", "key": "GET /api/daily-report",
+                      "entry": {"name": "导出", "api": "GET /api/daily-report", "desc": "日报导出",
+                                 "request": [{"name": "format", "type": "string", "required": False}],
+                                 "response": []}}],
+        "impact": ["backend", "frontend"],
+    },
+    # 卡片2：删 API → MAJOR
+    "card2.json": {
+        "statement": {"说明": "下线旧导出接口", "动机": "已被新接口替代"},
+        "api_ops": [{"block_id": "1", "op": "remove", "key": "GET /api/daily-report"}],
+    },
+    # 卡片3：只加接口 → MINOR
+    "card3.json": {
+        "statement": {"说明": "新增导出任务创建接口", "动机": "大数据量导出改异步"},
+        "api_ops": [{"block_id": "1", "op": "upsert", "key": "POST /api/export",
+                      "entry": {"name": "创建导出", "api": "POST /api/export", "desc": "创建异步导出任务",
+                                 "request": [], "response": []}}],
+    },
+    # 卡片4：只改规则文案 → PATCH
+    "card4.json": {
+        "statement": {"说明": "明确导出格式清单", "动机": "口径统一"},
+        "rule_ops": [{"block_id": "1", "op": "modify", "id": "R1",
+                       "after": {"name": "导出格式", "detail": "支持 CSV、Excel 与 PDF"}}],
+    },
+    "tech.json": {"intent": "重构导出内部实现", "scope": ["backend/"], "acceptance": ["pytest 通过"]},
+    "conv_draft.json": {"content_md": "# 全局约定\n时间 ISO 8601 带时区；对外 id 一律字符串"},
+    "conv_approve.json": {"statement": {"说明": "确立全局约定", "动机": "前后端并行需要共同约定"}},
 }
 for name, obj in files.items():
     (d / name).write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
 PY
+curl -s -X POST $BASE/api/projects -H "Content-Type: application/json" -d '{"slug":"a","name":"ProjectA"}'
 curl -s -X POST $BASE/api/p/a/domains   -H "Content-Type: application/json" --data-binary @backend/.selfcheck/dom.json
 curl -s -X POST $BASE/api/p/a/documents -H "Content-Type: application/json" --data-binary @backend/.selfcheck/doc.json
 curl -s -X POST $BASE/api/p/a/blocks    -H "Content-Type: application/json" --data-binary @backend/.selfcheck/blk.json
 curl -s -X PUT  $BASE/api/p/a/blocks/1  -H "Content-Type: application/json" --data-binary @backend/.selfcheck/draft.json
-curl -s $BASE/api/p/a/blocks/1                               # 回读一致：rules 已带服务端分配的 id（R1），versions 为空
-curl -s $BASE/api/p/a/tree                                  # 三层树：日报业务 -> 导出需求 -> 导出模块
-curl -s $BASE/api/p/b/tree                                  # {"items":[]}（隔离雏形）
-rm -rf backend/.selfcheck
+J='-H Content-Type:application/json'
 
-# 4. 桩端点
-curl -s -X POST $BASE/api/p/a/cards -w " [HTTP %{http_code}]"
-# 501，{"code":"not_implemented","message":"POST /api/p/{slug}/cards（卡片起草，S2） 尚未实现，将在后续切片提供"}
+# 2. 卡片 → 批准：首版 1.0.0、round 1 关闭 round 2 开启、事件链、任务包
+curl -s -X POST $BASE/api/p/a/cards $J --data-binary @backend/.selfcheck/card1.json   # C-0001
+curl -s -X POST $BASE/api/p/a/cards/C-0001/approve
+# {"versions":[{"block_id":"1","version":"1.0.0","breaking":false}],"closed_round":1,"package_id":"P-0001"}
+curl -s $BASE/api/p/a/blocks/1        # versions: [1.0.0]，status published
+curl -s $BASE/api/p/a/rounds          # round1 closed(approval_card_id C-0001) + round2 open
+curl -s $BASE/api/p/a/events          # draft.proposed → approval.granted → version.published → package.created，全属 round 1
+curl -s "$BASE/api/p/a/events?since=E-0002"   # 增量回放：E-0003、E-0004
+curl -s $BASE/api/p/a/packages        # P-0001：backend+frontend 两任务 queued
+
+# 3. semver 三级
+curl -s -X POST $BASE/api/p/a/cards $J --data-binary @backend/.selfcheck/card2.json   # C-0002
+curl -s -X POST $BASE/api/p/a/cards/C-0002/approve    # 2.0.0，breaking true
+curl -s -X POST $BASE/api/p/a/cards $J --data-binary @backend/.selfcheck/card3.json   # C-0003
+curl -s -X POST $BASE/api/p/a/cards/C-0003/approve    # 2.1.0
+curl -s -X POST $BASE/api/p/a/cards $J --data-binary @backend/.selfcheck/card4.json   # C-0004
+curl -s -X POST $BASE/api/p/a/cards/C-0004/approve    # 2.1.1
+curl -s $BASE/api/p/a/blocks/1 | python -c "import sys,json;print([v['version'] for v in json.load(sys.stdin)['versions']])"
+# ['1.0.0', '2.0.0', '2.1.0', '2.1.1']
+
+# 4. 技术任务单 + 看门狗 + 状态机
+curl -s -X POST $BASE/api/p/a/tech-orders $J --data-binary @backend/.selfcheck/tech.json  # O-0001 → P-0005
+TASK=$(curl -s $BASE/api/p/a/packages | python -c "import sys,json;print(json.load(sys.stdin)['items'][-1]['tasks'][0]['task_id'])")
+curl -s -X POST $BASE/api/p/a/tasks/$TASK/dispatch $J -d '{"watchdog_minutes":1}'   # dispatched（1 分钟看门狗）
+sleep 70                                                                            # 不回执等超时
+curl -s $BASE/api/p/a/packages | python -c "import sys,json;print([t['status'] for p in json.load(sys.stdin)['items'] for t in p['tasks']])"
+# 技术单任务 timeout；"$BASE/api/p/a/events?type=task.timeout" 有 system 事件
+# 另一任务（P-0001 的 backend 任务）正常链：
+TASK2=$(curl -s $BASE/api/p/a/packages | python -c "import sys,json;print(json.load(sys.stdin)['items'][0]['tasks'][0]['task_id'])")
+curl -s -X POST $BASE/api/p/a/tasks/$TASK2/dispatch $J -d '{"watchdog_minutes":60}'
+curl -s -X POST $BASE/api/p/a/tasks/$TASK2/receipt $J -d '{"files_changed":["backend/x.py"],"self_check":"通过","summary":"完成"}'
+curl -s -X POST $BASE/api/p/a/tasks/$TASK2/audit $J -d '{"result":"pass","note":"契约测试通过"}'   # done
+
+# 5. 全局约定
+curl -s -X PUT  $BASE/api/p/a/conventions/draft $J --data-binary @backend/.selfcheck/conv_draft.json
+curl -s -X POST $BASE/api/p/a/conventions/approve $J --data-binary @backend/.selfcheck/conv_approve.json  # 1.0.0
+
+# 6. 统计与隔离
+curl -s $BASE/api/p/a/stats
+curl -s -X POST $BASE/api/projects -H "Content-Type: application/json" -d '{"slug":"b","name":"ProjectB"}'
+curl -s $BASE/api/p/b/events           # {"items":[]}：a 的一切在 b 不可见
+curl -s $BASE/api/p/b/stats
+rm -rf backend/.selfcheck
 ```
 
 ## 目录结构

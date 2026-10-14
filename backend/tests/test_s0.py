@@ -131,33 +131,6 @@ def test_tree_three_layers_and_isolation(client):
     assert resp.status_code == 404
 
 
-def test_all_stub_endpoints_return_501(client):
-    _make_project(client, "a", "项目A")
-    stubs = [
-        ("post", "/api/p/a/cards"),
-        ("get", "/api/p/a/cards"),
-        ("post", "/api/p/a/cards/C-0001/approve"),
-        ("post", "/api/p/a/cards/C-0001/reject"),
-        ("get", "/api/p/a/rounds"),
-        ("get", "/api/p/a/rounds/1"),
-        ("get", "/api/p/a/events"),
-        ("get", "/api/p/a/packages"),
-        ("post", "/api/p/a/tasks/T-0001/receipt"),
-        ("get", "/api/p/a/conventions"),
-        ("put", "/api/p/a/conventions/draft"),
-        ("post", "/api/p/a/conventions/approve"),
-    ]
-    for method, path in stubs:
-        if method in ("post", "put"):
-            resp = getattr(client, method)(path, json={})
-        else:
-            resp = getattr(client, method)(path)
-        assert resp.status_code == 501, f"{method.upper()} {path} -> {resp.status_code}"
-        body = resp.json()
-        assert body["code"] == "not_implemented"
-        assert isinstance(body["message"], str) and body["message"]
-
-
 def test_404_envelopes(client):
     _make_project(client, "a", "项目A")
     # 项目不存在

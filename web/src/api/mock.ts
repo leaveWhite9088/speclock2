@@ -375,6 +375,9 @@ function dailyReportLedger(): MockLedger {
     { id: 'E-0005', ts: '2026-10-13T10:31:00+08:00', round: 11, actor: 'master:backend', type: 'task.dispatched', ref: { task: 'T-0044' }, payload: {} },
     { id: 'E-0006', ts: '2026-10-13T11:12:00+08:00', round: 11, actor: 'master:backend', type: 'task.receipt', ref: { task: 'T-0044' }, payload: {} },
     { id: 'E-0007', ts: '2026-10-13T11:20:00+08:00', round: 11, actor: 'audit', type: 'audit.machine.passed', ref: { task: 'T-0044' }, payload: { note: '契约测试通过' } },
+    // 对话历史（chat.* 事件，页面刷新后从这里恢复）
+    { id: 'E-0009', ts: '2026-10-14T09:05:00+08:00', round: 12, actor: 'human', type: 'chat.human', ref: {}, payload: { message: '导出能不能支持 Excel？财务那边想要带格式的月报。' } },
+    { id: 'E-0010', ts: '2026-10-14T09:08:00+08:00', round: 12, actor: 'chief', type: 'chat.chief', ref: {}, payload: { message: '可以。我核对了现有的规则和契约，整理成了下面这张卡片——有一处破坏性变更，建议你重点看那一条。' } },
     { id: 'E-0008', ts: '2026-10-14T09:12:00+08:00', round: 12, actor: 'chief', type: 'draft.proposed', ref: { card: 'C-0031' }, payload: {} },
   ]
   const ledger = buildLedger(blocks, rounds, [approvedCard, clone(pendingCardFixture)], packages, events)
@@ -519,6 +522,21 @@ export function createMockApiClient(): ApiClient {
   let domainSeq = 0
   let documentSeq = 0
   let blockSeq = 0
+
+  // ---- 对话与核心代理状态（R-M2 同构降级：mock 客户端扮演后端） ----
+  let agentRunning = true
+  const MOCK_AGENT_MODEL = 'mock/chief'
+
+  /** mock 核心代理回复（对应后端 SPECLOCK2_CHIEF_MOCK=1 的模拟行为） */
+  function mockChiefReply(message: string): string {
+    if (/excel|表头|格式/i.test(message)) {
+      return '可以。我核对了现有的规则和契约，把变更整理成了一张审批卡片，你看下明细，没问题就批准，我马上派发。'
+    }
+    if (/卡片|批准|审批/.test(message)) {
+      return '当前有待批准的卡片就在对话里，确认后点「批准并派发」；要改的地方直接告诉我。'
+    }
+    return '收到。我先对照现有的规则和契约核一遍；需要动文档的话，我会整理成审批卡片给你确认。'
+  }
 
   const ledgerOf = (slug: string): MockLedger => mustFind(ledgers, slug, '项目')
   const blocksOf = (slug: string): Record<string, Block> => mustFind(blocksBySlug, slug, '项目')
@@ -1076,6 +1094,33 @@ export function createMockApiClient(): ApiClient {
       modelRegistry.splice(idx, 1)
     },
     listCliSessions: async () => ({ items: FALLBACK_CLI_SESSIONS.map((x) => ({ ...x })) }),
+
+    sendChat: async (slug, body) => {
+      if (!body.message.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: 'message 不能为空' })
+      }
+      const ledger = ledgerOf(slug)
+      const round = currentRound(ledger)
+      pushEvent(ledger, round.n, 'human', 'chat.human', {}, { message: body.message })
+      const reply = mockChiefReply(body.message)
+      await new Promise((resolve) => setTimeout(resolve, 900))
+      pushEvent(ledger, round.n, 'chief', 'chat.chief', {}, { message: reply })
+      return { ok: true, reply }
+    },
+    getAgent: async (slug) => ({
+      running: agentRunning,
+      model: agentRunning ? MOCK_AGENT_MODEL : null,
+      context_usage_percent: agentRunning ? 46 : null,
+      session_id: `speclock2-${slug}`,
+    }),
+    startAgent: async (slug) => {
+      agentRunning = true
+      return { running: true, model: MOCK_AGENT_MODEL, session_id: `speclock2-${slug}` }
+    },
+    stopAgent: async (slug) => {
+      agentRunning = false
+      return { running: false, model: null, session_id: `speclock2-${slug}` }
+    },
   }
 
   bindMockRuntime(
@@ -1104,17 +1149,6 @@ export function getMockActivity(): Record<string, ActivityItem[]> {
 /** 队列模拟是否执行中（仅 mock 模式） */
 export function isMockQueueRunning(): boolean {
   return readQueueRunning()
-}
-
-/** 核心代理对话的开场白（mock 演示用：口语化的需求→提案引入） */
-export function getMockCoreOpeners(slug: string): Array<{ who: 'human' | 'core'; text: string }> {
-  if (slug === 'daily-report') {
-    return [
-      { who: 'human', text: '导出能不能支持 Excel？财务那边想要带格式的月报。' },
-      { who: 'core', text: '可以。我核对了现有的规则和契约，整理成下面这张卡片——有一处破坏性变更（删了旧枚举），你重点看那一条：' },
-    ]
-  }
-  return []
 }
 
 /* ---------- mock 内部辅助 ---------- */

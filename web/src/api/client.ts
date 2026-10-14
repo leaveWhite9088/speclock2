@@ -346,6 +346,31 @@ export interface CliSession {
   updated_at: string
 }
 
+/* ---------- 对话与核心代理会话（契约 v0.3，R-M2） ---------- */
+
+export interface ChatBody {
+  message: string
+}
+
+/** POST /chat 同步返回（权威定稿也经 SSE message_final 推送） */
+export interface ChatResponse {
+  ok: boolean
+  reply: string
+}
+
+export interface AgentStatus {
+  running: boolean
+  model: string | null
+  context_usage_percent: number | null
+  session_id: string
+}
+
+export interface AgentStartResponse {
+  running: boolean
+  model: string | null
+  session_id: string
+}
+
 /* ---------- 版本快照详情（查看版本：当时那份 API/业务；端点为提议形状） ---------- */
 
 export interface VersionDetail {
@@ -508,6 +533,11 @@ export interface ApiClient {
   registerModel(body: RegisterModelBody): Promise<ModelEntry>
   removeModel(id: string): Promise<void>
   listCliSessions(): Promise<{ items: CliSession[] }>
+  /** 对话（R-M2）：发送后回复经 SSE 流式推送；本端点同步返回定稿兜底 */
+  sendChat(slug: string, body: ChatBody): Promise<ChatResponse>
+  getAgent(slug: string): Promise<AgentStatus>
+  startAgent(slug: string): Promise<AgentStartResponse>
+  stopAgent(slug: string): Promise<AgentStartResponse>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -588,5 +618,10 @@ export function createApiClient(): ApiClient {
       request<ModelEntry>('/api/models', { method: 'POST', body: JSON.stringify(body) }),
     removeModel: (id) => request<void>(`/api/models/${id}`, { method: 'DELETE' }),
     listCliSessions: () => request<{ items: CliSession[] }>('/api/cli-sessions'),
+    sendChat: (slug, body) =>
+      request<ChatResponse>(`${p(slug)}/chat`, { method: 'POST', body: JSON.stringify(body) }),
+    getAgent: (slug) => request<AgentStatus>(`${p(slug)}/agent`),
+    startAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/start`, { method: 'POST', body: '{}' }),
+    stopAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/stop`, { method: 'POST' }),
   }
 }

@@ -30,7 +30,9 @@
   --c-danger-bg: #fdf0f0;
   --c-danger-border: #f0cdcf;
 
-  /* 警示色并入中性/危险：不再单独使用黄橙 */
+  /* 唯一保留的黄：核心代理上下文退化告警（§12.3）专用 */
+  --c-warn: #9a6700;
+  --c-warn-bg: #fff3cd;
 
   /* 字体 */
   --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;

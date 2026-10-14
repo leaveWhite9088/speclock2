@@ -9,6 +9,13 @@ export type DrawerKey = 'queue' | 'convention' | 'models'
 /** 当前会话：核心代理，或某个主代理的工作流视图 */
 export type SessionTarget = { kind: 'core' } | { kind: 'master'; masterId: string }
 
+/** 对话气泡（chat.human / chat.chief 事件的投影；error 为前端本地错误气泡） */
+export interface ChatBubble {
+  round: number
+  who: 'human' | 'core' | 'error'
+  text: string
+}
+
 /** 主代理过程流条目（M1 由 mock 模拟；R-M2 接真实遥测） */
 export interface ActivityItem {
   id: string

@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import type { FeedRound } from '../types'
+import type { ChatBubble, FeedRound } from '../types'
 import { formatDuration, formatTokens, masterLabel } from '../types'
 import RoundDivider from './RoundDivider.vue'
 import ApprovalCard from './ApprovalCard.vue'
 
 /**
- * 核心代理会话：平时只看这里——口语化的汇报与提案引入，审批卡片内联呈现。
- * 人只发自然语言（发送/停止）；卡片由核心代理自己起草（R-M2 接真实核心代理）。
+ * 核心代理会话：平时只看这里——对话（chat.* 事件投影，按轮次内嵌）、流式打字机、
+ * 审批卡片内联呈现。人只发自然语言（发送/停止）；卡片由核心代理经 draft_card 起草。
  */
 const props = defineProps<{
   feed: FeedRound[]
-  openers: Array<{ who: 'human' | 'core'; text: string }>
-  chatMessages: Array<{ who: 'human' | 'core'; text: string }>
-  thinking: boolean
+  /** 对话历史 + 即时消息，按轮次分组（与卡片/版本保持真实时序） */
+  chatByRound: Record<number, ChatBubble[]>
+  streaming: boolean
+  streamText: string
   emptyNote?: string
   cardBusy: Record<string, boolean>
   cardError: Record<string, string>
@@ -22,14 +23,23 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'send', text: string): void
   (e: 'stop'): void
+  (e: 'retry'): void
   (e: 'approve', cardId: string): void
   (e: 'reject', cardId: string): void
 }>()
 
-type Line = { who: 'human' | 'core'; text: string }
-
 const el = ref<HTMLElement | null>(null)
 const draft = ref('')
+
+const hasChat = computed(() => Object.keys(props.chatByRound).length > 0)
+
+/** 轮次分组之外的消息（轮次尚未入列等边界情况），跟在最后渲染 */
+const tailChat = computed(() => {
+  const rounds = new Set(props.feed.map((fr) => fr.info.n))
+  return Object.entries(props.chatByRound)
+    .filter(([n]) => !rounds.has(Number(n)))
+    .flatMap(([, list]) => list)
+})
 
 async function scrollToEnd(): Promise<void> {
   await nextTick()
@@ -41,7 +51,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.feed, props.chatMessages.length, props.thinking],
+  () => [props.feed, Object.keys(props.chatByRound).length, props.streaming, props.streamText],
   () => {
     void scrollToEnd()
   },
@@ -49,7 +59,7 @@ watch(
 
 function send(): void {
   const text = draft.value.trim()
-  if (!text || props.thinking) return
+  if (!text || props.streaming) return
   draft.value = ''
   emit('send', text)
 }
@@ -63,21 +73,17 @@ function cardIntro(round: FeedRound['cards'][number]): string {
   return ''
 }
 
-function packageLines(fr: FeedRound): Line[] {
+function packageLines(fr: FeedRound): string[] {
   return fr.packages.map((pkg) => {
     const masters = [...new Set(pkg.tasks.map((t) => masterLabel(t.master)))].join('、')
-    return {
-      who: 'core' as const,
-      text:
-        pkg.origin === 'tech'
-          ? `技术任务单 ${pkg.package_id} 已建好，交给 ${masters}（不动业务、不进版本链）。到「队列」里可以一键开始。`
-          : `任务包 ${pkg.package_id} 已排入队列，会派给 ${masters}，包内并行执行。到「队列」里可以一键开始。`,
-    }
+    return pkg.origin === 'tech'
+      ? `技术任务单 ${pkg.package_id} 已建好，交给 ${masters}（不动业务、不进版本链）。到「队列」里可以一键开始。`
+      : `任务包 ${pkg.package_id} 已排入队列，会派给 ${masters}，包内并行执行。到「队列」里可以一键开始。`
   })
 }
 
-function receiptLines(fr: FeedRound): Line[] {
-  const lines: Line[] = []
+function receiptLines(fr: FeedRound): string[] {
+  const lines: string[] = []
   for (const pkg of fr.packages) {
     for (const task of pkg.tasks) {
       if (task.receipt && (task.status === 'done' || task.status === 'reported' || task.status === 'auditing' || task.status === 'rejected')) {
@@ -85,32 +91,15 @@ function receiptLines(fr: FeedRound): Line[] {
           task.duration_ms != null && task.tokens != null
             ? `，用时 ${formatDuration(task.duration_ms)}、约 ${formatTokens(task.tokens)} tokens`
             : ''
-        lines.push({
-          who: 'core',
-          text: `${masterLabel(task.master)}完成了 ${task.task_id}：${task.receipt.summary}（改了 ${task.receipt.files_changed.length} 个文件${tele}）`,
-        })
+        lines.push(`${masterLabel(task.master)}完成了 ${task.task_id}：${task.receipt.summary}（改了 ${task.receipt.files_changed.length} 个文件${tele}）`)
       }
     }
   }
   return lines
 }
 
-function verdictLines(fr: FeedRound): Line[] {
-  return fr.verdictEvents.map((ev) => ({
-    who: 'core' as const,
-    text: `${ev.type.endsWith('passed') ? '✓ 验收通过' : '✗ 验收未通过'}：${String(ev.ref.task ?? '')}${typeof ev.payload.note === 'string' && ev.payload.note ? `（${ev.payload.note}）` : ''}`,
-  }))
-}
-
-const openersRound = computed(() => {
-  for (let i = props.feed.length - 1; i >= 0; i--) {
-    if (props.feed[i].cards.length > 0) return props.feed[i].info.n
-  }
-  return null
-})
-
-function showOpeners(fr: FeedRound): boolean {
-  return props.openers.length > 0 && fr.info.n === openersRound.value
+function verdictLines(fr: FeedRound): string[] {
+  return fr.verdictEvents.map((ev) => `${ev.type.endsWith('passed') ? '✓ 验收通过' : '✗ 验收未通过'}：${String(ev.ref.task ?? '')}${typeof ev.payload.note === 'string' && ev.payload.note ? `（${ev.payload.note}）` : ''}`)
 }
 </script>
 
@@ -118,15 +107,23 @@ function showOpeners(fr: FeedRound): boolean {
   <div class="core">
     <div ref="el" class="core__feed">
       <div class="core__inner">
-        <p v-if="feed.length === 0" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
+        <p v-if="feed.length === 0 && !hasChat" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
 
         <template v-for="fr in feed" :key="fr.info.n">
           <RoundDivider :info="fr.info" />
 
-          <template v-if="showOpeners(fr)">
-            <div v-for="(op, i) in openers" :key="`op-${i}`" class="core__msg" :class="`core__msg--${op.who}`">
-              <span v-if="op.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
-              <div class="core__bubble" :class="`core__bubble--${op.who}`">{{ op.text }}</div>
+          <!-- 本轮对话（chat.* 事件投影：人 ↔ 核心代理） -->
+          <template v-for="(msg, i) in chatByRound[fr.info.n] ?? []" :key="`c-${fr.info.n}-${i}`">
+            <div v-if="msg.who === 'error'" class="core__msg core__msg--core">
+              <span class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble core__bubble--error">
+                {{ msg.text }}
+                <button type="button" class="core__retry" @click="emit('retry')">重试</button>
+              </div>
+            </div>
+            <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
+              <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
             </div>
           </template>
 
@@ -153,18 +150,31 @@ function showOpeners(fr: FeedRound): boolean {
 
           <div v-for="(line, i) in [...packageLines(fr), ...receiptLines(fr), ...verdictLines(fr)]" :key="`l-${fr.info.n}-${i}`" class="core__msg core__msg--core">
             <span class="core__avatar" aria-hidden="true">核</span>
-            <div class="core__bubble core__bubble--core">{{ line.text }}</div>
+            <div class="core__bubble core__bubble--core">{{ line }}</div>
           </div>
         </template>
 
-        <!-- 本次会话的即时对话（M1 mock；R-M2 接真实核心代理） -->
-        <div v-for="(msg, i) in chatMessages" :key="`x-${i}`" class="core__msg" :class="`core__msg--${msg.who}`">
-          <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
-          <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
-        </div>
-        <div v-if="thinking" class="core__msg core__msg--core">
+        <!-- 轮次未入列时的兜底渲染（如轮次列表尚未刷新） -->
+        <template v-for="(msg, i) in tailChat" :key="`t-${i}`">
+          <div v-if="msg.who === 'error'" class="core__msg core__msg--core">
+            <span class="core__avatar" aria-hidden="true">核</span>
+            <div class="core__bubble core__bubble--error">
+              {{ msg.text }}
+              <button type="button" class="core__retry" @click="emit('retry')">重试</button>
+            </div>
+          </div>
+          <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
+            <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+            <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
+          </div>
+        </template>
+
+        <!-- 流式生成中（message_delta 打字机） -->
+        <div v-if="streaming" class="core__msg core__msg--core">
           <span class="core__avatar" aria-hidden="true">核</span>
-          <div class="core__bubble core__bubble--core core__bubble--typing">正在思考…</div>
+          <div class="core__bubble core__bubble--core core__bubble--typing">
+            {{ streamText || '正在思考…' }}<span class="core__caret" aria-hidden="true"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -176,10 +186,10 @@ function showOpeners(fr: FeedRound): boolean {
         type="text"
         placeholder="给核心代理发消息…（Enter 发送）"
         aria-label="核心代理输入框"
-        :disabled="thinking"
+        :disabled="streaming"
         @keydown.enter.prevent="send"
       />
-      <button v-if="thinking" type="button" class="btn" @click="emit('stop')">停止</button>
+      <button v-if="streaming" type="button" class="btn" @click="emit('stop')">停止</button>
       <button v-else type="button" class="btn btn--primary" :disabled="!draft.trim()" @click="send">发送</button>
     </footer>
   </div>
@@ -263,6 +273,47 @@ function showOpeners(fr: FeedRound): boolean {
 
 .core__bubble--typing {
   color: var(--c-ink-3);
+}
+
+.core__bubble--error {
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.core__retry {
+  flex: none;
+  font-size: var(--fs-12);
+  color: var(--c-danger);
+  border: 1px solid var(--c-danger-border);
+  border-radius: var(--radius-m);
+  padding: 0 8px;
+}
+
+.core__retry:hover {
+  background: var(--c-danger);
+  color: #fff;
+}
+
+/* 流式打字机光标 */
+.core__caret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--c-ink-3);
+  animation: core-caret 1s steps(1) infinite;
+}
+
+@keyframes core-caret {
+  50% {
+    opacity: 0;
+  }
 }
 
 .core__card {

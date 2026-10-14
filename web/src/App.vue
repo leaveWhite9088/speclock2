@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { createApiClient } from './api/client'
 import type {
+  AgentStatus,
   ApiClient,
   CliSession,
   FeedVersion,
@@ -17,10 +18,9 @@ import {
   FALLBACK_CLI_SESSIONS,
   FALLBACK_MODEL_ENTRIES,
   getMockActivity,
-  getMockCoreOpeners,
   isMockQueueRunning,
 } from './api/mock'
-import type { DrawerKey, FeedRound, SessionTarget } from './types'
+import type { ChatBubble, DrawerKey, FeedRound, SessionTarget } from './types'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
 import CoreChat from './components/CoreChat.vue'
@@ -56,34 +56,218 @@ const drawer = ref<DrawerKey | null>(null)
 /** 文档浏览：主区视图（v1 式 树→文档→模块 三层） */
 const docsView = ref(false)
 
-// 即时对话（M1 mock：核心代理 canned 回复；R-M2 接真实核心代理）
-const chatMessages = ref<Array<{ who: 'human' | 'core'; text: string }>>([])
-const thinking = ref(false)
-let replyTimer: ReturnType<typeof setTimeout> | null = null
+/* ---------- 对话（R-M2：真核心代理；SSE 流式 + 事件日志恢复） ---------- */
 
-const CANNED_REPLIES = [
-  '收到。我先对照现有的规则和契约梳理一下，需要动文档的话，我会整理成审批卡片给你确认。',
-  '明白。如果这件事不动业务规则和契约，我会开一张技术任务单走技术通道；动的话走审批卡片，你批了再派。',
-  '好的。我核一下这个需求影响哪些模块，梳理好之后在卡片里给你看变更明细和派发对象。',
-]
+const chatMessages = ref<ChatBubble[]>([])
+/** 流式生成中：打字机缓冲（message_delta 增量追加） */
+const streaming = ref(false)
+const streamText = ref('')
+/** 核心代理会话状态（侧栏状态卡：running/model/context_usage_percent） */
+const agent = ref<AgentStatus | null>(null)
+let chatSource: EventSource | null = null
+let lastHuman = ''
+/** 用户主动停止：抑制随之而来的 agent_error 错误气泡 */
+let userStop = false
 
-function sendToCore(text: string): void {
-  chatMessages.value = [...chatMessages.value, { who: 'human', text }]
-  thinking.value = true
-  const reply = CANNED_REPLIES[chatMessages.value.filter((m) => m.who === 'human').length % CANNED_REPLIES.length]
-  replyTimer = setTimeout(() => {
-    replyTimer = null
-    thinking.value = false
-    chatMessages.value = [...chatMessages.value, { who: 'core', text: reply }]
-  }, 1400)
+/** 当前进行中的轮次（即时消息挂在它名下，与历史消息同构） */
+const openRoundN = computed(() => feed.value.at(-1)?.info.n ?? 0)
+
+/** 对话按轮次分组：气泡内嵌在轮次分隔线下，与卡片/版本保持真实时序 */
+const chatByRound = computed<Record<number, ChatBubble[]>>(() => {
+  const map: Record<number, ChatBubble[]> = {}
+  for (const m of chatMessages.value) (map[m.round] ??= []).push(m)
+  return map
+})
+
+function pushChat(who: ChatBubble['who'], text: string, round = openRoundN.value): void {
+  chatMessages.value = [...chatMessages.value, { round, who, text }]
 }
 
-function stopCore(): void {
-  if (replyTimer !== null) {
-    clearTimeout(replyTimer)
-    replyTimer = null
+/** 页面加载/切换项目：从事件日志恢复对话历史（chat.human / chat.chief，按 id 序） */
+async function loadChatHistory(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  const slug = currentSlug.value
+  try {
+    const [human, chief] = await Promise.all([
+      client.value.listEvents(slug, { type: 'chat.human' }),
+      client.value.listEvents(slug, { type: 'chat.chief' }),
+    ])
+    if (currentSlug.value !== slug) return
+    const merged = [...human.items, ...chief.items].sort((a, b) => a.id.localeCompare(b.id))
+    chatMessages.value = merged
+      .map((e): ChatBubble => {
+        const message = (e.payload as { message?: unknown }).message
+        return {
+          round: e.round,
+          who: e.actor === 'human' ? 'human' : 'core',
+          text: typeof message === 'string' ? message : '',
+        }
+      })
+      .filter((m) => m.text !== '')
+  } catch {
+    chatMessages.value = []
   }
-  thinking.value = false
+}
+
+/** 一条核心代理回复定稿：入列并结束流式态（POST 返回与 SSE final 双路到达时去重） */
+function settleStream(message: string): void {
+  const last = chatMessages.value.at(-1)
+  if (message && !(last && last.who === 'core' && last.text === message)) pushChat('core', message)
+  streaming.value = false
+  streamText.value = ''
+}
+
+function closeStream(): void {
+  if (chatSource) {
+    chatSource.close()
+    chatSource = null
+  }
+  if (streamRetryTimer !== null) {
+    clearTimeout(streamRetryTimer)
+    streamRetryTimer = null
+  }
+}
+
+/** SSE（仅 live；mock 模式由 mock 客户端同构返回，无流）。
+ *  断流兜底：原生 EventSource 遇 HTTP 层错误会彻底关闭，这里统一
+ *  关掉→指数退避重连，并立刻全量刷新把漏掉的事件补回来。 */
+let streamRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+function openStream(retry = 0): void {
+  if (mode.value !== 'live' || !currentSlug.value) return
+  closeStream()
+  const es = new EventSource(`/api/p/${currentSlug.value}/chat/stream`)
+  es.addEventListener('message_delta', (ev) => {
+    const data = JSON.parse((ev as MessageEvent<string>).data) as { delta?: unknown }
+    if (typeof data.delta === 'string') {
+      streamText.value += data.delta
+      streaming.value = true
+    }
+  })
+  es.addEventListener('message_final', (ev) => {
+    const data = JSON.parse((ev as MessageEvent<string>).data) as { message?: unknown }
+    settleStream(typeof data.message === 'string' ? data.message : '')
+    // 回合结束时可能有同回合起草的卡片（card_proposed 漏收时在这里补）
+    void refreshAll()
+  })
+  es.addEventListener('card_proposed', () => {
+    void refreshAll()
+  })
+  es.addEventListener('agent_error', (ev) => {
+    const data = JSON.parse((ev as MessageEvent<string>).data) as { error?: unknown }
+    if (userStop) {
+      userStop = false
+      settleStream(streamText.value || '（已停止）')
+    } else {
+      const detail = typeof data.error === 'string' ? data.error : '未知错误'
+      pushChat('error', `核心代理出错：${detail}`)
+      streaming.value = false
+      streamText.value = ''
+    }
+  })
+  es.onerror = () => {
+    chatSource?.close()
+    chatSource = null
+    void refreshAll()
+    if (retry < 6) {
+      streamRetryTimer = setTimeout(() => openStream(retry + 1), Math.min(15_000, 1_000 * 2 ** retry))
+    }
+  }
+  chatSource = es
+}
+
+async function sendToCore(text: string): Promise<void> {
+  if (!client.value || streaming.value) return
+  pushChat('human', text)
+  lastHuman = text
+  streaming.value = true
+  streamText.value = ''
+  try {
+    const res = await client.value.sendChat(currentSlug.value, { message: text })
+    // SSE 正常时 final 已先定稿（streaming=false）；SSE 缺席时用同步返回兜底
+    if (streaming.value) settleStream(res.reply)
+    void refreshAll() // 对话会开启新轮次（round 1 起步），拉一遍轮次让气泡归位
+  } catch (err) {
+    if (userStop) {
+      userStop = false
+      settleStream(streamText.value || '（已停止）')
+    } else if (streaming.value) {
+      streaming.value = false
+      streamText.value = ''
+      pushChat('error', err instanceof Error ? err.message : String(err))
+    }
+  } finally {
+    void refreshAgent()
+  }
+}
+
+/** 停止 = 停核心代理会话（pi 会话持久化，可再唤醒）；已生成的部分文本定稿保留 */
+async function stopCore(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  userStop = true
+  try {
+    await client.value.stopAgent(currentSlug.value)
+  } catch {
+    /* 停止失败不阻塞本地收尾 */
+  }
+  setTimeout(() => {
+    if (streaming.value) {
+      userStop = false
+      settleStream(streamText.value || '（已停止）')
+    }
+  }, 400)
+  void refreshAgent()
+}
+
+/** 错误气泡上的重试：去掉尾部错误气泡与重复的人消息，重发最后一次输入 */
+function retryLast(): void {
+  if (!lastHuman || streaming.value) return
+  while (chatMessages.value.at(-1)?.who === 'error') {
+    chatMessages.value = chatMessages.value.slice(0, -1)
+  }
+  const tail = chatMessages.value.at(-1)
+  if (tail && tail.who === 'human' && tail.text === lastHuman) {
+    chatMessages.value = chatMessages.value.slice(0, -1)
+  }
+  void sendToCore(lastHuman)
+}
+
+/* ---------- 核心代理状态（10s 轮询；context>80 黄色告警 §12.3） ---------- */
+
+let agentTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshAgent(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  const slug = currentSlug.value
+  try {
+    const s = await client.value.getAgent(slug)
+    if (currentSlug.value === slug) agent.value = s
+  } catch {
+    agent.value = null
+  }
+}
+
+function startAgentLoop(): void {
+  stopAgentLoop()
+  void refreshAgent()
+  agentTimer = setInterval(() => void refreshAgent(), 10_000)
+}
+
+function stopAgentLoop(): void {
+  if (agentTimer !== null) {
+    clearInterval(agentTimer)
+    agentTimer = null
+  }
+}
+
+async function startChiefAgent(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  try {
+    await client.value.startAgent(currentSlug.value)
+  } catch {
+    /* 启动失败由轮询状态反映 */
+  }
+  void refreshAgent()
 }
 
 // 动作状态
@@ -129,8 +313,6 @@ function startDrag(e: MouseEvent): void {
 function resetDrag(): void {
   sidebarWidth.value = SIDEBAR_DEFAULT
 }
-
-const coreOpeners = computed(() => (mode.value === 'mock' ? getMockCoreOpeners(currentSlug.value) : []))
 
 /** 跨项目徽标（§14.3）：其他项目的 待批准/运行中 在不切界面的情况下可见 */
 const projectStats = ref<Record<string, { pending: number; active: number }>>({})
@@ -215,7 +397,11 @@ function stopPolling(): void {
   }
 }
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  stopAgentLoop()
+  closeStream()
+})
 
 /** 启动探测：GET /api/health 成功 → live；失败 → 自动切 mock */
 async function bootstrap(): Promise<void> {
@@ -242,7 +428,12 @@ async function selectProject(slug: string): Promise<void> {
   session.value = { kind: 'core' }
   drawer.value = null
   docsView.value = false
-  stopCore()
+  closeStream()
+  stopAgentLoop()
+  agent.value = null
+  streaming.value = false
+  streamText.value = ''
+  userStop = false
   chatMessages.value = []
   loadError.value = ''
   feed.value = []
@@ -261,6 +452,9 @@ async function selectProject(slug: string): Promise<void> {
     loadError.value = err instanceof Error ? err.message : String(err)
   }
   await refreshAll()
+  await loadChatHistory()
+  openStream()
+  startAgentLoop()
 }
 
 /** 刷新对话流 + 任务包 + 模块标题 + 主代理列表 */
@@ -427,22 +621,24 @@ onMounted(() => {
 
 <template>
   <div class="app" :class="{ 'app--dragging': dragging }">
-    <Sidebar
-      :client="client"
-      :projects="projects"
-      :current-slug="currentSlug"
-      :masters="masters"
-      :session="session"
-      :project-stats="projectStats"
-      :master-states="masterStates"
-      :core-pending="corePending"
-      :model-entries="modelEntries"
-      :cli-sessions="cliSessions"
-      :style="{ width: `${sidebarWidth}px` }"
-      @select-project="selectProject"
-      @select-session="onSelectSession"
-      @masters-changed="reloadMasters"
-    >
+      <Sidebar
+        :client="client"
+        :projects="projects"
+        :current-slug="currentSlug"
+        :masters="masters"
+        :session="session"
+        :project-stats="projectStats"
+        :master-states="masterStates"
+        :core-pending="corePending"
+        :agent="agent"
+        :model-entries="modelEntries"
+        :cli-sessions="cliSessions"
+        :style="{ width: `${sidebarWidth}px` }"
+        @select-project="selectProject"
+        @select-session="onSelectSession"
+        @masters-changed="reloadMasters"
+        @start-agent="startChiefAgent"
+      >
       <template #foot>
         <span
           class="badge"
@@ -492,14 +688,15 @@ onMounted(() => {
           <CoreChat
             v-else
             :feed="feed"
-            :openers="coreOpeners"
-            :chat-messages="chatMessages"
-            :thinking="thinking"
+            :chat-by-round="chatByRound"
+            :streaming="streaming"
+            :stream-text="streamText"
             :empty-note="feedError ? `账本数据不可用：${feedError}` : undefined"
             :card-busy="cardBusy"
             :card-error="cardError"
             @send="sendToCore"
             @stop="stopCore"
+            @retry="retryLast"
             @approve="approveCard"
             @reject="rejectCard"
           />

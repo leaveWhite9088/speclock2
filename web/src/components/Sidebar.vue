@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
+import type { AgentStatus, ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
 import type { SessionTarget } from '../types'
 import ModalShell from './ModalShell.vue'
 
 /**
  * 左侧栏（Kimi Code 风）：上半是项目列表（挂跨项目徽标：别的项目待批准/运行中
- * 不切界面也看得见，§14.3），下半是当前项目的代理——核心代理（待批准徽标）+
+ * 不切界面也看得见，§14.3），下半是当前项目的代理——核心代理（待批准徽标 +
+ * 运行状态卡：模型/上下文占用，>80% 黄色告警 §12.3，未运行可一键启动）+
  * 主代理（完整状态：执行中/排队/待审计/超时，带任务号）。
  */
 const props = defineProps<{
@@ -18,6 +19,8 @@ const props = defineProps<{
   projectStats: Record<string, { pending: number; active: number }>
   masterStates: Record<string, { label: string; kind: 'running' | 'queued' | 'auditing' | 'timeout' }>
   corePending: number
+  /** 核心代理会话状态（10s 轮询；null = 探测中/不可用） */
+  agent: AgentStatus | null
   /** Harness×模型登记（右上角「模型」维护）：主代理的属性只能从这里选 */
   modelEntries: ModelEntry[]
   /** CLI 内部的会话列表：主代理唤醒后接续选定的会话工作 */
@@ -28,6 +31,7 @@ const emit = defineEmits<{
   (e: 'select-project', slug: string): void
   (e: 'select-session', target: SessionTarget): void
   (e: 'masters-changed'): void
+  (e: 'start-agent'): void
 }>()
 
 const showModal = ref(false)
@@ -172,11 +176,25 @@ function avatarText(name: string): string {
             <span class="sidebar__avatar" aria-hidden="true">核</span>
             <span class="sidebar__item-text">
               <span class="sidebar__item-name">核心代理</span>
-              <span class="sidebar__item-sub">需求澄清 · 提案起草 · 汇报</span>
+              <span
+                v-if="agent && agent.running"
+                class="sidebar__item-sub"
+                :class="{ 'is-warn': (agent.context_usage_percent ?? 0) > 80 }"
+                :title="(agent.context_usage_percent ?? 0) > 80 ? '上下文占用超过 80%：会话退化信号，建议停止后重新启动（账本可重建一切，§12.3）' : '核心代理会话运行中'"
+              >{{ agent.model ?? '运行中' }} · 上下文 {{ agent.context_usage_percent ?? '—' }}%</span>
+              <span v-else-if="agent && !agent.running" class="sidebar__item-sub">未运行（发消息会自动唤醒）</span>
+              <span v-else class="sidebar__item-sub">需求澄清 · 提案起草 · 汇报</span>
             </span>
             <span v-if="corePending > 0" class="sidebar__flag sidebar__flag--pending" title="有待批准卡片">
               待批准 {{ corePending }}
             </span>
+            <span
+              v-if="agent && !agent.running"
+              class="sidebar__start"
+              role="button"
+              title="启动核心代理会话"
+              @click.stop="emit('start-agent')"
+            >启动</span>
           </button>
         </li>
 
@@ -420,6 +438,29 @@ function avatarText(name: string): string {
 
 .sidebar__dot--timeout {
   background: var(--c-danger);
+}
+
+/* 核心代理状态：上下文占用告警（>80%，会话退化信号 §12.3）与启动按钮 */
+.sidebar__item-sub.is-warn {
+  color: var(--c-warn);
+  font-weight: 600;
+}
+
+.sidebar__start {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-12);
+  color: var(--c-ink);
+  font-weight: 600;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  padding: 0 8px;
+  line-height: 17px;
+  background: var(--c-panel);
+}
+
+.sidebar__start:hover {
+  border-color: var(--c-ink-3);
 }
 
 .sidebar__empty {

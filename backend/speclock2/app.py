@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from .config import Settings
 from .db import Database
 from .errors import register_error_handlers
-from .routers import cards, conventions, health, project, projects, queue, stats, timeline
+from .pi_runtime import PiManager
+from .routers import cards, chat, conventions, health, project, projects, queue, stats, timeline
 
 
 def create_app() -> FastAPI:
@@ -16,17 +17,24 @@ def create_app() -> FastAPI:
     settings.ensure_dirs()
 
     # 关闭 /docs、/openapi.json 等框架自带端点：不加契约之外的端点
-    app = FastAPI(title="SpecLock2 Backend", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(
+        title="SpecLock2 Backend", version="0.1.0",
+        docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=chat.lifespan,
+    )
     app.state.settings = settings
     app.state.db = Database(settings)
     app.state.db.init_registry()  # 启动时建表
     app.state.timers = set()  # 看门狗定时器（防 GC）
+    app.state.pi = PiManager(settings)  # 核心代理会话管理（按需注入 create_card_fn）
+    app.state.pi.create_card_fn = chat.make_create_card_fn(app)
 
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(projects.router)
     app.include_router(project.router)
     app.include_router(cards.router)
+    app.include_router(chat.router)
     app.include_router(timeline.router)
     app.include_router(queue.router)
     app.include_router(conventions.router)

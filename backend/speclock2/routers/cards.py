@@ -40,9 +40,8 @@ def _project_or_404(request: Request, slug: str) -> None:
             raise ApiError(404, "not_found", f"项目不存在：{slug}")
 
 
-@router.post("/cards", status_code=201)
-def create_card(slug: str, body: CardCreate, request: Request) -> dict:
-    _project_or_404(request, slug)
+def create_card_service(db, slug: str, body: CardCreate) -> dict:
+    """建卡核心逻辑：chat 端点与 mock 核心代理共用（模拟 draft_card 工具效果）。"""
     errors: list[dict] = []
     stmt = body.statement or {}
     for key in ("说明", "动机"):
@@ -52,7 +51,6 @@ def create_card(slug: str, body: CardCreate, request: Request) -> dict:
     if errors:
         raise ApiError(422, "validation_error", "卡片校验失败", details={"errors": errors})
 
-    db = request.app.state.db
     with db.ledger_session(slug) as session:
         _, op_errors = flow.validate_card_ops(session, body.rule_ops, body.api_ops)
         if op_errors:
@@ -79,15 +77,20 @@ def create_card(slug: str, body: CardCreate, request: Request) -> dict:
         flow.add_event(
             session,
             round_=round_.n,
-            actor="human",  # M1 人工模拟主主代理起草
+            actor="chief",  # 经核心代理（draft_card 工具或其模拟）产出
             type_="draft.proposed",
             ref={"card": fmt_id("C", card.id)},
             payload={"card": serialize.card_out(card)},
         )
         session.commit()
         session.refresh(card)
-        data = serialize.card_out(card)
-    return data
+        return serialize.card_out(card)
+
+
+@router.post("/cards", status_code=201)
+def create_card(slug: str, body: CardCreate, request: Request) -> dict:
+    _project_or_404(request, slug)
+    return create_card_service(request.app.state.db, slug, body)
 
 
 @router.get("/cards")

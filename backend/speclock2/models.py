@@ -65,6 +65,8 @@ class Block(LedgerBase):
     draft_rules_json: Mapped[list] = mapped_column(sa.JSON, default=list)
     draft_apis_json: Mapped[list] = mapped_column(sa.JSON, default=list)
     draft_nfr_md: Mapped[str] = mapped_column(sa.Text, default="")
+    # 规则稳定 id 计数器（DESIGN.md §5.3）：已分配过的历史最大值，删除规则不回退、永不复用
+    rule_seq: Mapped[int] = mapped_column(sa.Integer, default=0)
     created_at: Mapped[str] = mapped_column(sa.Text)
     updated_at: Mapped[str] = mapped_column(sa.Text)
 

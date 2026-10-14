@@ -48,6 +48,13 @@ pytest
 
 测试通过环境变量 `SPECLOCK2_DATA_DIR` 把数据写入 pytest 临时目录，每个用例独立、互不污染。
 
+## 草稿校验（S1 起）
+
+PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则整次 PUT 拒绝（422，草稿保持原样），`details.errors` 逐条定位字段路径（如 `"apis[0].response[0].children[0].children"`）：
+
+- **rules**：每条 `{id?, name, detail}`，name/detail 非空。无 id 条目由服务端分配稳定 id（`R` + 模块内单调递增计数器，**永不复用**：已删除的 id 不会再分配、也不可再引用，引用不存在的 id → 422）；带 id 条目按 id 匹配当前草稿更新；GET 回读的 rules 总是带 id；
+- **apis**：`api` 形如 `"METHOD /path"`（METHOD 大写且属于 GET/POST/PUT/PATCH/DELETE，path 以 `/` 开头）、`desc` 非空、name 非空；字段（request/response 递归 children）校验 name 非空、type ∈ {string, number, integer, boolean, array, object}、children 仅允许挂在 object/array 下（array 的 children 描述元素结构）；模块内 method+path 唯一。
+
 ## 数据目录
 
 - 默认 `backend/data/`：`registry.db`（全局注册表）+ `ledgers/{slug}.db`（每项目独立账本）；
@@ -70,7 +77,7 @@ pytest
 | POST | `/api/p/{slug}/documents` | `{domain_id,title}` |
 | POST | `/api/p/{slug}/blocks` | `{document_id,title}`，草稿态 |
 | GET | `/api/p/{slug}/blocks/{id}` | 草稿 + 版本列表（S0 恒为空） |
-| PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套写入（只存草稿，不产生版本）；支持部分字段更新 |
+| PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套写入（只存草稿，不产生版本）；支持部分字段更新；rules/apis 走服务端校验（见下） |
 
 桩（全部返回 501 + `{"code":"not_implemented","message":"..."}`）：
 
@@ -109,7 +116,7 @@ files = {
     "blk.json": {"document_id": "1", "title": "导出模块"},
     "draft.json": {
         "content_md": "# 背景\n日报导出",
-        "rules": [{"id": "R1", "name": "导出格式", "detail": "支持 CSV 与 Excel"}],
+        "rules": [{"name": "导出格式", "detail": "支持 CSV 与 Excel"}],
         "apis": [{"name": "导出", "api": "GET /api/daily-report", "desc": "日报导出", "request": [], "response": []}],
         "nfr_md": "导出 1 秒内完成",
     },
@@ -121,7 +128,7 @@ curl -s -X POST $BASE/api/p/a/domains   -H "Content-Type: application/json" --da
 curl -s -X POST $BASE/api/p/a/documents -H "Content-Type: application/json" --data-binary @backend/.selfcheck/doc.json
 curl -s -X POST $BASE/api/p/a/blocks    -H "Content-Type: application/json" --data-binary @backend/.selfcheck/blk.json
 curl -s -X PUT  $BASE/api/p/a/blocks/1  -H "Content-Type: application/json" --data-binary @backend/.selfcheck/draft.json
-curl -s $BASE/api/p/a/blocks/1                               # draft 回读一致，versions 为空（PUT 不产生版本）
+curl -s $BASE/api/p/a/blocks/1                               # 回读一致：rules 已带服务端分配的 id（R1），versions 为空
 curl -s $BASE/api/p/a/tree                                  # 三层树：日报业务 -> 导出需求 -> 导出模块
 curl -s $BASE/api/p/b/tree                                  # {"items":[]}（隔离雏形）
 rm -rf backend/.selfcheck

@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import func, select
 
-from .. import models, schemas, serialize
+from .. import models, schemas, serialize, validation
 from ..errors import ApiError
 from ..utils import now_iso, parse_int_id, parse_int_or_none
 
@@ -157,13 +157,33 @@ def update_block_draft(slug: str, block_id: str, body: schemas.BlockDraftUpdate,
         _project_or_404(session, slug)
     with db.ledger_session(slug) as session:
         block = _block_or_404(session, block_id)
+        # 先整体校验再落库：任一条非法则整次 PUT 拒绝，草稿保持原样（事务性）
+        errors: list[dict] = []
+        new_rules = block.draft_rules_json or []
+        new_apis = block.draft_apis_json or []
+        new_seq = block.rule_seq or 0
+        if body.rules is not None:
+            try:
+                new_rules, new_seq = validation.validate_rules(
+                    body.rules, block.draft_rules_json or [], block.rule_seq or 0
+                )
+            except validation.DraftValidationError as exc:
+                errors.extend(exc.errors)
+        if body.apis is not None:
+            try:
+                new_apis = validation.validate_apis(body.apis)
+            except validation.DraftValidationError as exc:
+                errors.extend(exc.errors)
+        if errors:
+            raise ApiError(422, "validation_error", "草稿校验失败", details={"errors": errors})
         # 只存草稿，不产生任何版本；版本只在批准时产生（DESIGN.md §6.1）
         if body.content_md is not None:
             block.draft_content_md = body.content_md
         if body.rules is not None:
-            block.draft_rules_json = body.rules
+            block.draft_rules_json = new_rules
+            block.rule_seq = new_seq
         if body.apis is not None:
-            block.draft_apis_json = body.apis
+            block.draft_apis_json = new_apis
         if body.nfr_md is not None:
             block.draft_nfr_md = body.nfr_md
         block.updated_at = now_iso()

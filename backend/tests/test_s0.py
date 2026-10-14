@@ -78,7 +78,7 @@ def test_document_chain_and_draft_roundtrip(client):
 
     draft = {
         "content_md": "# 背景\n日报导出",
-        "rules": [{"id": "R1", "name": "导出格式", "detail": "支持 CSV 与 Excel"}],
+        "rules": [{"name": "导出格式", "detail": "支持 CSV 与 Excel"}],  # 无 id：S1 起由服务端分配
         "apis": [
             {
                 "name": "导出",
@@ -95,16 +95,17 @@ def test_document_chain_and_draft_roundtrip(client):
     assert resp.json()["versions"] == []  # PUT 只存草稿，不产生版本
 
     got = client.get(f"/api/p/a/blocks/{blk['id']}").json()
-    assert got["draft"] == draft  # 回读一致
+    expected_rules = [{"id": "R1", "name": "导出格式", "detail": "支持 CSV 与 Excel"}]
+    assert got["draft"] == {**draft, "rules": expected_rules}  # 回读一致，规则带分配的 id
     assert got["status"] == "draft"
     assert got["versions"] == []
 
-    # 部分更新：只改 content_md，其余草稿字段保留
+    # 部分更新：只改 content_md，其余草稿字段保留（含已分配的规则 id）
     resp = client.put(f"/api/p/a/blocks/{blk['id']}", json={"content_md": "# 新背景"})
     assert resp.status_code == 200
     updated = resp.json()["draft"]
     assert updated["content_md"] == "# 新背景"
-    assert updated["rules"] == draft["rules"]
+    assert updated["rules"] == expected_rules
     assert updated["apis"] == draft["apis"]
 
 

@@ -17,6 +17,13 @@ from ..utils import now_iso
 
 router = APIRouter()
 
+# pi 已知供应商（来源：pi docs/providers.md；chief 实际走 minimax-cn 路由）。
+# 空 provider 合法（= 只作 harness 绑定，不进核心代理 /model 列表）。
+KNOWN_PROVIDERS = {
+    "minimax-cn", "anthropic", "openai", "google", "deepseek", "zai",
+    "moonshot", "qwen", "openrouter", "xai", "groq", "mistral",
+}
+
 
 class RegisterModelBody(BaseModel):
     harness: str = ""
@@ -46,6 +53,9 @@ def register_model(body: RegisterModelBody, request: Request) -> dict:
     provider = (body.provider or "").strip()
     if not harness or not model:
         raise ApiError(422, "validation_error", "Harness 与模型都要填（Harness 有什么模型就登记什么）")
+    if provider and provider not in KNOWN_PROVIDERS:
+        raise ApiError(422, "validation_error",
+                       f"provider {provider!r} 不是合法的 LLM 供应商（合法值：{', '.join(sorted(KNOWN_PROVIDERS))}；留空 = 只作 harness 绑定）")
     db = request.app.state.db
     with db.registry_session() as session:
         exists = session.scalars(

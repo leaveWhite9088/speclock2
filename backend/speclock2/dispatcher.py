@@ -164,6 +164,13 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
     if watchdog_minutes is None:
         watchdog_minutes = plan["watchdog_minutes"]
 
+    with db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is not None and task.status != "queued":
+            # 幂等（修复单 2）：批准自动派发与 chief 手工派发重叠时，后来者不动进程
+            return {"task_id": task_id, "outcome": "skipped",
+                    "reason": f"task in state {task.status}"}
+
     dispatch_service(db, app.state.timers, slug, task_id, watchdog_minutes)
     command, argv = plan["command"], plan["argv"]
     if plan["wrap_cmd"]:

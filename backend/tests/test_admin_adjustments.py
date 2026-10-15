@@ -171,16 +171,16 @@ def test_model_entry_migration_splits_prefix(client, tmp_path):
 
     with TestClient(create_app()) as c2:
         items = {i["model"]: i for i in c2.get("/api/models").json()["items"]}
-        assert items["MiniMax-M3"]["provider"] == "minimax"  # 前缀拆出
+        assert items["MiniMax-M3"]["provider"] == "minimax-cn"  # 前缀拆出 + 坏值修正
         assert items["glm-4.7"]["provider"] == ""            # 无前缀置空
 
 
 def test_create_master_with_provider(client):
     _setup_project(client, slug="ad2")
     client.post("/api/models", json={
-        "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax"})
+        "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax-cn"})
     body = {"name": "m主代理", "duty": "d", "dir": ".", "harness": "mcode",
-            "model": "MiniMax-M3", "provider": "minimax"}
+            "model": "MiniMax-M3", "provider": "minimax-cn"}
     # 会话必选（同创建校验）
     r = client.post("/api/p/ad2/masters", json={**body, "session": ""})
     assert r.status_code == 422
@@ -193,7 +193,7 @@ def test_create_master_with_provider(client):
         {"sessionId": "mvs_prov000000000000000000000000", "createdAtMs": 1}), encoding="utf-8")
     r = client.post("/api/p/ad2/masters", json={**body, "session": "mvs_prov000000000000000000000000"})
     assert r.status_code == 201, r.text
-    assert r.json()["provider"] == "minimax"
+    assert r.json()["provider"] == "minimax-cn"
 
 
 # ---------- 5. 过程输出通道 ----------

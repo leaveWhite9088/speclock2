@@ -44,10 +44,9 @@ class Database:
         self._migrate_model_entries()
 
     def _migrate_model_entries(self) -> None:
-        """旧登记条目迁移（调整单 4）：model 带 provider/model 前缀则拆出，否则置空。
-
-        空 provider = 只作 harness 绑定，不出现在核心代理 /model 列表。
-        """
+        """旧登记条目迁移：model 带 provider/model 前缀则拆出，否则置空；
+        已知坏值修正（修复单 1）：mcode 条目 provider "minimax"（mcode 自己的
+        供应商名，非 pi 供应商）→ "minimax-cn"。均幂等。"""
         with self.registry_engine.connect() as conn:
             rows = conn.exec_driver_sql(
                 "SELECT id, model FROM model_entries WHERE provider IS NULL OR provider = ''"
@@ -63,6 +62,9 @@ class Database:
                     conn.exec_driver_sql(
                         "UPDATE model_entries SET provider = '' WHERE id = ?", (row_id,)
                     )
+            conn.exec_driver_sql(
+                "UPDATE model_entries SET provider = 'minimax-cn' WHERE provider = 'minimax'"
+            )
             conn.commit()
 
     def _ensure_columns(self, engine: sa.Engine, wanted: dict[str, list[tuple[str, str]]]) -> None:

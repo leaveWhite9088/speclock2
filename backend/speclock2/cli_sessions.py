@@ -13,12 +13,23 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 MAX_FILES = 100          # 单目录扫描上限（防意外扫到海量文件）
 MAX_READ_BYTES = 1 << 20  # 单文件解析上限：标题信息都在前部，超大文件只读前 1MB
+CWD_PEEK_BYTES = 8 << 10  # mcode cwd 判定的探测窗口（messages.jsonl 头部 agent-context）
 TITLE_MAX = 60
+
+
+def _norm_path(value: str | None) -> str:
+    """路径归一（Windows 大小写/分隔符无关），过滤匹配用。"""
+    if not value:
+        return ""
+    v = str(value).replace("\\", "/").strip().rstrip("/")
+    v = re.sub(r"/{2,}", "/", v)  # JSON 转义的 "\\\\" 归一成单斜杠
+    return v.lower()
 
 
 def session_roots() -> list[Path]:
@@ -39,7 +50,7 @@ def _mcode_roots() -> list[Path]:
 
 
 def _parse_file(path: Path) -> dict | None:
-    """解析单个会话文件：头行必须 type=session；返回 {id,title,mtime,path} 或 None。"""
+    """解析单个会话文件：头行必须 type=session；返回 {id,title,mtime,path,cwd} 或 None。"""
     try:
         raw = path.read_bytes()[:MAX_READ_BYTES]
     except OSError:
@@ -54,6 +65,7 @@ def _parse_file(path: Path) -> dict | None:
     sid = header.get("id")
     if not isinstance(sid, str) or not sid:
         return None
+    cwd = header.get("cwd") if isinstance(header.get("cwd"), str) else ""
 
     name: str | None = None
     first_user = ""
@@ -82,7 +94,7 @@ def _parse_file(path: Path) -> dict | None:
         mtime = path.stat().st_mtime
     except OSError:
         return None
-    return {"id": sid, "title": title, "mtime": mtime, "path": path}
+    return {"id": sid, "title": title, "mtime": mtime, "path": path, "cwd": cwd}
 
 
 def _scan_mcode() -> list[dict]:
@@ -117,8 +129,21 @@ def _scan_mcode() -> list[dict]:
                 mtime = (ts / 1000) if isinstance(ts, (int, float)) else path.stat().st_mtime
             except OSError:
                 continue
-            found.append({"id": sid, "title": "mcode 会话", "mtime": mtime, "path": path})
+            found.append({"id": sid, "title": "mcode 会话", "mtime": mtime, "path": path,
+                          "cwd": None})  # manifest 不记 cwd，过滤时按需探测
     return found
+
+
+def _mcode_cwd_matches(session_dir: Path, cwd_norm: str) -> bool:
+    """mcode cwd 判定：messages.jsonl 头部 agent-context 段内含工作目录路径。
+
+    只做路径字符串包含检查（窗口 8KB），不解析其消息格式。
+    """
+    try:
+        head = (session_dir / "messages.jsonl").read_bytes()[:CWD_PEEK_BYTES]
+    except OSError:
+        return False
+    return cwd_norm in _norm_path(head.decode("utf-8", "replace"))
 
 
 def _scan_all() -> list[dict]:
@@ -139,15 +164,36 @@ def _scan_all() -> list[dict]:
     return found
 
 
-def scan() -> list[dict]:
-    """会话清单（新→旧）：[{id, title, updated_at}]，供前端绑定主代理。"""
+def scan(cwd: str | None = None) -> list[dict]:
+    """会话清单（新→旧）：[{id, title, updated_at}]，供前端绑定主代理。
+
+    cwd 给定时按会话所属工作目录过滤（修复单 3）：pi 用头行 cwd 精确匹配，
+    mcode 用 messages 头部路径包含判定；cwd 未知的会话在过滤模式下不返回。
+    """
+    infos = _scan_all()
+    if cwd:
+        want = _norm_path(cwd)
+        if not want:
+            return []
+        kept = []
+        for info in infos:
+            stored = _norm_path(info.get("cwd"))
+            if stored:
+                ok = stored == want
+            elif info.get("title") == "mcode 会话":
+                ok = _mcode_cwd_matches(info["path"], want)
+            else:
+                ok = False
+            if ok:
+                kept.append(info)
+        infos = kept
     return [
         {
             "id": info["id"],
             "title": info["title"],
             "updated_at": datetime.fromtimestamp(info["mtime"], tz=timezone.utc).isoformat(),
         }
-        for info in _scan_all()
+        for info in infos
     ]
 
 

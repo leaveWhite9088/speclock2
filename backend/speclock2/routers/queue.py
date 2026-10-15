@@ -141,13 +141,19 @@ def rearm_watchdogs(db, timers: set, ledgers_dir) -> dict:
     return stats
 
 
-def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes: float) -> models.Task:
-    """queued→dispatched + deadline + 事件 + 启动看门狗（端点与派发执行器共用）。"""
+def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes: float) -> tuple[models.Task, bool]:
+    """queued→dispatched + deadline + 事件 + 启动看门狗（端点与派发执行器共用）。
+
+    幂等（修复单 2）：非 queued 任务不再 409——原样返回 (task, skipped=True)，
+    不做任何迁移、不启动看门狗、无副作用；双派发路径重叠时后来者安全跳过。
+    """
     with db.ledger_session(slug) as session:
         task = session.get(models.Task, task_id)
         if task is None:
             raise ApiError(404, "not_found", f"任务不存在：{task_id}")
-        _transition(task, "dispatched")
+        if task.status != "queued":
+            session.refresh(task)
+            return task, True
         deadline = datetime.now().astimezone() + timedelta(minutes=watchdog_minutes)
         task.status = "dispatched"
         task.watchdog_deadline = deadline.isoformat(timespec="seconds")
@@ -163,7 +169,7 @@ def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes:
         session.refresh(task)
         snapshot = task
     _start_watchdog(db, timers, slug, task_id, deadline)
-    return snapshot
+    return snapshot, False
 
 
 def receipt_service(db, slug: str, task_id: int, body: ReceiptBody) -> models.Receipt:
@@ -257,11 +263,45 @@ def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request)
     _project_or_404(request, slug)
     if body.watchdog_minutes <= 0:
         raise ApiError(422, "validation_error", "watchdog_minutes 必须为正数")
-    task = dispatch_service(
+    task, skipped = dispatch_service(
         request.app.state.db, request.app.state.timers, slug,
         parse_prefixed_id(task_id, "T") or -1, body.watchdog_minutes,
     )
+    if skipped:  # 幂等跳过（修复单 2）：进程没起来、无副作用
+        return {"skipped": True, "reason": f"task in state {task.status}",
+                "task": serialize.task_out(task)}
     return serialize.task_out(task)
+
+
+class AuditAllBody(BaseModel):
+    result: str = "pass"
+    note: str | None = None
+
+
+@router.post("/audit-all")
+def audit_all(slug: str, body: AuditAllBody, request: Request) -> dict:
+    """批量验收（修复单 4）：项目内全部 reported 任务一次 audit，返回数量。"""
+    _project_or_404(request, slug)
+    if body.result not in ("pass", "fail"):
+        raise ApiError(422, "validation_error", "result 必须是 pass 或 fail")
+    db = request.app.state.db
+    audited: list[str] = []
+    with db.ledger_session(slug) as session:
+        rows = session.scalars(
+            select(models.Task).where(models.Task.status == "reported")
+        ).all()
+        for task in rows:
+            task.status = "done" if body.result == "pass" else "rejected"
+            task.updated_at = now_iso()
+            round_ = flow.get_open_round(session)
+            flow.add_event(
+                session, round_.n if round_ else 0, "human",
+                "audit.machine.passed" if body.result == "pass" else "audit.machine.failed",
+                {"task": fmt_id("T", task.id)}, {"note": body.note},
+            )
+            audited.append(fmt_id("T", task.id))
+        session.commit()
+    return {"audited": len(audited), "task_ids": audited}
 
 
 class LaunchPlanBody(BaseModel):

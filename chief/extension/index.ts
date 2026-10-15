@@ -117,9 +117,17 @@ export default function (pi: ExtensionAPI) {
 				watchdog_minutes: Type.Number({ default: 60, description: "看门狗超时（分钟）" }),
 			}),
 			async execute(_toolCallId, p) {
-				// 1. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）
+				// 1. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）；
+				//    非 queued 任务返回 skipped：不 spawn、无副作用，如实告知模型即可
 				const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
-				await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: watchdogMinutes });
+				const dispatchRes = await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: watchdogMinutes });
+				if (dispatchRes.skipped) {
+					const st = dispatchRes.task?.status ?? "unknown";
+					return {
+						content: [{ type: "text", text: `任务 ${p.task_id} 跳过派发：当前状态 ${st}（不是 queued，无需重复派发）。请向用户说明，不要重试。` }],
+						details: { outcome: "skipped", state: st },
+					};
+				}
 
 				// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续，
 				//    与 mock 执行器同一事实源）；这里只负责 spawn + 监控

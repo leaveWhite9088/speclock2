@@ -200,7 +200,10 @@ async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> 
     if not model:
         raise ApiError(422, "validation_error", "model 不能为空")
     provider = (body.provider or "").strip()
-    target = f"{provider}/{model}" if provider else model
+    # model 可能带来源前缀（如登记里的 mcode 条目 "minimax/MiniMax-M3"）：
+    # pi 的 modelId 不含 "/"，剥掉取最后段，供应商以 provider 参数为准
+    model_id = model.rpartition("/")[2] if "/" in model else model
+    target = f"{provider}/{model_id}" if provider else model_id
     session = request.app.state.pi.get(slug)
     if session is None or not session.running:
         raise ApiError(409, "conflict", "核心代理会话未运行，无法切换模型（先 POST /agent/start）")
@@ -209,7 +212,8 @@ async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> 
     except NotImplementedError:
         raise ApiError(501, "not_implemented", "当前会话类型不支持切换模型")
     except Exception as exc:
-        raise ApiError(502, "agent_error", f"切换模型失败：{exc}")
+        raise ApiError(502, "agent_error",
+                       f"切换模型失败：{exc}（请检查模型登记的 provider 是否为 pi 供应商名）")
     return {"ok": True, "model": result.get("model", target)}
 
 

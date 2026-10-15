@@ -45,8 +45,9 @@ class Database:
 
     def _migrate_model_entries(self) -> None:
         """旧登记条目迁移：model 带 provider/model 前缀则拆出，否则置空；
-        已知坏值修正（修复单 1）：mcode 条目 provider "minimax"（mcode 自己的
-        供应商名，非 pi 供应商）→ "minimax-cn"。均幂等。"""
+        坏值修正只针对 pi 条目（修复单 21 按 harness 分治）：pi 词表里的合法值
+        是 minimax-cn，"minimax" 是 mcode 自己的供应商方言——非 pi 条目的
+        provider 一律不动。幂等。"""
         with self.registry_engine.connect() as conn:
             rows = conn.exec_driver_sql(
                 "SELECT id, model FROM model_entries WHERE provider IS NULL OR provider = ''"
@@ -63,7 +64,8 @@ class Database:
                         "UPDATE model_entries SET provider = '' WHERE id = ?", (row_id,)
                     )
             conn.exec_driver_sql(
-                "UPDATE model_entries SET provider = 'minimax-cn' WHERE provider = 'minimax'"
+                "UPDATE model_entries SET provider = 'minimax-cn' "
+                "WHERE provider = 'minimax' AND harness = 'pi'"
             )
             conn.commit()
 

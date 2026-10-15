@@ -136,8 +136,15 @@ async function runDispatchChain(taskId: string, prompt: string, watchdogMinutes:
 	});
 
 	if (result.exitCode !== 0) {
+		// 快速失败收尸（修复单 21）：立即标 timeout 并取消看门狗，不干等剩余时限
+		// （今晚 T-0006 崩溃后干等了一小时）。收尸失败不阻断：如实把退出事实呈给模型，看门狗兜底
+		await api("POST", `/tasks/${taskId}/fail`, {
+			reason: `被派发进程异常退出（码 ${result.exitCode}）`,
+			exit_code: result.exitCode,
+			stderr: result.stderrTail || undefined,
+		}).catch(() => {});
 		return {
-			content: [{ type: "text", text: `任务 ${taskId} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}，未回执，等待看门狗标记 timeout（工作目录：${plan.cwd}）` }],
+			content: [{ type: "text", text: `任务 ${taskId} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}。已标记 timeout（快速收尸，无需等看门狗）。工作目录：${plan.cwd}` }],
 			details: { outcome: "crashed", exit_code: result.exitCode, stderr: result.stderrTail, cwd: plan.cwd },
 		};
 	}

@@ -70,7 +70,8 @@ def _transition(task: models.Task, to_status: str) -> None:
 
 
 def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime) -> None:
-    """内存看门狗：到期仍未回执 → timeout + task.timeout 事件（§9.4）。"""
+    """内存看门狗：到期仍未回执 → timeout + task.timeout 事件（§9.4）。
+    定时器带 slug/task_id 标记（修复单 21）：/fail 收尸时按任务精确定位取消。"""
     delay = max((deadline - datetime.now().astimezone()).total_seconds(), 0.1)
 
     def fire() -> None:
@@ -82,8 +83,20 @@ def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime
 
     timer = threading.Timer(delay, fire)
     timer.daemon = True
+    timer.slug = slug  # type: ignore[attr-defined]
+    timer.task_id = task_id  # type: ignore[attr-defined]
     timers.add(timer)
     timer.start()
+
+
+def _cancel_watchdog(timers: set, slug: str, task_id: int) -> bool:
+    """取消指定任务的看门狗定时器（修复单 21 快速收尸用）；返回是否找到。"""
+    for t in list(timers):
+        if getattr(t, "slug", None) == slug and getattr(t, "task_id", None) == task_id:
+            t.cancel()
+            timers.discard(t)
+            return True
+    return False
 
 
 ZOMBIE_STATUSES = ("dispatched", "running")  # 已派发未回执的状态（看门狗管辖范围）
@@ -271,6 +284,50 @@ def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request)
         return {"skipped": True, "reason": f"task in state {task.status}",
                 "task": serialize.task_out(task)}
     return serialize.task_out(task)
+
+
+class TaskFailBody(BaseModel):
+    reason: str
+    exit_code: int | None = None
+    stderr: str | None = None
+
+
+@router.post("/tasks/{task_id}/fail")
+def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> dict:
+    """派发快速失败收尸（修复单 21）：被派发进程非零退出时由 chief 扩展立即调用。
+
+    timeout 状态语义涵盖两种未回执终局：看门狗超时与进程崩溃——两者都是
+    「已派发、没回执、不会再有回执」。仅 dispatched/running 可调（409 否则）；
+    调用即取消对应看门狗定时器，不等剩余时限。事件 payload 附
+    reason / exit_code / stderr 尾部（500 字符），回放可查崩溃原因。
+    """
+    _project_or_404(request, slug)
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise ApiError(422, "validation_error", "reason 不能为空（崩溃原因）")
+    tid = parse_prefixed_id(task_id, "T") or -1
+    _cancel_watchdog(request.app.state.timers, slug, tid)
+    with request.app.state.db.ledger_session(slug) as session:
+        task = session.get(models.Task, tid)
+        if task is None:
+            raise ApiError(404, "not_found", f"任务不存在：{task_id}")
+        if task.status not in ZOMBIE_STATUSES:
+            raise ApiError(409, "conflict",
+                           f"任务 {task_id} 状态为 {task.status}，不在看门狗管辖（只有已派发未回执的任务可 fail）")
+        task.status = "timeout"
+        task.updated_at = now_iso()
+        details: dict = {"reason": reason}
+        if body.exit_code is not None:
+            details["exit_code"] = body.exit_code
+        if body.stderr:
+            details["stderr_tail"] = body.stderr[-500:]
+        round_ = flow.get_open_round(session)
+        flow.add_event(session, round_.n if round_ else 0, "system", "task.timeout",
+                       {"task": fmt_id("T", tid)}, details)
+        session.commit()
+        session.refresh(task)
+        data = serialize.task_out(task)
+    return data
 
 
 class AuditAllBody(BaseModel):

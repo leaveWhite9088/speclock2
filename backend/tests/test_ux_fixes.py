@@ -33,34 +33,46 @@ def mock_client(data_dir, monkeypatch):
 
 
 def test_register_model_provider_validation(client):
-    # 非法 provider（mcode 自己的供应商名不是 pi 供应商）→ 422 带合法值清单
+    """provider 校验按 harness 分治（修复单 21）：词表只管 pi 条目；
+    非 pi 条目是各自 harness 的方言（mcode 用 minimax），原样接受。"""
+    # pi + 词表外 provider → 422 带合法值清单
+    r = client.post("/api/models", json={
+        "harness": "pi", "model": "MiniMax-M3", "provider": "minimax"})
+    assert r.status_code == 422 and "minimax-cn" in r.json()["message"]
+    # mcode 用自己的方言 minimax → 201 原样接受（2026-10-15 真机实证：mcode 路由表只认 minimax）
     r = client.post("/api/models", json={
         "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax"})
-    assert r.status_code == 422 and "minimax-cn" in r.json()["message"]
-    # 合法 provider → 201
+    assert r.status_code == 201 and r.json()["provider"] == "minimax"
+    # pi 合法 provider → 201
     r = client.post("/api/models", json={
-        "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax-cn"})
+        "harness": "pi", "model": "MiniMax-M3", "provider": "minimax-cn"})
     assert r.status_code == 201 and r.json()["provider"] == "minimax-cn"
+    # 任何 harness：provider 含 "/" → 422（来源前缀属于 model 字段）
+    assert client.post("/api/models", json={
+        "harness": "mcode", "model": "x-model", "provider": "a/b"}).status_code == 422
     # 空 provider 合法（只作 harness 绑定）
     assert client.post("/api/models", json={
         "harness": "pi", "model": "glm-4.7", "provider": ""}).status_code == 201
 
 
-def test_migration_fixes_invalid_provider(client):
-    """存量坏值（provider=minimax）启动迁移自动修成 minimax-cn。"""
+def test_migration_fixes_only_pi_entries(client):
+    """启动迁移按 harness 分治（修复单 21）：pi 条目坏值 minimax→minimax-cn；
+    mcode 条目的 minimax 是合法方言，重启迁移不得再刷坏（P0 拆雷）。"""
     import sqlite3
 
     conn = sqlite3.connect(client.app.state.db.settings.registry_path)
-    conn.execute(
-        "INSERT INTO model_entries (harness, model, provider, created_at) VALUES (?, ?, ?, ?)",
-        ("mcode", "MiniMax-M3", "minimax", now_iso()))
+    for harness in ("pi", "mcode"):
+        conn.execute(
+            "INSERT INTO model_entries (harness, model, provider, created_at) VALUES (?, ?, ?, ?)",
+            (harness, "MiniMax-M3", "minimax", now_iso()))
     conn.commit()
     conn.close()
     from speclock2.app import create_app
 
     with TestClient(create_app()) as c2:
-        items = {i["model"]: i for i in c2.get("/api/models").json()["items"]}
-        assert items["MiniMax-M3"]["provider"] == "minimax-cn"
+        items = {f'{i["harness"]}@{i["model"]}': i for i in c2.get("/api/models").json()["items"]}
+        assert items["pi@MiniMax-M3"]["provider"] == "minimax-cn"
+        assert items["mcode@MiniMax-M3"]["provider"] == "minimax"
 
 
 def test_agent_model_strips_source_prefix(mock_client):

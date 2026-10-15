@@ -17,7 +17,9 @@ from ..utils import now_iso
 
 router = APIRouter()
 
-# pi 已知供应商（来源：pi docs/providers.md；chief 实际走 minimax-cn 路由）。
+# pi 供应商词表（来源：pi docs/providers.md；chief 切模型消费的就是 pi 条目）。
+# 只约束 harness=="pi" 的登记（修复单 21 按 harness 分治）：其他 harness 有
+# 自己的供应商方言（如 mcode 用 minimax），工作台只登记不翻译，原样接受。
 # 空 provider 合法（= 只作 harness 绑定，不进核心代理 /model 列表）。
 KNOWN_PROVIDERS = {
     "minimax-cn", "anthropic", "openai", "google", "deepseek", "zai",
@@ -28,7 +30,9 @@ KNOWN_PROVIDERS = {
 class RegisterModelBody(BaseModel):
     harness: str = ""
     model: str = ""
-    provider: str | None = None  # LLM 供应商名（如 minimax-cn）；空 = 只作 harness 绑定
+    # LLM 供应商名，按 harness 各用各方言：pi 用 minimax-cn，mcode 用 minimax。
+    # 词表校验仅对 pi 条目生效；非 pi 条目只要求非空、不含 "/"。
+    provider: str | None = None
 
 
 def _entry_out(row: models.ModelEntry) -> dict:
@@ -53,9 +57,14 @@ def register_model(body: RegisterModelBody, request: Request) -> dict:
     provider = (body.provider or "").strip()
     if not harness or not model:
         raise ApiError(422, "validation_error", "Harness 与模型都要填（Harness 有什么模型就登记什么）")
-    if provider and provider not in KNOWN_PROVIDERS:
+    # provider 校验按 harness 分治（修复单 21）：词表只管 pi 条目；
+    # 非 pi 条目是各自 harness 的方言（如 mcode 的 minimax），原样接受
+    if provider and harness == "pi" and provider not in KNOWN_PROVIDERS:
         raise ApiError(422, "validation_error",
-                       f"provider {provider!r} 不是合法的 LLM 供应商（合法值：{', '.join(sorted(KNOWN_PROVIDERS))}；留空 = 只作 harness 绑定）")
+                       f"provider {provider!r} 不是 pi 的合法供应商（合法值：{', '.join(sorted(KNOWN_PROVIDERS))}；留空 = 只作 harness 绑定；其他 harness 用各自的供应商名，不做词表校验）")
+    if provider and "/" in provider:
+        raise ApiError(422, "validation_error",
+                       f"provider {provider!r} 不能包含 \"/\"（来源前缀属于 model 字段，登记时拆开填）")
     db = request.app.state.db
     with db.registry_session() as session:
         exists = session.scalars(

@@ -47,7 +47,9 @@ class ModelEntry(RegistryBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     harness: Mapped[str] = mapped_column(sa.Text)
     model: Mapped[str] = mapped_column(sa.Text)
-    # LLM 供应商名（pi 等）：空 = 该条只作 harness 绑定，不出现在核心代理 /model 列表
+    # LLM 供应商名，按 harness 各用各方言（修复单 21）：pi 用 minimax-cn、
+    # mcode 用 minimax。词表校验仅对 pi 条目生效；空 = 只作 harness 绑定，
+    # 不出现在核心代理 /model 列表
     provider: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[str] = mapped_column(sa.Text)
 
@@ -264,7 +266,8 @@ class Master(LedgerBase):
     role: Mapped[str] = mapped_column(sa.Text)
     harness: Mapped[str] = mapped_column(sa.Text)
     model: Mapped[str | None] = mapped_column(sa.Text)
-    # LLM 供应商名（登记侧引用；dispatch --model 组合 provider/model 用）
+    # LLM 供应商名，跟随所绑 harness 的方言（修复单 21）：pi 主代理是 minimax-cn、
+    # mcode 主代理是 minimax；派发 --model 组合 provider/model 时原样使用
     provider: Mapped[str | None] = mapped_column(sa.Text)
     working_dir: Mapped[str | None] = mapped_column(sa.Text)
     agents_md: Mapped[str | None] = mapped_column(sa.Text)

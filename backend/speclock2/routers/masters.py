@@ -24,7 +24,9 @@ class CreateMasterBody(BaseModel):
     dir: str = ""
     harness: str = ""
     model: str = ""
-    provider: str | None = None  # LLM 供应商名；缺省从登记条目推断
+    # LLM 供应商名，按 harness 方言（pi=minimax-cn、mcode=minimax，修复单 21）；
+    # 缺省从登记条目推断
+    provider: str | None = None
     session: str = ""
 
 

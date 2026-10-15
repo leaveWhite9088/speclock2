@@ -171,7 +171,8 @@ def test_model_entry_migration_splits_prefix(client, tmp_path):
 
     with TestClient(create_app()) as c2:
         items = {i["model"]: i for i in c2.get("/api/models").json()["items"]}
-        assert items["MiniMax-M3"]["provider"] == "minimax-cn"  # 前缀拆出 + 坏值修正
+        # 前缀拆出 provider=minimax；mcode 方言原样保留（修复单 21 分治，不再刷成 minimax-cn）
+        assert items["MiniMax-M3"]["provider"] == "minimax"
         assert items["glm-4.7"]["provider"] == ""            # 无前缀置空
 
 

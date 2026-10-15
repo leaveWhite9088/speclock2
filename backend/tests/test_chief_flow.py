@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from tests.test_s2 import _setup_project
 
 CHIEF_TS = Path(__file__).parent.parent.parent / "chief" / "extension" / "index.ts"
 CHIEF_CONSTITUTION = Path(__file__).parent.parent.parent / "chief" / "constitution.md"
+FAKE = Path(__file__).parent.parent / "scripts" / "fake_harness.py"
 
 
 @pytest.fixture()
@@ -209,3 +211,75 @@ def test_agent_reset_without_session_or_file(mock_client):
     assert r.status_code == 200
     body = r.json()
     assert body == {"ok": True}  # 可空字段省略（DESIGN §5.5 null 语义）
+
+
+# ---------- 修复单 21：provider 按 harness 分治 + 派发快速失败收尸 ----------
+
+
+def test_launch_plan_composes_mcode_provider_dialect(client, tmp_path):
+    """回归：mcode 主代理绑定 provider=minimax（mcode 自己的方言）→
+    launch-plan 的 --model 是 minimax/MiniMax-M3，不被 pi 词表/迁移改写。"""
+    _setup_project(client, slug="md")
+    assert client.post("/api/models", json={
+        "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax"}).status_code == 201
+    # harness-map：mcode 条目挂替身进程，模板带 --model {model}（模拟 mcode 启动模板）
+    cfg = {"watchdog_minutes_default": 60, "masters": {}, "harnesses": {
+        "mcode": {"command": sys.executable, "args": [str(FAKE), "--model", "{model}"],
+                  "prompt_mode": "arg"}}}
+    (client.app.state.db.settings.data_dir / "harness-map.json").write_text(
+        json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+    _fake_pi_session(tmp_path)
+    r = client.post("/api/p/md/masters", json={
+        "name": "m主代理", "duty": "d", "dir": ".", "harness": "mcode",
+        "model": "MiniMax-M3", "session": "pi-chief-flow"})
+    assert r.status_code in (200, 201), r.text
+    assert r.json()["provider"] == "minimax"  # 名册方言原样保留
+    repo = tmp_path / "md-repo"
+    repo.mkdir(parents=True)
+    assert client.patch("/api/p/md", json={"working_dir": str(repo)}).status_code == 200
+    order = client.post("/api/p/md/tech-orders", json={
+        "intent": "hello", "scope": ["./"], "master": "m主代理"}).json()
+    assert client.post(f"/api/p/md/tasks/{order['task_id']}/dispatch",
+                       json={"watchdog_minutes": 30}).status_code == 200
+    plan = client.post(f"/api/p/md/tasks/{order['task_id']}/launch-plan",
+                       json={"prompt": "hi"}).json()
+    assert plan["model"] == "minimax/MiniMax-M3"
+    i = plan["argv"].index("--model")
+    assert plan["argv"][i + 1] == "minimax/MiniMax-M3"
+
+
+def test_fail_endpoint_fast_reap(client):
+    """修复单 21：/fail 快速收尸——立即 timeout、取消看门狗定时器、
+    task.timeout 事件 payload 附 reason/exit_code/stderr 尾部。"""
+    _setup_project(client, slug="fl")
+    order = client.post("/api/p/fl/tech-orders", json={
+        "intent": "崩溃收尸", "scope": ["./"], "master": "backend"}).json()
+    task_id = order["task_id"]
+    assert client.post(f"/api/p/fl/tasks/{task_id}/dispatch",
+                       json={"watchdog_minutes": 60}).json()["status"] == "dispatched"
+    tid = int(task_id.split("-")[1])
+    timers = client.app.state.timers
+    assert any(getattr(t, "task_id", None) == tid for t in timers)  # 看门狗在值守
+
+    r = client.post(f"/api/p/fl/tasks/{task_id}/fail", json={
+        "reason": "被派发进程异常退出（码 2）", "exit_code": 2, "stderr": "boom"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "timeout"
+    assert not any(getattr(t, "task_id", None) == tid for t in timers)  # 定时器已取消
+    ev = client.get("/api/p/fl/events", params={"type": "task.timeout"}).json()["items"]
+    assert ev and ev[0]["payload"]["reason"] == "被派发进程异常退出（码 2）"
+    assert ev[0]["payload"]["exit_code"] == 2
+    assert ev[0]["payload"]["stderr_tail"] == "boom"
+    # 状态防御：已终态再 fail → 409；reason 空 → 422
+    assert client.post(f"/api/p/fl/tasks/{task_id}/fail", json={"reason": "x"}).status_code == 409
+    order2 = client.post("/api/p/fl/tech-orders", json={
+        "intent": "t2", "scope": ["./"], "master": "backend"}).json()
+    assert client.post(f"/api/p/fl/tasks/{order2['task_id']}/fail",
+                       json={"reason": "  "}).status_code == 422
+
+
+def test_chief_ts_fails_fast_on_crash():
+    """源码级（修复单 21）：被派发进程非零退出 → 调 /fail 快速收尸，不等看门狗。"""
+    src = CHIEF_TS.read_text(encoding="utf-8")
+    assert "/tasks/${taskId}/fail" in src
+    assert "exit_code" in src and "快速收尸" in src

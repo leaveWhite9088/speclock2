@@ -16,17 +16,39 @@ from sqlalchemy import select
 
 from . import cli_sessions, harness_map, models
 from .errors import ApiError
-from .pi_runtime import parse_record, split_records
+from .pi_runtime import effective_chief, effective_chief_model_str, parse_record, split_records
 from .routers.queue import ReceiptBody, dispatch_service, receipt_service
-
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # speclock2/../.. = 仓库根：主代理在其领地内干活
 
 FILES_LINE_RE = re.compile(r"FILES:\s*(.+)")
 GRACE_SECONDS = 8  # 看门狗后的回执宽限：进程仍未退出则 kill
 
 
+def _resolve_dispatch_cwd(master_dir: str, project_dir: str) -> str:
+    """派发 cwd 三级解析（契约 v0.4）：masters.working_dir → projects.working_dir → 拒派。
+
+    主代理目录为相对路径时按项目目录拼（名册里的 dir 是所有权边界，如 backend/）；
+    绝对路径直接用。工作台仓库永远不是候选——被派发 agent 不许写工作台自己。
+    """
+    if master_dir:
+        mp = Path(master_dir)
+        if mp.is_absolute():
+            cwd = mp
+        elif project_dir:
+            cwd = Path(project_dir) / master_dir
+        else:
+            raise ApiError(422, "project_unbound",
+                           "项目未绑定目标仓库，拒绝派发（主代理目录为相对路径，需项目先绑定目录）")
+    elif project_dir:
+        cwd = Path(project_dir)
+    else:
+        raise ApiError(422, "project_unbound", "项目未绑定目标仓库，拒绝派发")
+    if not cwd.is_dir():
+        raise ApiError(422, "project_unbound", f"派发目标目录不存在：{cwd}")
+    return str(cwd)
+
+
 def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
-    """统一计算「这个任务怎么唤醒 harness」：名册（harness/绑定会话）×映射（argv）。
+    """统一计算「这个任务怎么唤醒 harness」：名册（harness/绑定会话/模型）×映射（argv）×cwd。
 
     mock 执行器（dispatcher.run_task）与真实 chief 的 dispatch 工具（经
     /tasks/{id}/launch-plan 端点）共用此函数——启动参数只有这一个事实源。
@@ -49,6 +71,10 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
                 select(models.Master).where(models.Master.name == master_name)
             ).first()
 
+    with db.registry_session() as registry:
+        project = registry.get(models.Project, slug)
+    project_dir = (project.working_dir or "").strip() if project else ""
+
     if row is not None and row.harness:
         name = row.harness
         if name not in harnesses:
@@ -62,8 +88,16 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
     if not harness:
         raise RuntimeError(f"harness 映射缺失（master={master_name!r}），请检查 harness-map.json")
 
+    # cwd：主代理目录 → 项目绑定目录 → 422 拒派（契约 v0.4 核心）
+    master_dir = (row.working_dir or "").strip() if row is not None else ""
+    cwd = _resolve_dispatch_cwd(master_dir, project_dir)
+
+    # 模型：名册登记的模型 → 项目核心代理模型兜底 → 无（摘除 {model} 占位）
+    roster_model = (row.model or "").strip() if row is not None else ""
+    model = roster_model or effective_chief_model_str(db, slug) or None
+
     full = harness_map.build_argv(harness, prompt)  # [command, *args]
-    command, args = full[0], full[1:]
+    command, args = full[0], harness_map.apply_model(full[1:], model)
     if row is not None:
         bound = (row.session_policy or {}).get("cli_session")
         if bound:
@@ -78,9 +112,11 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
         "harness": name,
         "command": command,
         "argv": args,
-        "cwd": str(REPO_ROOT),
+        "cwd": cwd,
+        "model": model,
         "wrap_cmd": command.lower().endswith((".cmd", ".bat")),
         "watchdog_minutes": float(cfg.get("watchdog_minutes_default", 60)),
+        "chief": effective_chief(db, slug),
     }
 
 

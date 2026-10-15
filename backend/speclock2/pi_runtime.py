@@ -83,6 +83,40 @@ def chief_model_args() -> list[str]:
     return []
 
 
+def effective_chief(db, slug: str) -> dict:
+    """项目核心代理生效配置（契约 v0.4）：项目字段优先，空回退全局 env。
+
+    返回 {"provider", "model", "source"}；source = project（项目提供了任一字段）
+    或 env（完全跟随全局）。
+    """
+    proj_provider = proj_model = ""
+    try:
+        from . import models
+
+        with db.registry_session() as session:
+            project = session.get(models.Project, slug)
+        if project is not None:
+            proj_provider = (project.chief_provider or "").strip()
+            proj_model = (project.chief_model or "").strip()
+    except Exception:
+        pass  # db 不可用时按纯 env 处理（会话仍可启动）
+    env_provider = os.environ.get("SPECLOCK2_CHIEF_PROVIDER", "")
+    env_model = os.environ.get("SPECLOCK2_CHIEF_MODEL", "")
+    if proj_provider or proj_model:
+        return {"provider": proj_provider or env_provider or None,
+                "model": proj_model or env_model or None, "source": "project"}
+    return {"provider": env_provider or None, "model": env_model or None, "source": "env"}
+
+
+def effective_chief_model_str(db, slug: str) -> str | None:
+    """生效模型字符串（pi --model 形态：provider/model 或 model）；未配置返回 None。"""
+    chief = effective_chief(db, slug)
+    provider, model = chief["provider"] or "", chief["model"] or ""
+    if provider and model:
+        return f"{provider}/{model}"
+    return model or None
+
+
 # ---------- 会话基类 ----------
 
 
@@ -169,6 +203,9 @@ class PiSession(BaseSession):
 
     @property
     def model(self) -> str:
+        """生效模型展示值：优先显式 --model 参数，否则 env 兜底显示。"""
+        if len(self._model_args) >= 2 and self._model_args[0] == "--model":
+            return self._model_args[1]
         m = os.environ.get("SPECLOCK2_CHIEF_MODEL", "")
         p = os.environ.get("SPECLOCK2_CHIEF_PROVIDER", "")
         return f"{p}/{m}" if p and m else (m or "pi-default")
@@ -358,8 +395,9 @@ def mock_enabled() -> bool:
 class PiManager:
     """每项目一个核心代理会话（A8/A1：会话可丢，账本永恒）。"""
 
-    def __init__(self, settings: Settings, create_card_fn=None, dispatch_fn=None) -> None:
+    def __init__(self, settings: Settings, create_card_fn=None, dispatch_fn=None, db=None) -> None:
         self.settings = settings
+        self.db = db  # 项目级核心代理配置读取（effective_chief）
         self.sessions: dict[str, BaseSession] = {}
         self.create_card_fn = create_card_fn  # mock 的 draft_card 工具效果
         self.dispatch_fn = dispatch_fn  # mock 的 dispatch 工具效果（真实派发链）
@@ -378,8 +416,10 @@ class PiManager:
             session = MockSession(slug, self.create_card_fn, self.dispatch_fn)
         else:
             session = PiSession(slug, self.settings)
-            if model:
-                session._model_args = ["--model", model]
+            # 显式 model 参数（/agent/start 手动指定）> 项目绑定 > 全局 env（PiSession 默认）
+            effective = model or (effective_chief_model_str(self.db, slug) if self.db else None)
+            if effective:
+                session._model_args = ["--model", effective]
             await session.start()
         self.sessions[slug] = session
         return session

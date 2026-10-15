@@ -28,6 +28,10 @@ class Project(RegistryBase):
     name: Mapped[str] = mapped_column(sa.Text)
     created_at: Mapped[str] = mapped_column(sa.Text)
     status: Mapped[str] = mapped_column(sa.Text, default="active")
+    # 项目绑定（契约 v0.4）：目标仓库目录 + 项目级核心代理模型（空 = 跟随全局 env）
+    working_dir: Mapped[str | None] = mapped_column(sa.Text)
+    chief_provider: Mapped[str | None] = mapped_column(sa.Text)
+    chief_model: Mapped[str | None] = mapped_column(sa.Text)
 
 
 class ModelEntry(RegistryBase):

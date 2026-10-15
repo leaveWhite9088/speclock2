@@ -13,6 +13,7 @@ from .routers import (
     chat,
     cli_sessions,
     conventions,
+    fs,
     health,
     masters,
     model_registry,
@@ -39,7 +40,7 @@ def create_app() -> FastAPI:
     app.state.db = Database(settings)
     app.state.db.init_registry()  # 启动时建表
     app.state.timers = set()  # 看门狗定时器（防 GC）
-    app.state.pi = PiManager(settings)  # 核心代理会话管理（mock 工具效果按需注入）
+    app.state.pi = PiManager(settings, db=app.state.db)  # 核心代理会话管理（mock 工具效果按需注入）
     app.state.pi.create_card_fn = chat.make_create_card_fn(app)
     app.state.pi.dispatch_fn = chat.make_dispatch_fn(app)
 
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(model_registry.router)
     app.include_router(cli_sessions.router)
+    app.include_router(fs.router)
     app.include_router(project.router)
     app.include_router(cards.router)
     app.include_router(chat.router)

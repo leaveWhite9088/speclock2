@@ -15,18 +15,15 @@ from speclock2.harness_map import build_argv, default_map, resolve_harness
 from tests.test_s2 import _put_draft, _setup_project
 
 FAKE = Path(__file__).parent.parent / "scripts" / "fake_harness.py"
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # 被派发进程在此写文件，测试后清理
-
-WRITTEN_FILES = ["backend/hello-agent.txt", "backend/hello-from-agent.txt"]
 
 
-@pytest.fixture()
-def cleanup_written_files():
-    yield
-    for name in WRITTEN_FILES:
-        p = REPO_ROOT / name
-        if p.exists():
-            p.unlink()
+def _bind(client: TestClient, tmp_path: Path, slug: str = "a") -> Path:
+    """给项目绑定目标仓库目录（契约 v0.4）；未绑定的项目派发会被 422 拒绝。"""
+    repo = tmp_path / "target-repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    r = client.patch(f"/api/p/{slug}", json={"working_dir": str(repo)})
+    assert r.status_code == 200, r.text
+    return repo
 
 
 @pytest.fixture()
@@ -64,10 +61,11 @@ def test_harness_map_build_argv(data_dir):
     assert resolve_harness(default, None)["command"]
 
 
-def test_dispatch_full_flow_with_real_process(mock_client, data_dir, cleanup_written_files):
+def test_dispatch_full_flow_with_real_process(mock_client, data_dir, tmp_path):
     """技术单 → 派发执行器：真实 fake_harness 进程跑完 → 回执（files/telemetry）→ audit → done。"""
     _write_map(data_dir, {"backend": "t", "frontend": "t"})
     _setup_project(mock_client)
+    repo = _bind(mock_client, tmp_path)
     order = mock_client.post("/api/p/a/tech-orders", json={
         "intent": "写一个 hello 文件", "scope": ["backend/"], "acceptance": ["文件存在"]}).json()
     pkg_id = order["package_id"]
@@ -85,7 +83,7 @@ def test_dispatch_full_flow_with_real_process(mock_client, data_dir, cleanup_wri
     result = asyncio.run(run())
     assert result["outcome"] == "reported"
     assert result["files_changed"] == ["backend/hello-agent.txt"]
-    assert (REPO_ROOT / "backend" / "hello-agent.txt").exists()  # 被派发进程真实写入了文件
+    assert (repo / "backend" / "hello-agent.txt").exists()  # 写进了项目绑定的目标仓库，不是工作台
 
     # 回执落库：任务 reported、receipt 带 files 与 telemetry
     tasks = mock_client.get("/api/p/a/packages").json()["items"][-1]["tasks"]
@@ -101,10 +99,11 @@ def test_dispatch_full_flow_with_real_process(mock_client, data_dir, cleanup_wri
     assert r.json()["status"] == "done"
 
 
-def test_approve_notifies_chief_and_dispatches(mock_client, data_dir, cleanup_written_files):
+def test_approve_notifies_chief_and_dispatches(mock_client, data_dir, tmp_path):
     """批准 → 通知 mock 核心代理 → 自动派发全部任务（真实进程）→ 回执到达。"""
     _write_map(data_dir, {"backend": "t", "frontend": "t"})
     blk = _setup_project(mock_client)
+    _bind(mock_client, tmp_path)
     _put_draft(mock_client, blk)
     mock_client.post("/api/p/a/chat", json={
         "message": "起草", "draft": {
@@ -131,10 +130,11 @@ def test_approve_notifies_chief_and_dispatches(mock_client, data_dir, cleanup_wr
     assert any("已派发" in e["payload"]["message"] for e in chiefs)
 
 
-def test_crashed_process_times_out_via_watchdog(mock_client, data_dir):
+def test_crashed_process_times_out_via_watchdog(mock_client, data_dir, tmp_path):
     """主代理进程崩溃（exit 1）不回执 → 看门狗标 timeout + task.timeout 事件。"""
     _write_map(data_dir, {"backend": "t", "frontend": "t"}, extra_args=["--fail"], watchdog=0.05)
     _setup_project(mock_client)
+    _bind(mock_client, tmp_path)
     order = mock_client.post("/api/p/a/tech-orders", json={
         "intent": "必然失败的任务", "scope": ["backend/"], "acceptance": []}).json()
     task = mock_client.get("/api/p/a/packages").json()["items"][-1]["tasks"][0]

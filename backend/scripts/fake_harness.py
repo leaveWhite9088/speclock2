@@ -60,6 +60,7 @@ def main() -> None:
         files.append(target.relative_to(REPO_ROOT).as_posix())
     if not files:
         default = REPO_ROOT / "backend" / "hello-from-agent.txt"
+        default.parent.mkdir(parents=True, exist_ok=True)  # cwd 是任意绑定仓库，不保证有 backend/
         default.write_text("hello from fake harness", encoding="utf-8")
         files = ["backend/hello-from-agent.txt"]
 

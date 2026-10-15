@@ -49,7 +49,10 @@ def default_map() -> dict:
     if pi_cmd and pi_cmd[0].lower().endswith(("node", "node.exe")):  # node 直启 cli.js，避开 .cmd
         harnesses["pi"] = {
             "command": pi_cmd[0],
-            "args": [*pi_cmd[1:], "--mode", "json", "-p", "{prompt}", "--no-session"],
+            # {model} 占位：派发时按名册登记模型注入，无登记则用项目核心代理模型兜底
+            # （修"被派发 pi 落 harness 默认模型"的漂移；模板不烤任何具体模型名）
+            "args": [*pi_cmd[1:], "--model", "{model}",
+                     "--mode", "json", "-p", "{prompt}", "--no-session"],
             "prompt_mode": "inline",
             # 接续会话：按文件头 id 定位（--session-dir 传会话文件所在目录）
             "resume_args": ["--session-id", "{session_id}", "--session-dir", "{session_dir}"],
@@ -103,6 +106,26 @@ def build_argv(harness_cfg: dict, prompt: str) -> list[str]:
     if harness_cfg.get("prompt_mode", "arg") == "arg":
         args.append(prompt)
     return [harness_cfg["command"], *args]
+
+
+def apply_model(args: list[str], model: str | None) -> list[str]:
+    """{model} 占位替换（契约 v0.4）：有模型 → 原位替换；无模型 → 连同前置 flag 一起摘除。
+
+    约定 {model} 总是单独占一个参数位、跟在它的 flag 后面（如 ["--model", "{model}"]）。
+    """
+    if model:
+        return [a.replace("{model}", model) for a in args]
+    out: list[str] = []
+    prev_is_flag = False
+    for a in args:
+        if "{model}" in a:
+            if prev_is_flag:
+                out.pop()  # 摘掉裸占位前面的 flag（如 --model）
+            prev_is_flag = False
+            continue
+        out.append(a)
+        prev_is_flag = a.startswith("--")
+    return out
 
 
 def build_resume_args(harness_cfg: dict, session_id: str, session_dir: str | None) -> list[str] | None:

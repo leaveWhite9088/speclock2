@@ -8,6 +8,17 @@ from pydantic import BaseModel
 class ProjectCreate(BaseModel):
     slug: str
     name: str
+    working_dir: str | None = None  # 绑定目标仓库目录（必须存在且为目录）
+    chief_provider: str | None = None  # 项目级核心代理 provider（空 = 跟随全局 env）
+    chief_model: str | None = None
+
+
+class ProjectPatch(BaseModel):
+    """PATCH /api/p/{slug}：只更新显式传入的字段（显式 "" 清空）。"""
+
+    working_dir: str | None = None
+    chief_provider: str | None = None
+    chief_model: str | None = None
 
 
 class DomainCreate(BaseModel):

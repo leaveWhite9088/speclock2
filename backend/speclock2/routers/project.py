@@ -59,6 +59,25 @@ def project_detail(slug: str, request: Request) -> dict:
     return project
 
 
+@router.patch("")
+def patch_project(body: schemas.ProjectPatch, slug: str, request: Request) -> dict:
+    """更新项目绑定（契约 v0.4）：只动显式传入的字段；working_dir 校验同创建。"""
+    from .projects import validate_working_dir
+
+    db = request.app.state.db
+    with db.registry_session() as session:
+        project = _project_or_404(session, slug)
+        if "working_dir" in body.model_fields_set:
+            project.working_dir = validate_working_dir(body.working_dir)
+        if "chief_provider" in body.model_fields_set:
+            project.chief_provider = (body.chief_provider or "").strip() or None
+        if "chief_model" in body.model_fields_set:
+            project.chief_model = (body.chief_model or "").strip() or None
+        session.commit()
+        session.refresh(project)
+        return serialize.project_out(project)
+
+
 @router.get("/tree")
 def project_tree(slug: str, request: Request) -> dict:
     db = request.app.state.db

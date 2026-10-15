@@ -128,11 +128,20 @@ def test_cli_sessions_empty_dir(client):
 
 
 @pytest.fixture()
-def seeded(client):
+def seeded(client, tmp_path):
     _setup_project(client)
+    # 绑定目标仓库 + 预建 data/ 子目录（名册主代理的相对目录按项目目录拼）
+    repo = tmp_path / "target-repo"
+    (repo / "data").mkdir(parents=True)
+    res = client.patch("/api/p/a", json={"working_dir": str(repo)})
+    assert res.status_code == 200, res.text
     _register(client, "pi", "glm-4.7")
     _write_session("sess-a", first_user="日报导出 · 后端实现")
     return client
+
+
+def _bound_repo(client: TestClient) -> Path:
+    return Path(client.get("/api/p/a").json()["working_dir"])
 
 
 def test_master_create_and_list(seeded):
@@ -197,7 +206,7 @@ def _tech_order_task(client: TestClient) -> str:
 
 def test_launch_plan_uses_roster_harness_and_resume(seeded, data_dir):
     _write_map(data_dir)
-    _add_master(seeded, name="backend")  # 名册登记 backend → pi + 绑定 sess-a
+    _add_master(seeded, name="backend")  # 名册登记 backend → pi + 绑定 sess-a + 目录 data/
     task_id = _tech_order_task(seeded)
 
     plan = seeded.post(f"/api/p/a/tasks/{task_id}/launch-plan", json={"prompt": "做任务"}).json()
@@ -207,8 +216,11 @@ def test_launch_plan_uses_roster_harness_and_resume(seeded, data_dir):
     assert argv[argv.index("--session-id") + 1] == "sess-a"
     session_dir = argv[argv.index("--session-dir") + 1]
     assert cli_sessions.find_session_dir("sess-a") == Path(session_dir)
-    assert plan["cwd"] and plan["watchdog_minutes"] == 60
-    assert "--model" not in argv  # 不替 Harness 选模型
+    # cwd = 项目绑定目录 / 主代理相对目录；模型 = 名册登记值
+    assert Path(plan["cwd"]) == _bound_repo(seeded) / "data"
+    assert plan["model"] == "glm-4.7"
+    assert plan["watchdog_minutes"] == 60
+    assert "--model" not in argv  # 该映射模板无 {model} 占位 → 不注入
 
 
 def test_launch_plan_without_roster_falls_back_to_map(seeded, data_dir):
@@ -217,6 +229,8 @@ def test_launch_plan_without_roster_falls_back_to_map(seeded, data_dir):
     plan = seeded.post(f"/api/p/a/tasks/{task_id}/launch-plan", json={"prompt": "做任务"}).json()
     assert plan["harness"] == "pi"
     assert "--session-id" not in plan["argv"]  # 无绑定会话 → 不接续，--no-session 保留
+    assert Path(plan["cwd"]) == _bound_repo(seeded)  # 项目绑定目录兜底
+    assert plan["model"] is None  # 名册与项目核心代理都没配 → 不注入
 
 
 def test_launch_plan_roster_harness_unconfigured(seeded, data_dir):
@@ -244,17 +258,15 @@ def test_run_task_spawns_with_resume_args(seeded, data_dir, monkeypatch, tmp_pat
     numeric = parse_prefixed_id(task_id, "T")
 
     async def run():
-        return await dispatcher.run_task(seeded.app, "a", numeric, "FILE: backend/hello-agent.txt")
+        return await dispatcher.run_task(seeded.app, "a", numeric, "FILE: hello.txt")
 
     result = asyncio_run(run())
     assert result["outcome"] == "reported"
     argv = json.loads(record.read_text(encoding="utf-8"))
     assert argv[argv.index("--session-id") + 1] == "sess-a"
     assert "--no-session" not in argv
-    # 收尾：清掉替身写进仓库根的文件
-    written = Path(dispatcher.REPO_ROOT) / "backend/hello-agent.txt"
-    if written.exists():
-        written.unlink()
+    # cwd = 项目目录/data：替身把文件写进了绑定的目标仓库（tmp 内，随用例清理）
+    assert (_bound_repo(seeded) / "data" / "hello.txt").exists()
 
 
 def asyncio_run(coro):
@@ -263,8 +275,12 @@ def asyncio_run(coro):
     return asyncio.run(coro)
 
 
-def test_default_map_has_no_model_injection():
-    """原则守卫：默认映射里任何 harness 都不注入 --model（模型是 Harness 自己的事）。"""
+def test_default_map_model_is_template_only():
+    """模板守卫：默认映射的 --model 只能跟 {model} 占位，不得烤任何具体模型名
+    （模型来自登记/项目绑定，工作台不替 Harness 选型）。"""
     cfg = harness_map.default_map()
     for harness in cfg["harnesses"].values():
-        assert "--model" not in (harness.get("args") or []), harness
+        args = harness.get("args") or []
+        for i, a in enumerate(args):
+            if a == "--model":
+                assert i + 1 < len(args) and args[i + 1] == "{model}", (harness, args)

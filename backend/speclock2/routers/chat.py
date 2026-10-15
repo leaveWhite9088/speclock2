@@ -137,15 +137,17 @@ async def chat_stream(slug: str, request: Request) -> StreamingResponse:
 @router.get("/agent")
 async def agent_status(slug: str, request: Request) -> dict:
     _project_or_404(request, slug)
+    chief = pi_runtime.effective_chief(request.app.state.db, slug)  # 生效值（含来源 project|env）
     session = request.app.state.pi.get(slug)
     if session is None:
         return {"running": False, "model": None, "context_usage_percent": None,
-                "session_id": f"speclock2-{slug}"}
+                "session_id": f"speclock2-{slug}", "chief": chief}
     stats = (await session.stats()) or {}
     percent = (stats.get("contextUsage") or {}).get("percent")
     _warn_context_usage(request, slug, session, percent)
     return {"running": True, "model": session.model,
-            "context_usage_percent": percent, "session_id": session.session_id}
+            "context_usage_percent": percent, "session_id": session.session_id,
+            "chief": chief}
 
 
 def _warn_context_usage(request: Request, slug: str, session, percent) -> None:

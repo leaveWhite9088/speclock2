@@ -29,6 +29,22 @@ class Database:
 
     def init_registry(self) -> None:
         models.RegistryBase.metadata.create_all(self.registry_engine)
+        self._ensure_registry_columns()
+
+    def _ensure_registry_columns(self) -> None:
+        """无迁移框架下的最小列补齐：create_all 不改已有表，缺的列用 ALTER TABLE 补。"""
+        wanted = {
+            "projects": ["working_dir", "chief_provider", "chief_model"],
+        }
+        with self.registry_engine.connect() as conn:
+            for table, columns in wanted.items():
+                existing = {
+                    row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+                }
+                for name in columns:
+                    if name not in existing:
+                        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} TEXT")
+            conn.commit()
 
     def ledger_engine(self, slug: str) -> sa.Engine:
         """打开（必要时创建）项目账本文件；建表幂等。"""

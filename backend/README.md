@@ -134,7 +134,9 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 | GET | `/api/health` | `{"ok":true}` |
 | GET | `/api/projects` | 项目清单 `{"items":[...]}` |
 | POST | `/api/projects` | `{slug,name}`；slug 冲突 409；创建即初始化独立账本 |
-| GET | `/api/p/{slug}` | `{slug,name,current_round,open_card}` |
+| GET | `/api/p/{slug}` | `{slug,name,current_round,open_card,working_dir,chief_provider,chief_model}` |
+| PATCH | `/api/p/{slug}` | 更新绑定（契约 v0.4）：`{working_dir?,chief_provider?,chief_model?}`，只动显式传入的字段（显式 `""` 清空）；working_dir 必须存在且为目录（422） |
+| GET | `/api/fs/dirs?path=` | 列出绝对路径下的子目录 `{"items":[{name,path}]}`；path 不存在/不是目录 422。**仅本机单用户工具（无鉴权只读），不要暴露到公网** |
 | GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks |
 | POST | `/api/p/{slug}/domains` `/documents` `/blocks` | 草稿态创建 |
 | GET/PUT | `/api/p/{slug}/blocks/{id}` | 草稿四件套读写（PUT 只存草稿不产生版本；校验见 S1 节） |
@@ -161,9 +163,21 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 ## 唤醒与探测边界（用户原则）
 
 工作台**只做两件事**：启动 Harness（launch-plan + spawn）与监控/探测（会话扫描、看门狗、遥测解析）。
-不替 Harness 做模型选择——harness 用它自己配置的模型，`harness-map.json` 的默认映射不含任何 `--model`；
+不替 Harness 做模型选择——`--model` 只来自登记/绑定信息的引用：默认映射的 pi 模板含
+`--model {model}` 占位，派发时按「主代理名册登记的模型 → 项目核心代理模型（chief_provider/chief_model，
+空则回退全局 env）」注入，都没有就摘除占位；模板本身不烤任何具体模型名。
 「某 Harness 有哪些模型」只是 `/api/models` 里的登记信息，主代理名册引用它（创建时强校验），
 派发时按名册 harness 唤醒 CLI，绑定了会话则带 `--session-id/--session-dir` 接续（pi 形态，其余 harness 在 harness-map.json 配 `resume_args` 模板）。
+
+## 派发 cwd 与项目绑定（契约 v0.4）
+
+- 项目可绑定目标仓库目录（`working_dir`，POST/PATCH 设置，必须存在且为目录）；
+- **派发 cwd 解析**：`masters.working_dir`（相对路径按项目目录拼）→ `projects.working_dir` →
+  都无则 **422 `project_unbound`「项目未绑定目标仓库，拒绝派发」**。工作台仓库永远不是候选——
+  被派发 agent 不可能把文件写进工作台自己（2026-10-15 事故修复）；
+- 项目核心代理模型：`chief_provider/chief_model` 按项目生效，空回退全局 env；
+  `GET /api/p/{slug}/agent` 返回生效值与来源（`chief.source: project|env`）；
+- registry.db 无迁移框架：启动时对缺列做幂等 `ALTER TABLE ADD COLUMN`（老库自动补齐）。
 
 ## 账本表
 

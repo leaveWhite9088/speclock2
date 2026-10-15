@@ -83,10 +83,11 @@ def test_chat_with_draft_creates_card(mock_client):
 
 def test_agent_endpoints(mock_client):
     _setup(mock_client)
-    # 未启动
+    # 未启动（chief 为生效配置：测试环境无 env 配置 → source=env、值空）
     status = mock_client.get("/api/p/a/agent").json()
     assert status == {"running": False, "model": None, "context_usage_percent": None,
-                      "session_id": "speclock2-a"}
+                      "session_id": "speclock2-a",
+                      "chief": {"provider": None, "model": None, "source": "env"}}
     # 启动（幂等）
     r = mock_client.post("/api/p/a/agent/start", json={})
     assert r.status_code == 200

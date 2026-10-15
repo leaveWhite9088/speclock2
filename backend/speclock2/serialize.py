@@ -7,7 +7,9 @@ from .utils import fmt_id
 
 
 def project_out(p: models.Project) -> dict:
-    return {"slug": p.slug, "name": p.name, "created_at": p.created_at, "status": p.status}
+    return {"slug": p.slug, "name": p.name, "created_at": p.created_at, "status": p.status,
+            "working_dir": p.working_dir,
+            "chief_provider": p.chief_provider, "chief_model": p.chief_model}
 
 
 def domain_out(d: models.Domain) -> dict:

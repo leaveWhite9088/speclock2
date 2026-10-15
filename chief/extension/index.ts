@@ -99,6 +99,45 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
+	/** 新建任务（修复单 17）：用户直达请求（叫某主代理做 X）的合法入口——
+	 *  先建技术任务单拿到新任务号，再 dispatch；禁止复用历史任务号。 */
+	pi.registerTool(
+		defineTool({
+			name: "create_task",
+			label: "新建任务",
+			description:
+				"给主代理新建任务（技术任务单通道）：登记意图/范围/验收，生成 queued 任务。" +
+				"用户说「叫某主代理做某事」时先调用本工具，再用返回的 task_id 调 dispatch。" +
+				"禁止复用历史任务号——已终态的任务再派发只会被跳过。",
+			promptGuidelines: [
+				"新建任务必须用 create_task，从返回结果拿新 task_id，禁止拿历史任务号去 dispatch。",
+				"master 必须用主代理名册里的名字；名字不对会报错并列出可用名单。",
+			],
+			parameters: Type.Object({
+				intent: Type.String({ description: "为什么动（一句话，动词开头）" }),
+				scope: Type.Array(Type.String(), { description: "范围声明，如 [\"backend/\"]" }),
+				acceptance: Type.Array(Type.String(), { default: [], description: "验收标准列表" }),
+				master: Type.String({ description: "执行的主代理名（名册里的名字）" }),
+			}),
+			async execute(_toolCallId, p) {
+				const order = await api("POST", "/tech-orders", {
+					intent: p.intent,
+					scope: p.scope ?? [],
+					acceptance: p.acceptance ?? [],
+					master: p.master,
+				});
+				return {
+					content: [{
+						type: "text",
+						text: `已建任务 ${order.task_id}（单 ${order.order_id}，包 ${order.package_id}，状态 queued）。` +
+							`下一步用 dispatch 派发任务号 ${order.task_id}。`,
+					}],
+					details: order,
+				};
+			},
+		}),
+	);
+
 	/** 派发：spawn 被派发 harness 真实进程（NDJSON 解析，骨架参考官方 subagent 示例）。 */
 	pi.registerTool(
 		defineTool({
@@ -124,7 +163,7 @@ export default function (pi: ExtensionAPI) {
 				if (dispatchRes.skipped) {
 					const st = dispatchRes.task?.status ?? "unknown";
 					return {
-						content: [{ type: "text", text: `任务 ${p.task_id} 跳过派发：当前状态 ${st}（不是 queued，无需重复派发）。请向用户说明，不要重试。` }],
+						content: [{ type: "text", text: `任务 ${p.task_id} 状态为 ${st}，不可派发（只有 queued 能派发）。请新建任务（create_task）后用新任务号重试；这是状态机跳过，不是通道故障，不要上报「通道不可用」。` }],
 						details: { outcome: "skipped", state: st },
 					};
 				}

@@ -48,6 +48,15 @@ pytest
 
 测试通过环境变量 `SPECLOCK2_DATA_DIR` 把数据写入 pytest 临时目录，每个用例独立、互不污染。
 
+## 开发约定（自测纪律）
+
+- **禁止对真实项目账本（如 mctest / fe-selftest / a）发任何自测请求。**
+  自测数据会污染用户现场：2026-10-15 曾对真实账本 curl 未提交版本的批量验收，
+  把从未派发的任务扫成 done（幽灵完成）。
+- 自测一律二选一：
+  1. `SPECLOCK2_DATA_DIR=<临时目录>` 起独立实例（配 `sl2-fake` 替身 harness 即可全链自测）；
+  2. 直接跑 `pytest`（每个用例自动用独立临时数据目录）。
+
 ## 草稿校验（S1 起）
 
 PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则整次 PUT 拒绝（422，草稿保持原样），`details.errors` 逐条定位字段路径（如 `"apis[0].response[0].children[0].children"`）：

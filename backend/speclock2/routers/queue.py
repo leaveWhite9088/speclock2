@@ -376,6 +376,14 @@ def create_tech_order(slug: str, body: TechOrderBody, request: Request) -> dict:
     scope = body.scope or []
 
     with request.app.state.db.ledger_session(slug) as session:
+        # 名册校验（修复单 17）：名册非空时 master 必须对上；报错附可用名单让调用方自纠。
+        # 名册为空（纯替身自测）保持旧行为：master 随便填，映射落替身
+        names = list(session.scalars(select(models.Master.name)).all())
+        if names and body.master and body.master not in names:
+            raise ApiError(
+                422, "master_unknown",
+                f"master {body.master!r} 不在名册，可用：{'、'.join(names)}",
+            )
         round_ = flow.get_open_round(session) or flow.open_round(session, 1)
         package = models.TaskPackage(origin="tech", round=round_.n, version_refs={}, created_at=now_iso())
         session.add(package)
@@ -403,4 +411,5 @@ def create_tech_order(slug: str, body: TechOrderBody, request: Request) -> dict:
         session.commit()
         session.refresh(order)
         data = serialize.tech_order_out(order)
+        data["task_id"] = fmt_id("T", task.id)  # 核心代理 create_task 直接拿任务号派发
     return data

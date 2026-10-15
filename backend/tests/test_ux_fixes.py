@@ -111,7 +111,10 @@ def test_chief_dispatch_tool_reports_skipped():
     src = (Path(__file__).parent.parent.parent / "chief" / "extension" / "index.ts").read_text(
         encoding="utf-8")
     assert "dispatchRes.skipped" in src
-    assert "无需重复派发" in src
+    # 修复单 17：跳过要引导新建任务，不许当通道故障上报
+    assert "create_task" in src
+    assert "不可派发" in src
+    assert "不是通道故障" in src
 
 
 # ---------- 3. 会话按目录过滤 ----------

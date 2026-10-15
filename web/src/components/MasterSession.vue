@@ -14,6 +14,12 @@ const props = defineProps<{
   packages: Package[]
   /** SSE master_output 按 task_id 聚合的输出尾部（≤50 行，App 捕获） */
   liveOutputs: Record<string, string[]>
+  /** 核心代理正在流式回复（跨视图可见的占用状态） */
+  chiefStreaming: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'stop-chief'): void
 }>()
 
 const el = ref<HTMLElement | null>(null)
@@ -111,6 +117,15 @@ watch(
 
     <div class="msession__body">
       <div class="msession__inner">
+        <!-- 通道说明 + 核心代理占用状态（跨视图可见） -->
+        <p class="msession__notice">
+          该主代理由任务派发驱动，对话请回<span class="msession__notice-b">核心代理</span>。
+          <template v-if="chiefStreaming">
+            核心代理正在回复…
+            <button type="button" class="msession__stop" @click="emit('stop-chief')">停止</button>
+          </template>
+        </p>
+
         <section class="msession__sec">
           <h6 class="msession__sec-title">任务</h6>
           <p v-if="myTasks.length === 0" class="msession__empty">暂无分配到的任务。</p>
@@ -261,6 +276,36 @@ watch(
 .msession__empty {
   color: var(--c-ink-3);
   font-size: var(--fs-12);
+}
+
+/* 通道提示 + 核心代理占用状态 */
+.msession__notice {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-m);
+  padding: var(--sp-1) var(--sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-wrap: wrap;
+}
+
+.msession__notice-b {
+  color: var(--c-ink-2);
+  font-weight: 600;
+}
+
+.msession__stop {
+  font-size: var(--fs-12);
+  color: var(--c-ink);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-m);
+  padding: 0 8px;
+}
+
+.msession__stop:hover {
+  border-color: var(--c-ink-3);
 }
 
 /* 过程直播终端：等宽、限高、自动滚底；空闲态展示最近回执摘要 */

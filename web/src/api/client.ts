@@ -569,7 +569,10 @@ export interface ApiClient {
   listModels(): Promise<{ items: ModelEntry[] }>
   registerModel(body: RegisterModelBody): Promise<ModelEntry>
   removeModel(id: string): Promise<void>
-  listCliSessions(): Promise<{ items: CliSession[] }>
+  /** CLI 会话列表；cwd 过滤到指定目录（主代理绑定只看当前项目目录下的） */
+  listCliSessions(cwd?: string): Promise<{ items: CliSession[] }>
+  /** 批量把 reported 任务标记为已验收（audit pass；后端未上线时 UI 行内报错） */
+  auditAll(slug: string): Promise<{ updated?: number }>
   /** 对话（R-M2）：发送后回复经 SSE 流式推送；本端点同步返回定稿兜底 */
   sendChat(slug: string, body: ChatBody): Promise<ChatResponse>
   getAgent(slug: string): Promise<AgentStatus>
@@ -663,7 +666,11 @@ export function createApiClient(): ApiClient {
     registerModel: (body) =>
       request<ModelEntry>('/api/models', { method: 'POST', body: JSON.stringify(body) }),
     removeModel: (id) => request<void>(`/api/models/${id}`, { method: 'DELETE' }),
-    listCliSessions: () => request<{ items: CliSession[] }>('/api/cli-sessions'),
+    listCliSessions: (cwd) =>
+      request<{ items: CliSession[] }>(
+        cwd ? `/api/cli-sessions?cwd=${encodeURIComponent(cwd)}` : '/api/cli-sessions',
+      ),
+    auditAll: (slug) => request<{ updated?: number }>(`${p(slug)}/audit-all`, { method: 'POST', body: '{}' }),
     sendChat: (slug, body) =>
       request<ChatResponse>(`${p(slug)}/chat`, { method: 'POST', body: JSON.stringify(body) }),
     getAgent: (slug) => request<AgentStatus>(`${p(slug)}/agent`),

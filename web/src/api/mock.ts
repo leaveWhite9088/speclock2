@@ -455,12 +455,12 @@ export const FALLBACK_MODEL_ENTRIES: ModelEntry[] = [
   { id: 'mdl-8', harness: 'pi', model: 'MiniMax-M3', provider: 'minimax-cn' },
 ]
 
-/** 「读取 CLI 内部的会话列表」的 mock 形态（R-M2 接真实 CLI 会话目录） */
-export const FALLBACK_CLI_SESSIONS: CliSession[] = [
-  { id: 'sess_7d21c8', title: '日报导出 · 后端实现', updated_at: '2026-10-14T09:20:00+08:00' },
-  { id: 'sess_3a90f2', title: '前端工作台 · 界面重构', updated_at: '2026-10-13T16:41:00+08:00' },
-  { id: 'sess_b54e07', title: '订阅模块 · 方案讨论', updated_at: '2026-10-12T11:05:00+08:00' },
-  { id: 'sess_e8c31d', title: '全局约定 · 起草', updated_at: '2026-10-11T20:33:00+08:00' },
+/** 「读取 CLI 内部的会话列表」的 mock 形态：cwd = 会话所属目录（?cwd= 过滤用） */
+export const FALLBACK_CLI_SESSIONS: Array<CliSession & { cwd: string }> = [
+  { id: 'sess_7d21c8', title: '日报导出 · 后端实现', updated_at: '2026-10-14T09:20:00+08:00', cwd: 'D:/work/daily-report/backend' },
+  { id: 'sess_3a90f2', title: '前端工作台 · 界面重构', updated_at: '2026-10-13T16:41:00+08:00', cwd: 'D:/work/daily-report/web' },
+  { id: 'sess_b54e07', title: '订阅模块 · 方案讨论', updated_at: '2026-10-12T11:05:00+08:00', cwd: 'D:/work/daily-report/web' },
+  { id: 'sess_e8c31d', title: '全局约定 · 起草', updated_at: '2026-10-11T20:33:00+08:00', cwd: 'D:/work/daily-report' },
 ]
 
 /* ---------- mock 客户端 ---------- */
@@ -1158,7 +1158,13 @@ export function createMockApiClient(): ApiClient {
       if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `登记 ${id} 不存在（mock）` })
       modelRegistry.splice(idx, 1)
     },
-    listCliSessions: async () => ({ items: FALLBACK_CLI_SESSIONS.map((x) => ({ ...x })) }),
+    listCliSessions: async (cwd) => {
+      const dir = cwd ? normalizeFsPath(cwd) : null
+      const items = dir
+        ? FALLBACK_CLI_SESSIONS.filter((s) => s.cwd === dir || s.cwd.startsWith(`${dir}/`))
+        : FALLBACK_CLI_SESSIONS
+      return { items: items.map(({ cwd: _cwd, ...rest }) => ({ ...rest })) }
+    },
 
     sendChat: async (slug, body) => {
       if (!body.message.trim()) {
@@ -1261,6 +1267,21 @@ export function createMockApiClient(): ApiClient {
       )
       if (busy) throw new ApiError(409, { code: 'conflict', message: '该主代理有在跑的任务，等任务结束或先处理任务再删除' })
       masters.splice(idx, 1)
+    },
+
+    auditAll: async (slug) => {
+      const ledger = ledgerOf(slug)
+      let updated = 0
+      for (const pkg of ledger.packages) {
+        for (const t of pkg.tasks) {
+          if (t.status === 'reported' || t.status === 'auditing') {
+            t.status = 'done'
+            pushEvent(ledger, pkg.round, 'audit', 'audit.machine.passed', { task: t.task_id }, { note: '批量验收（audit-all）' })
+            updated++
+          }
+        }
+      }
+      return { updated }
     },
   }
 

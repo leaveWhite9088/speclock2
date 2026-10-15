@@ -15,7 +15,6 @@ import type {
 } from './api/client'
 import {
   createMockApiClient,
-  FALLBACK_CLI_SESSIONS,
   FALLBACK_MODEL_ENTRIES,
   getMockActivity,
   isMockQueueRunning,
@@ -50,6 +49,8 @@ const masters = ref<MasterInfo[]>([])
 // Harness×模型登记 + CLI 会话列表（「模型」抽屉与添加主代理共用）
 const modelEntries = ref<ModelEntry[]>([])
 const cliSessions = ref<CliSession[]>([])
+/** 当前项目绑定的目录（CLI 会话按它过滤；null = 未绑定） */
+const projectDir = ref<string | null>(null)
 
 // 会话与抽屉
 const session = ref<SessionTarget>({ kind: 'core' })
@@ -564,6 +565,7 @@ async function selectProject(slug: string): Promise<void> {
     detail.value = null
     loadError.value = err instanceof Error ? err.message : String(err)
   }
+  await loadCliSessions(projects.value.find((p) => p.slug === slug)?.working_dir ?? null)
   await refreshAll()
   await loadChatHistory()
   openStream()
@@ -613,7 +615,7 @@ async function reloadMasters(): Promise<void> {
   }
 }
 
-/** 项目列表变化（新建/设置保存）：刷新列表；新建的项目直接选中进入 */
+/** 项目列表变化（新建/设置保存/删除）：刷新列表；新建的项目直接选中；当前项目被删则切到第一个 */
 async function onProjectsChanged(createdSlug?: string): Promise<void> {
   if (!client.value) return
   try {
@@ -621,10 +623,18 @@ async function onProjectsChanged(createdSlug?: string): Promise<void> {
   } catch {
     /* 列表刷新失败保持现状 */
   }
-  if (createdSlug) await selectProject(createdSlug)
+  if (createdSlug) {
+    await selectProject(createdSlug)
+    return
+  }
+  if (currentSlug.value && !projects.value.some((p) => p.slug === currentSlug.value)) {
+    await selectProject(projects.value[0]?.slug ?? '')
+  } else {
+    void refreshProjectStats()
+  }
 }
 
-/** 模型登记与 CLI 会话列表：live 后端未提供端点时用内置登记兜底（主代理表单仍可用） */
+/** 模型登记：live 后端未提供端点时用内置登记兜底（主代理表单仍可用） */
 async function loadRegistry(): Promise<void> {
   if (!client.value) return
   try {
@@ -632,10 +642,20 @@ async function loadRegistry(): Promise<void> {
   } catch {
     modelEntries.value = FALLBACK_MODEL_ENTRIES.map((x) => ({ ...x }))
   }
+}
+
+/** CLI 会话按项目目录过滤（?cwd=）；项目未绑定目录时不列（表单里提示先绑定） */
+async function loadCliSessions(dir: string | null): Promise<void> {
+  if (!client.value) return
+  projectDir.value = dir
+  if (!dir) {
+    cliSessions.value = []
+    return
+  }
   try {
-    cliSessions.value = (await client.value.listCliSessions()).items
+    cliSessions.value = (await client.value.listCliSessions(dir)).items
   } catch {
-    cliSessions.value = FALLBACK_CLI_SESSIONS.map((x) => ({ ...x }))
+    cliSessions.value = []
   }
 }
 
@@ -764,6 +784,8 @@ onMounted(() => {
         :model-entries="modelEntries"
         :cli-sessions="cliSessions"
         :edit-master="requestMasterEdit"
+        :project-dir="projectDir"
+        :chief-streaming="streaming"
         :style="{ width: `${sidebarWidth}px` }"
         @select-project="selectProject"
         @select-session="onSelectSession"
@@ -771,6 +793,7 @@ onMounted(() => {
         @start-agent="startChiefAgent"
         @projects-changed="onProjectsChanged"
         @master-edit-done="requestMasterEdit = null"
+        @stop-chief="stopCore"
       >
       <template #foot>
         <span
@@ -825,6 +848,8 @@ onMounted(() => {
             :activity="masterActivity"
             :packages="packages"
             :live-outputs="masterLive"
+            :chief-streaming="streaming"
+            @stop-chief="stopCore"
           />
           <CoreChat
             v-else

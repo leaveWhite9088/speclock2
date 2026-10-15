@@ -31,6 +31,10 @@ const props = defineProps<{
   cliSessions: CliSession[]
   /** 顶栏「编辑绑定」请求：非空时打开对应主代理的编辑弹窗 */
   editMaster: MasterInfo | null
+  /** 当前项目绑定的目录（null = 未绑定：会话选择区提示先绑定） */
+  projectDir: string | null
+  /** 核心代理正在流式回复（侧栏转圈提示；点它可停止） */
+  chiefStreaming: boolean
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +44,7 @@ const emit = defineEmits<{
   (e: 'start-agent'): void
   (e: 'projects-changed', createdSlug?: string): void
   (e: 'master-edit-done'): void
+  (e: 'stop-chief'): void
 }>()
 
 /** 新建 / 编辑项目弹窗（同一张表单复用） */
@@ -52,6 +57,42 @@ const editViaRequest = ref(false)
 const projMenu = ref<null | { slug: string; confirm: boolean; error: string }>(null)
 const masterMenu = ref<null | { id: string; confirm: boolean; error: string }>(null)
 const menuBusy = ref(false)
+/** 待验收清理弹层：点击项目徽标上的「N 待验收」后列出 reported 任务 */
+const auditMenu = ref<
+  | null
+  | { slug: string; loading: boolean; busy: boolean; error: string; tasks: Array<{ id: string; master: string; summary: string }> }
+>(null)
+
+async function openAuditMenu(slug: string): Promise<void> {
+  auditMenu.value = { slug, loading: true, busy: false, error: '', tasks: [] }
+  if (!props.client) return
+  try {
+    const pkgs = (await props.client.listPackages(slug)).items
+    const tasks = pkgs
+      .flatMap((p) => p.tasks.map((t) => ({ task: t })))
+      .filter(({ task }) => task.status === 'reported' || task.status === 'auditing')
+      .map(({ task }) => ({
+        id: task.task_id,
+        master: task.master ?? '待定',
+        summary: task.receipt?.summary ?? '（无回执摘要）',
+      }))
+    auditMenu.value = { slug, loading: false, busy: false, error: '', tasks }
+  } catch (err) {
+    auditMenu.value = { slug, loading: false, busy: false, error: err instanceof Error ? err.message : String(err), tasks: [] }
+  }
+}
+
+async function auditAllNow(slug: string): Promise<void> {
+  if (!props.client || !auditMenu.value || auditMenu.value.busy) return
+  auditMenu.value.busy = true
+  try {
+    await props.client.auditAll(slug)
+    auditMenu.value = null
+    emit('projects-changed')
+  } catch (err) {
+    if (auditMenu.value) auditMenu.value = { ...auditMenu.value, busy: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
 
 const newName = ref('')
 const newDuty = ref('')
@@ -140,10 +181,7 @@ async function submitMaster(): Promise<void> {
     addError.value = 'Harness 与模型从登记里选——先在右上角「模型」里登记'
     return
   }
-  if (!newSession.value) {
-    addError.value = '请选择要绑定的 CLI 会话'
-    return
-  }
+  // 会话空 = 「开始新对话」（不绑定 CLI 会话），不拦提交
   const body = {
     name: newName.value,
     duty: newDuty.value,
@@ -203,14 +241,13 @@ function avatarText(name: string): string {
   return name.replace(/主代理$/, '').slice(0, 1) || '代'
 }
 
-/** 项目活动徽标：按任务状态组合显示（如「2 运行中 · 1 待验收」），全零为空 */
-function activityLabel(slug: string): string {
+/** 项目活动徽标：运行中/排队部分；待验收单独成可点击徽标（清理入口） */
+function runQueuedLabel(slug: string): string {
   const s = props.projectStats[slug]
   if (!s) return ''
   const parts: string[] = []
   if (s.running > 0) parts.push(`${s.running} 运行中`)
   if (s.queued > 0) parts.push(`${s.queued} 排队`)
-  if (s.reviewing > 0) parts.push(`${s.reviewing} 待验收`)
   return parts.join(' · ')
 }
 
@@ -246,11 +283,18 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               class="sidebar__flag sidebar__flag--pending"
               title="有待批准卡片"
             >待批准 {{ projectStats[p.slug].pending }}</span>
-            <span
-              v-else-if="activityLabel(p.slug)"
-              class="sidebar__flag"
-              :title="`${activityLabel(p.slug)}（按任务状态统计）`"
-            >{{ activityLabel(p.slug) }}</span>
+            <template v-else>
+              <span v-if="runQueuedLabel(p.slug)" class="sidebar__flag" title="运行中/排队任务（按任务状态统计）">
+                {{ runQueuedLabel(p.slug) }}
+              </span>
+              <button
+                v-if="(projectStats[p.slug]?.reviewing ?? 0) > 0"
+                type="button"
+                class="sidebar__flag sidebar__flag--review"
+                title="有待验收的回执，点击查看并批量清理"
+                @click.stop="openAuditMenu(p.slug)"
+              >{{ projectStats[p.slug].reviewing }} 待验收</button>
+            </template>
           </button>
           <button
             type="button"
@@ -298,6 +342,31 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               </template>
             </div>
           </template>
+          <!-- 待验收清理弹层：列出 reported 任务，一键 audit-all -->
+          <template v-if="auditMenu?.slug === p.slug">
+            <div class="rowmenu__mask" @click="auditMenu = null"></div>
+            <div class="rowmenu rowmenu--audit">
+              <p class="rowmenu__warn">待验收回执（{{ auditMenu.tasks.length }}）</p>
+              <p v-if="auditMenu.loading" class="rowmenu__hint">读取中…</p>
+              <p v-else-if="auditMenu.error" class="rowmenu__error">{{ auditMenu.error }}</p>
+              <template v-else-if="auditMenu.tasks.length">
+                <ul class="rowmenu__tasks">
+                  <li v-for="t in auditMenu.tasks" :key="t.id">
+                    <code>{{ t.id }}</code>
+                    <span class="rowmenu__task-master">{{ t.master }}</span>
+                    <span class="rowmenu__task-sum">{{ t.summary }}</span>
+                  </li>
+                </ul>
+                <div class="rowmenu__acts">
+                  <button type="button" class="rowmenu__cancel" :disabled="auditMenu.busy" @click="auditMenu = null">取消</button>
+                  <button type="button" class="rowmenu__del" :disabled="auditMenu.busy" @click="auditAllNow(p.slug)">
+                    {{ auditMenu.busy ? '验收中…' : '全部标记为已验收' }}
+                  </button>
+                </div>
+              </template>
+              <p v-else class="rowmenu__hint">没有待验收的任务了。</p>
+            </div>
+          </template>
         </li>
         <li v-if="projects.length === 0" class="sidebar__empty">
           （暂无项目）
@@ -340,6 +409,13 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               title="启动核心代理会话"
               @click.stop="emit('start-agent')"
             >启动</span>
+            <button
+              v-if="chiefStreaming"
+              type="button"
+              class="sidebar__typing"
+              title="核心代理正在回复，点击停止"
+              @click.stop="emit('stop-chief')"
+            ><span class="sidebar__typing-dot" aria-hidden="true"></span>回复中</button>
           </button>
         </li>
 
@@ -450,11 +526,12 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
           </label>
         </div>
         <label class="amaster__field">
-          会话（读取 CLI 内部的会话列表，唤醒后接续该会话工作）
-          <select v-model="newSession" class="amaster__input" :disabled="creating || cliSessions.length === 0">
-            <option value="" disabled>选择一个 CLI 会话…</option>
+          会话（{{ projectDir ? '列出当前项目目录下的 CLI 会话' : '按项目目录过滤' }}）
+          <select v-if="projectDir" v-model="newSession" class="amaster__input" :disabled="creating">
+            <option value="">开始新对话（不绑定 CLI 会话）</option>
             <option v-for="s in cliSessions" :key="s.id" :value="s.id">{{ sessionLabel(s) }}</option>
           </select>
+          <span v-else class="amaster__hint">先在项目设置里绑定目录，才能列出该目录下的 CLI 会话。</span>
         </label>
         <label class="amaster__field">
           目录（所有权边界：只能动这个目录）
@@ -745,6 +822,63 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
   opacity: 0.6;
 }
 
+/* 待验收清理弹层：任务清单 */
+.rowmenu--audit {
+  width: 250px;
+}
+
+.rowmenu__hint {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  padding: 4px 8px;
+}
+
+.rowmenu__tasks {
+  max-height: 200px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 2px 4px;
+}
+
+.rowmenu__tasks li {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  padding: 3px 6px;
+  border-radius: var(--radius-m);
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.rowmenu__tasks li:hover {
+  background: var(--c-panel-2);
+}
+
+.rowmenu__tasks code {
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.rowmenu__task-master {
+  flex: none;
+  color: var(--c-ink-3);
+}
+
+.rowmenu__task-sum {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.amaster__hint {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  padding: 4px 0;
+}
+
 .sidebar__proj:hover .sidebar__gear {
   display: inline-flex;
 }
@@ -764,6 +898,53 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
   border-color: var(--c-danger-border);
   background: var(--c-danger-bg);
   font-weight: 600;
+}
+
+/* 待验收徽标：可点击的清理入口 */
+.sidebar__flag--review {
+  color: var(--c-warn);
+  border-color: var(--c-warn);
+  background: var(--c-warn-bg);
+  font-weight: 600;
+}
+
+.sidebar__flag--review:hover {
+  filter: brightness(0.96);
+}
+
+/* 核心代理回复中：脉冲点 + 可点击停止 */
+.sidebar__typing {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  padding: 0 8px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.sidebar__typing:hover {
+  color: var(--c-ink);
+  border-color: var(--c-ink-3);
+}
+
+.sidebar__typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-ok);
+  animation: sidebar-pulse 1s ease-in-out infinite;
+}
+
+@keyframes sidebar-pulse {
+  50% {
+    opacity: 0.25;
+  }
 }
 
 /* 主代理状态点：执行中绿 / 排队灰 / 待审计灰 / 超时红 */

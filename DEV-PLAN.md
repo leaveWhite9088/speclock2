@@ -31,7 +31,7 @@ speclock2/
 
 ---
 
-## 2. API 契约 v0.3（R-M2 扩充：对话与核心代理会话端点）
+## 2. API 契约 v0.4（新增：项目绑定目录/核心代理模型、目录浏览、派发 cwd 修复）
 
 **通用约定**（与 DESIGN.md §5.5 全局约定的子集一致）：
 
@@ -76,8 +76,10 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 | 方法 | 路径 | 说明 | 状态 |
 |------|------|------|------|
 | GET | `/api/health` | 健康检查 `{ok:true}` | S0 ✅ |
-| GET | `/api/projects` | 项目清单（全局注册表） | S0 ✅ |
-| POST | `/api/projects` | `{slug,name}` 创建；slug 冲突 409；创建即初始化独立账本 | S0 ✅ |
+| GET | `/api/projects` | 项目清单（含 working_dir、chief_provider/model） | S0→v0.4 扩 |
+| POST | `/api/projects` | `{slug,name,working_dir?,chief_provider?,chief_model?}`；**working_dir 必须存在且为目录（422）**；创建即初始化独立账本 | S0→v0.4 扩 |
+| PATCH | `/api/p/{slug}` | 更新 working_dir / chief_provider / chief_model（校验同上） | v0.4 |
+| GET | `/api/fs/dirs?path=` | 列出目录的子目录 `[{name,path}]`（本机单用户工具，供目录选择器；path 不存在 422） | v0.4 |
 | GET | `/api/p/{slug}` | 项目详情：`{slug,name,current_round,open_card}` | S0 ✅ |
 | GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks（含 status/版本号） | S0 ✅ |
 | POST | `/api/p/{slug}/domains` | `{title}` | S0 ✅ |
@@ -152,6 +154,7 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 ```
 
 5. **环境**：Windows 10 + Git Bash；Python 3.11；Node ≥ 22；pip/npm 可直连，GitHub 直连不通（需要时走镜像）；全部文件 UTF-8；中文文案。
+6. **测试派发最小化**：开发期验证派发链路一律用最小任务（如"只回复一个词：hello"），**禁止派发真实业务任务**——派发 cwd 未绑定目标仓库前，真实任务会写坏工作台仓库（2026-10-15 事故）。
 
 ---
 

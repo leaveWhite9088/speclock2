@@ -1,5 +1,6 @@
-"""修复单 17：核心代理建任务通道——tech-orders 带 task_id、master 名册校验、
-audit-all 只碰 reported、create_task→dispatch 全链（名册主代理 + 替身 harness）。"""
+"""修复单 17/19：核心代理建任务通道——tech-orders 带 task_id、master 名册校验、
+audit-all 只碰 reported、create_task→dispatch 全链（名册主代理 + 替身 harness）；
+修复单 19：dispatch 404 纠偏回路、create_task(prompt) 一步派发、路径纪律、agent/reset。"""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from speclock2 import models
@@ -14,6 +16,17 @@ from speclock2.utils import now_iso
 from tests.test_s2 import _setup_project
 
 CHIEF_TS = Path(__file__).parent.parent.parent / "chief" / "extension" / "index.ts"
+CHIEF_CONSTITUTION = Path(__file__).parent.parent.parent / "chief" / "constitution.md"
+
+
+@pytest.fixture()
+def mock_client(data_dir, monkeypatch):
+    monkeypatch.setenv("SPECLOCK2_CHIEF_MOCK", "1")
+    from speclock2.app import create_app
+
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
 
 
 def _fake_pi_session(tmp_path: Path, session_id: str = "pi-chief-flow") -> None:
@@ -44,6 +57,28 @@ def test_create_task_tool_exists_in_chief_ts():
     assert 'name: "create_task"' in src
     assert "/tech-orders" in src
     assert "task_id" in src  # 返回结果要带新任务号
+
+
+def test_chief_ts_404_guidance_and_one_step():
+    """源码级（修复单 19）：404 纠偏回路、一步派发共享链、路径纪律、宪法同步。"""
+    src = CHIEF_TS.read_text(encoding="utf-8")
+    # 1. dispatch 404 → 纠偏引导，不许裸抛
+    assert "err.status === 404" in src
+    assert "你不能编造任务号" in src
+    assert "不是通道故障" in src
+    # 2. create_task 带 prompt 一步派发：共享链被两个工具复用（无任务号交接）
+    assert src.count("runDispatchChain(") >= 3  # 定义 + dispatch + create_task
+    assert "Type.Optional" in src and "一步完成建单+派发+回执" in src
+    # 3. 路径纪律：宿主仓库绝对路径 → 拒绝并要求改写（不自动放行）
+    assert "promptHasHostPath" in src and "REPO_ROOT" in src
+    assert "改写成「在你的工作目录下创建" in src
+    # 4. 工具结果带解析出的工作目录（launch-plan cwd）
+    assert "工作目录：${plan.cwd}" in src
+    # 5. 宪法：一步建单 + 路径纪律 + 404 应对
+    c = CHIEF_CONSTITUTION.read_text(encoding="utf-8")
+    assert "一次 `create_task`" in c
+    assert "禁止出现宿主/工作台仓库的绝对路径" in c
+    assert "回合内重试" in c
 
 
 def test_tech_order_returns_task_id_and_validates_master(client, tmp_path):
@@ -138,3 +173,39 @@ def test_audit_all_only_touches_reported(client):
     with client.app.state.db.ledger_session("aa3") as s:
         for status, tid in ids.items():
             assert s.get(models.Task, tid).status == ("done" if status == "reported" else status)
+
+
+# ---------- 修复单 19：核心代理会话重建 ----------
+
+
+def test_agent_reset_archives_session_jsonl(mock_client):
+    """POST /agent/reset：stop 当前会话 + 归档 pi 会话 JSONL（加时间戳后缀）；
+    归档后 agent 状态 running=false，下次 ensure 同 session-id 全新启动。"""
+    _setup_project(mock_client, slug="rs")
+    # 伪造一个真实 chief 会话 JSONL（PiSession 命名：{时间戳}_speclock2-{slug}.jsonl）
+    sess_dir = mock_client.app.state.settings.data_dir / "pi-sessions"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    f = sess_dir / "20261015T120000Z_speclock2-rs.jsonl"
+    f.write_text('{"type":"session"}\n', encoding="utf-8")
+    assert mock_client.post("/api/p/rs/agent/start", json={}).status_code == 200
+    assert mock_client.get("/api/p/rs/agent").json()["running"] is True
+
+    r = mock_client.post("/api/p/rs/agent/reset")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["archived"].startswith("20261015T120000Z_speclock2-rs.archived-")
+    assert body["archived"].endswith(".jsonl")
+    assert not f.exists()  # 原文件已改名
+    assert len(list(sess_dir.glob("*_speclock2-rs.archived-*.jsonl"))) == 1
+    # 会话已停：下次 /agent 是 not running；ensure 会以同 session-id 全新启动
+    assert mock_client.get("/api/p/rs/agent").json()["running"] is False
+
+
+def test_agent_reset_without_session_or_file(mock_client):
+    """会话未启动、无 JSONL：reset 幂等成功，不报错、无 archived 字段。"""
+    _setup_project(mock_client, slug="rs2")
+    r = mock_client.post("/api/p/rs2/agent/reset")
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"ok": True}  # 可空字段省略（DESIGN §5.5 null 语义）

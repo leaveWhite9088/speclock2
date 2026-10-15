@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -222,3 +223,24 @@ async def agent_stop(slug: str, request: Request) -> dict:
     _project_or_404(request, slug)
     await request.app.state.pi.stop(slug)
     return {"running": False, "model": None, "session_id": f"speclock2-{slug}"}
+
+
+@router.post("/agent/reset")
+async def agent_reset(slug: str, request: Request) -> dict:
+    """核心代理会话重建（修复单 19，A1 会话可弃）：stop + 归档 pi 会话 JSONL。
+
+    被污染的长上下文会持续误导模型，账本才是 SSOT。归档 = 文件名加时间戳后缀
+    改名；下次 ensure 以同 session-id 启动时 resume 不到旧内容，即全新上下文。
+    """
+    _project_or_404(request, slug)
+    await request.app.state.pi.stop(slug)
+    session_dir = request.app.state.settings.data_dir / "pi-sessions"
+    archived: str | None = None
+    if session_dir.is_dir():
+        suffix = datetime.now().strftime("%Y%m%dT%H%M%S")
+        pattern = f"*_{pi_runtime.CHIEF_SESSION_PREFIX}{slug}.jsonl"
+        for f in sorted(session_dir.glob(pattern)):
+            target = f.with_name(f"{f.stem}.archived-{suffix}{f.suffix}")
+            f.rename(target)
+            archived = target.name
+    return {"ok": True, **({"archived": archived} if archived else {})}

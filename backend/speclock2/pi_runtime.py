@@ -21,6 +21,7 @@ from .config import Settings
 
 PROMPT_TIMEOUT = 600  # 单回合兜底超时（秒）：真模型多轮工具调用（含派发等待）耗时较长
 STATS_WARN_PERCENT = 80
+CHIEF_SESSION_PREFIX = "speclock2-"  # 核心代理 pi 会话 id 前缀（JSONL 归档定位用）
 
 
 # ---------- 分帧（纯函数，可单测） ----------
@@ -174,7 +175,7 @@ class PiSession(BaseSession):
                  pi_cmd: list[str] | None = None) -> None:
         super().__init__()
         self.slug = slug
-        self.session_id = f"speclock2-{slug}"
+        self.session_id = f"{CHIEF_SESSION_PREFIX}{slug}"
         self.settings = settings
         self.proc: asyncio.subprocess.Process | None = None
         self._next_id = 0

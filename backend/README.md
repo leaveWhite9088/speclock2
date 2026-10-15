@@ -66,7 +66,7 @@ PUT 草稿时 `rules` 与 `apis` 在落库前整体校验，任一条非法则�
 
 ## 核心代理接入（R-M2）
 
-架构（DESIGN.md §13）：`backend/speclock2/pi_runtime.py` 经 **pi RPC 模式**（stdin/stdout JSONL，严格 LF 二进制分帧，回合完成判据 `agent_settled`）驱动每项目一个常驻核心代理子进程；扩展 `chief/extension/index.ts`（jiti 加载）注册 `draft_card` / `dispatch` / `workbench_report` 三工具；宪法 `chief/constitution.md` 经 `--append-system-prompt` 注入。
+架构（DESIGN.md §13）：`backend/speclock2/pi_runtime.py` 经 **pi RPC 模式**（stdin/stdout JSONL，严格 LF 二进制分帧，回合完成判据 `agent_settled`）驱动每项目一个常驻核心代理子进程；扩展 `chief/extension/index.ts`（jiti 加载）注册 `draft_card` / `create_task` / `dispatch` / `workbench_report` 四工具（create_task 带 prompt 一步建单+派发；dispatch 404/skip 均给纠偏回路，修复单 17/19）；宪法 `chief/constitution.md` 经 `--append-system-prompt` 注入。
 
 ### 安装与配置
 
@@ -136,7 +136,8 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 在 v0.2 基础上新增：`GET /blocks/{id}/versions/{version}`（版本快照，`version=draft` 为当前草稿）、
 `POST /chat`、`GET /chat/stream`（SSE：message_delta / message_final / card_proposed / agent_error / ready）、
 `GET /agent`（含 context_usage_percent，>80 落 chief.context_warning 事件）、`POST /agent/start`（幂等）、
-`POST /agent/stop`；`receipt` 支持可选 `telemetry` 字段（时长/token，token_source: exact|estimated）。
+`POST /agent/stop`、`POST /agent/reset`（修复单 19：stop + 归档 pi 会话 JSONL（文件名加时间戳后缀），下次启动全新上下文，A1 会话可弃）；
+`receipt` 支持可选 `telemetry` 字段（时长/token，token_source: exact|estimated）。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

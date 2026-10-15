@@ -16,7 +16,13 @@ const API = process.env.SPECLOCK2_API_BASE || "http://127.0.0.1:8000";
 const SLUG = process.env.SPECLOCK2_SLUG || "";
 const REPO_ROOT = process.env.SPECLOCK2_REPO_ROOT || process.cwd();
 
-/** 调工作台 REST；非 2xx 抛错（工具结果向模型暴露失败原因）。 */
+/** 调工作台 REST；非 2xx 抛 ApiError（带状态码，工具按码给纠偏回路）。 */
+class ApiError extends Error {
+	constructor(method: string, path: string, readonly status: number, body: unknown) {
+		super(`${method} ${path} -> ${status}: ${JSON.stringify(body)}`);
+	}
+}
+
 async function api(method: string, path: string, body?: unknown): Promise<any> {
 	const res = await fetch(`${API}/api/p/${SLUG}${path}`, {
 		method,
@@ -25,9 +31,135 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
 	});
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
-		throw new Error(`${method} ${path} -> ${res.status}: ${JSON.stringify(data)}`);
+		throw new ApiError(method, path, res.status, data);
 	}
 	return data;
+}
+
+/** 路径纪律（修复单 19）：任务说明出现宿主/工作台仓库绝对路径 → 拒绝执行。
+ *  主代理的领地由工作台按名册解析（--cwd），说明里写绝对路径会把产物写进工作台仓库。 */
+function promptHasHostPath(prompt: string): boolean {
+	const root = REPO_ROOT.replace(/[\\/]+$/, "");
+	return root.length > 3 && prompt.toLowerCase().includes(root.toLowerCase());
+}
+
+function hostPathRejection(prompt: string) {
+	return {
+		content: [{
+			type: "text",
+			text: `任务说明里出现了工作台仓库的绝对路径（${REPO_ROOT}）。` +
+				`主代理只能写自己的工作目录。请把路径改写成「在你的工作目录下创建 …」的说法后重新提交；本次未执行。`,
+		}],
+		details: { outcome: "prompt_rejected", reason: "host_path_in_prompt" },
+	};
+}
+
+/** 派发链共享体（修复单 19）：dispatch 工具与 create_task(prompt) 一步派发共用——
+ *  状态机推进 → launch-plan → spawn+逐行解析 → 回执。返回工具结果对象。 */
+async function runDispatchChain(taskId: string, prompt: string, watchdogMinutes: number) {
+	// 1. 状态机推进 + 看门狗；非 queued 任务返回 skipped：不 spawn、无副作用
+	const dispatchRes = await api("POST", `/tasks/${taskId}/dispatch`, { watchdog_minutes: watchdogMinutes });
+	if (dispatchRes.skipped) {
+		const st = dispatchRes.task?.status ?? "unknown";
+		return {
+			content: [{ type: "text", text: `任务 ${taskId} 状态为 ${st}，不可派发（只有 queued 能派发）。请新建任务（create_task）后用新任务号重试；这是状态机跳过，不是通道故障，不要上报「通道不可用」。` }],
+			details: { outcome: "skipped", state: st },
+		};
+	}
+
+	// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续，
+	//    与 mock 执行器同一事实源）；这里只负责 spawn + 监控
+	const plan = await api("POST", `/tasks/${taskId}/launch-plan`, { prompt });
+	const argv: string[] = plan.argv ?? [];
+	const isCmd = !!plan.wrap_cmd;
+	const finalArgv = isCmd ? ["cmd", "/c", plan.command, ...argv] : argv;
+	const command = isCmd ? "cmd" : plan.command;
+
+	// 3. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
+	//    过程输出每 2s 节流上报工作台（output_tail + SSE master_output）
+	const started = Date.now();
+	const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
+		const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+		let buffer = "";
+		let text = "";
+		let usage: any = null;
+		let stderrTail = "";
+		let allOutput = "";      // 全量 stdout（增量计算用）
+		let reportedLen = 0;     // 已上报的字符数
+		let lastOutputPost = 0;
+		const postOutput = (force: boolean) => {
+			if (allOutput.length <= reportedLen) return;
+			const now = Date.now();
+			if (!force && now - lastOutputPost < 2000) return;
+			const increment = allOutput.slice(reportedLen);
+			reportedLen = allOutput.length;
+			lastOutputPost = now;
+			// 上报失败静默忽略：过程输出是尽力而为，不影响派发主链
+			api("POST", `/tasks/${taskId}/output`, { text: increment }).catch(() => {});
+		};
+		const processLine = (line: string) => {
+			if (!line.trim()) return;
+			let event: any;
+			try {
+				event = JSON.parse(line);
+			} catch {
+				return;
+			}
+			if (event.type === "message_end" && event.message?.role === "assistant") {
+				text = (event.message.content ?? [])
+					.filter((b: any) => b.type === "text")
+					.map((b: any) => b.text)
+					.join("");
+				usage = event.message.usage ?? usage;
+			}
+		};
+		proc.stdout.on("data", (data: Buffer) => {
+			const chunk = data.toString("utf-8");
+			allOutput += chunk;
+			buffer += chunk;
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+			for (const line of lines) processLine(line);
+			postOutput(false);
+		});
+		proc.stderr.on("data", (data: Buffer) => {
+			stderrTail = (stderrTail + data.toString("utf-8")).slice(-500); // 尾部诊断
+		});
+		proc.on("close", (code) => {
+			if (buffer.trim()) processLine(buffer);
+			postOutput(true); // 收尾补一发增量，之后停播
+			resolve({ exitCode: code ?? 1, text, usage, stderrTail });
+		});
+		proc.on("error", (err) => {
+			resolve({ exitCode: 1, text, usage, stderrTail: String(err) });
+		});
+	});
+
+	if (result.exitCode !== 0) {
+		return {
+			content: [{ type: "text", text: `任务 ${taskId} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}，未回执，等待看门狗标记 timeout（工作目录：${plan.cwd}）` }],
+			details: { outcome: "crashed", exit_code: result.exitCode, stderr: result.stderrTail, cwd: plan.cwd },
+		};
+	}
+
+	// 4. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
+	const files = (result.text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+	const receipt = await api("POST", `/tasks/${taskId}/receipt`, {
+		files_changed: files,
+		self_check: `主代理进程退出码 0`,
+		summary: result.text.slice(0, 200),
+		telemetry: {
+			duration_ms: Date.now() - started,
+			tokens: result.usage
+				? { input: result.usage.input, output: result.usage.output }
+				: null,
+			token_source: result.usage ? "exact" : "estimated",
+		},
+	});
+	return {
+		content: [{ type: "text", text: `任务 ${taskId} 完成：${files.length} 个文件改动，已回执（${receipt.status}）。工作目录：${plan.cwd}` }],
+		details: { outcome: "reported", files_changed: files, cwd: plan.cwd },
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -99,40 +231,52 @@ export default function (pi: ExtensionAPI) {
 		}),
 	);
 
-	/** 新建任务（修复单 17）：用户直达请求（叫某主代理做 X）的合法入口——
-	 *  先建技术任务单拿到新任务号，再 dispatch；禁止复用历史任务号。 */
+	/** 新建任务（修复单 17/19）：用户直达请求（叫某主代理做 X）的合法入口。
+	 *  带 prompt 时一步完成建单+派发+回执——消灭「拿任务号调另一个工具」的交接
+	 *  （17:50 故障的失败点正是模型在交接环节编造了任务号）。 */
 	pi.registerTool(
 		defineTool({
 			name: "create_task",
 			label: "新建任务",
 			description:
 				"给主代理新建任务（技术任务单通道）：登记意图/范围/验收，生成 queued 任务。" +
-				"用户说「叫某主代理做某事」时先调用本工具，再用返回的 task_id 调 dispatch。" +
-				"禁止复用历史任务号——已终态的任务再派发只会被跳过。",
+				"用户说「叫某主代理做某事」时调用本工具并带上 prompt 参数，一步完成建单与派发。" +
+				"不传 prompt 时只建单，需再用 dispatch 派发返回的 task_id。" +
+				"禁止复用或编造任务号——已终态的任务再派发只会被跳过，不存在的任务号必 404。",
 			promptGuidelines: [
-				"新建任务必须用 create_task，从返回结果拿新 task_id，禁止拿历史任务号去 dispatch。",
+				"直达请求一律 create_task(intent, master, prompt) 一步完成，不要先建单再拿任务号调 dispatch。",
 				"master 必须用主代理名册里的名字；名字不对会报错并列出可用名单。",
+				"prompt 里禁止出现工作台仓库的绝对路径，只写「在你的工作目录下创建 …」。",
 			],
 			parameters: Type.Object({
 				intent: Type.String({ description: "为什么动（一句话，动词开头）" }),
 				scope: Type.Array(Type.String(), { description: "范围声明，如 [\"backend/\"]" }),
 				acceptance: Type.Array(Type.String(), { default: [], description: "验收标准列表" }),
 				master: Type.String({ description: "执行的主代理名（名册里的名字）" }),
+				prompt: Type.Optional(Type.String({
+					description: "给主代理的任务说明（实现范围与完成标准）；提供即一步完成建单+派发+回执",
+				})),
 			}),
 			async execute(_toolCallId, p) {
+				if (p.prompt && promptHasHostPath(p.prompt)) return hostPathRejection(p.prompt);
 				const order = await api("POST", "/tech-orders", {
 					intent: p.intent,
 					scope: p.scope ?? [],
 					acceptance: p.acceptance ?? [],
 					master: p.master,
 				});
+				const created = `已建任务 ${order.task_id}（单 ${order.order_id}，包 ${order.package_id}）`;
+				if (!p.prompt || !p.prompt.trim()) {
+					return {
+						content: [{ type: "text", text: `${created}，状态 queued。下一步用 dispatch 派发任务号 ${order.task_id}。` }],
+						details: order,
+					};
+				}
+				// 一步派发：同一套 spawn+解析+回执链（runDispatchChain），无任务号交接
+				const result = await runDispatchChain(order.task_id, p.prompt, 60);
 				return {
-					content: [{
-						type: "text",
-						text: `已建任务 ${order.task_id}（单 ${order.order_id}，包 ${order.package_id}，状态 queued）。` +
-							`下一步用 dispatch 派发任务号 ${order.task_id}。`,
-					}],
-					details: order,
+					content: [{ type: "text", text: `${created}并直接派发。${(result.content as any[])[0].text}` }],
+					details: { order, dispatch: result.details },
 				};
 			},
 		}),
@@ -145,10 +289,12 @@ export default function (pi: ExtensionAPI) {
 			label: "派发任务",
 			description:
 				"把任务派发给主代理：启动其 harness 真实进程执行任务说明，监控完成并上报回执。" +
-				"批准卡片后收到派发通知时使用本工具。",
+				"只用于已有真实任务号的任务（批准卡片后的派发通知、create_task 不带 prompt 时返回的 task_id）。" +
+				"用户直达请求不要走本工具——直接用 create_task 带 prompt 一步完成。",
 			promptGuidelines: [
 				"派发任务必须使用 dispatch 工具，不要在回复里描述派发细节代替执行。",
-				"prompt 参数写清任务说明：实现范围（版本参照）+ 完成标准 + 回执要求。",
+				"task_id 必须来自 create_task 返回值或系统通知，禁止编造；404 就改用 create_task 建真任务。",
+				"prompt 参数写清任务说明：实现范围（版本参照）+ 完成标准 + 回执要求；禁止出现工作台仓库绝对路径。",
 			],
 			parameters: Type.Object({
 				task_id: Type.String({ description: "任务 id，如 T-0001" }),
@@ -156,111 +302,21 @@ export default function (pi: ExtensionAPI) {
 				watchdog_minutes: Type.Number({ default: 60, description: "看门狗超时（分钟）" }),
 			}),
 			async execute(_toolCallId, p) {
-				// 1. 状态机推进 + 看门狗（模型可能不传 watchdog_minutes，显式兜底）；
-				//    非 queued 任务返回 skipped：不 spawn、无副作用，如实告知模型即可
-				const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
-				const dispatchRes = await api("POST", `/tasks/${p.task_id}/dispatch`, { watchdog_minutes: watchdogMinutes });
-				if (dispatchRes.skipped) {
-					const st = dispatchRes.task?.status ?? "unknown";
-					return {
-						content: [{ type: "text", text: `任务 ${p.task_id} 状态为 ${st}，不可派发（只有 queued 能派发）。请新建任务（create_task）后用新任务号重试；这是状态机跳过，不是通道故障，不要上报「通道不可用」。` }],
-						details: { outcome: "skipped", state: st },
-					};
+				if (promptHasHostPath(p.prompt)) return hostPathRejection(p.prompt);
+				// 修复单 19：失败必须给纠偏回路，不许裸抛——404 说明任务号是编的，
+				// 同一回合内引导 create_task 重试，而不是让模型去写故障报告
+				try {
+					const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
+					return await runDispatchChain(p.task_id, p.prompt, watchdogMinutes);
+				} catch (err) {
+					if (err instanceof ApiError && err.status === 404) {
+						return {
+							content: [{ type: "text", text: `任务 ${p.task_id} 不存在——你不能编造任务号。请立即调用 create_task（带 intent、master、prompt），用它返回的真实任务号继续；这是当前回合内的重试，不是通道故障。` }],
+							details: { outcome: "not_found" },
+						};
+					}
+					throw err;
 				}
-
-				// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续，
-				//    与 mock 执行器同一事实源）；这里只负责 spawn + 监控
-				const plan = await api("POST", `/tasks/${p.task_id}/launch-plan`, { prompt: p.prompt });
-				const argv: string[] = plan.argv ?? [];
-				const isCmd = !!plan.wrap_cmd;
-				const finalArgv = isCmd ? ["cmd", "/c", plan.command, ...argv] : argv;
-				const command = isCmd ? "cmd" : plan.command;
-
-				// 3. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
-				//    过程输出每 2s 节流上报工作台（output_tail + SSE master_output）
-				const started = Date.now();
-				const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
-					const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
-					let buffer = "";
-					let text = "";
-					let usage: any = null;
-					let stderrTail = "";
-					let allOutput = "";      // 全量 stdout（增量计算用）
-					let reportedLen = 0;     // 已上报的字符数
-					let lastOutputPost = 0;
-					const postOutput = (force: boolean) => {
-						if (allOutput.length <= reportedLen) return;
-						const now = Date.now();
-						if (!force && now - lastOutputPost < 2000) return;
-						const increment = allOutput.slice(reportedLen);
-						reportedLen = allOutput.length;
-						lastOutputPost = now;
-						// 上报失败静默忽略：过程输出是尽力而为，不影响派发主链
-						api("POST", `/tasks/${p.task_id}/output`, { text: increment }).catch(() => {});
-					};
-					const processLine = (line: string) => {
-						if (!line.trim()) return;
-						let event: any;
-						try {
-							event = JSON.parse(line);
-						} catch {
-							return;
-						}
-						if (event.type === "message_end" && event.message?.role === "assistant") {
-							text = (event.message.content ?? [])
-								.filter((b: any) => b.type === "text")
-								.map((b: any) => b.text)
-								.join("");
-							usage = event.message.usage ?? usage;
-						}
-					};
-					proc.stdout.on("data", (data: Buffer) => {
-						const chunk = data.toString("utf-8");
-						allOutput += chunk;
-						buffer += chunk;
-						const lines = buffer.split("\n");
-						buffer = lines.pop() ?? "";
-						for (const line of lines) processLine(line);
-						postOutput(false);
-					});
-					proc.stderr.on("data", (data: Buffer) => {
-						stderrTail = (stderrTail + data.toString("utf-8")).slice(-500); // 尾部诊断
-					});
-					proc.on("close", (code) => {
-						if (buffer.trim()) processLine(buffer);
-						postOutput(true); // 收尾补一发增量，之后停播
-						resolve({ exitCode: code ?? 1, text, usage, stderrTail });
-					});
-					proc.on("error", (err) => {
-						resolve({ exitCode: 1, text, usage, stderrTail: String(err) });
-					});
-				});
-
-				if (result.exitCode !== 0) {
-					return {
-						content: [{ type: "text", text: `任务 ${p.task_id} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}，未回执，等待看门狗标记 timeout` }],
-						details: { outcome: "crashed", exit_code: result.exitCode, stderr: result.stderrTail },
-					};
-				}
-
-				// 4. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
-				const files = (result.text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
-				const receipt = await api("POST", `/tasks/${p.task_id}/receipt`, {
-					files_changed: files,
-					self_check: `主代理进程退出码 0`,
-					summary: result.text.slice(0, 200),
-					telemetry: {
-						duration_ms: Date.now() - started,
-						tokens: result.usage
-							? { input: result.usage.input, output: result.usage.output }
-							: null,
-						token_source: result.usage ? "exact" : "estimated",
-					},
-				});
-				return {
-					content: [{ type: "text", text: `任务 ${p.task_id} 完成：${files.length} 个文件改动，已回执（${receipt.status}）` }],
-					details: { outcome: "reported", files_changed: files },
-				};
 			},
 		}),
 	);

@@ -7,8 +7,9 @@ import ModalShell from './ModalShell.vue'
 
 /**
  * 新建 / 编辑项目（契约 v0.4）：slug、名称、项目目录（粘贴或经 /api/fs/dirs
- * 浏览）、核心代理 LLM（选项 = 模型登记 + 默认跟随全局）。新建走 POST
- * /api/projects，编辑走 PATCH /api/p/{slug}（只提交改动过的字段）。
+ * 浏览）、核心代理 LLM。核心代理永远由 pi 承载：选项只列 harness=pi 的登记
+ * 条目（提交 provider+model，harness 名不是供应商）；「默认」= 跟随全局。
+ * 新建走 POST /api/projects，编辑走 PATCH /api/p/{slug}（只提交改动过的字段）。
  */
 const props = defineProps<{
   client: ApiClient | null
@@ -20,7 +21,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'created', slug: string): void
-  (e: 'saved'): void
+  /** chiefPick = 保存后的核心代理模型（null = 未改动；provider/model 为 null = 改成跟随默认） */
+  (e: 'saved', chiefPick?: { provider: string | null; model: string | null } | null): void
 }>()
 
 const SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -38,14 +40,19 @@ const submitError = ref('')
 /** 后端没有 /api/fs/dirs（契约 v0.4 未上线）时降级：只粘贴，不拦截提交 */
 const fsUnavailable = ref(false)
 
+/** 核心代理承载条目：harness 必须是 pi（provider 才是供应商名）；回显按 provider+model 匹配 */
+const piEntries = computed(() => props.modelEntries.filter((e) => e.harness === 'pi' && e.provider))
+
 if (props.mode === 'edit' && props.project?.chief_provider && props.project.chief_model) {
-  const hit = props.modelEntries.find((e) => e.harness === props.project?.chief_provider && e.model === props.project?.chief_model)
-  if (!hit) llmPick.value = '__current'
+  const hit = piEntries.value.find(
+    (e) => e.provider === props.project?.chief_provider && e.model === props.project?.chief_model,
+  )
+  llmPick.value = hit ? hit.id : '__current'
 }
 
-/** LLM 下拉：默认 + 登记条目（编辑时原值不在登记里则补一项「当前」） */
+/** LLM 下拉：默认 + pi 条目（标签 provider · model；编辑时原值不在登记里则补一项「当前」） */
 const llmOptions = computed(() => {
-  const list = props.modelEntries.map((e) => ({ value: e.id, label: `${e.harness} · ${e.model}` }))
+  const list = piEntries.value.map((e) => ({ value: e.id, label: `${e.provider} · ${e.model}` }))
   if (llmPick.value === '__current') {
     list.unshift({ value: '__current', label: `当前（${props.project?.chief_provider}/${props.project?.chief_model}）` })
   }
@@ -150,8 +157,8 @@ async function submit(): Promise<void> {
         ...(workDir.value.trim() ? { working_dir: workDir.value.trim() } : {}),
       }
       const picked = entryById(llmPick.value)
-      if (picked) {
-        body.chief_provider = picked.harness
+      if (picked?.provider) {
+        body.chief_provider = picked.provider
         body.chief_model = picked.model
       }
       await props.client.createProject(body)
@@ -161,15 +168,19 @@ async function submit(): Promise<void> {
       const origDir = props.project?.working_dir ?? null
       const newDir = workDir.value.trim() || null
       if (newDir !== origDir) body.working_dir = newDir
+      let chiefPick: { provider: string | null; model: string | null } | null = null
       if (llmPick.value !== '__current') {
         const picked = entryById(llmPick.value)
-        const newProvider = picked?.harness ?? null
+        const newProvider = picked?.provider ?? null
         const newModel = picked?.model ?? null
-        if (newProvider !== (props.project?.chief_provider ?? null)) body.chief_provider = newProvider
-        if (newModel !== (props.project?.chief_model ?? null)) body.chief_model = newModel
+        if (newProvider !== (props.project?.chief_provider ?? null) || newModel !== (props.project?.chief_model ?? null)) {
+          if (newProvider !== (props.project?.chief_provider ?? null)) body.chief_provider = newProvider
+          if (newModel !== (props.project?.chief_model ?? null)) body.chief_model = newModel
+          chiefPick = { provider: newProvider, model: newModel }
+        }
       }
       if (Object.keys(body).length > 0) await props.client.patchProject(props.project!.slug, body)
-      emit('saved')
+      emit('saved', chiefPick)
     }
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : String(err)
@@ -249,6 +260,10 @@ async function submit(): Promise<void> {
           <option v-for="o in llmOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
       </label>
+      <p v-if="piEntries.length === 0" class="pform__hint">
+        登记里暂无 pi 承载的条目——到右上角「模型」登记一条 Harness=pi、provider
+        填供应商名（如 minimax-cn）的，即可在这里指定核心代理模型。
+      </p>
 
       <p v-if="submitError" class="pform__error">{{ submitError }}</p>
 

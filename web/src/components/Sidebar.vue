@@ -42,7 +42,7 @@ const emit = defineEmits<{
   (e: 'select-session', target: SessionTarget): void
   (e: 'masters-changed'): void
   (e: 'start-agent'): void
-  (e: 'projects-changed', createdSlug?: string): void
+  (e: 'projects-changed', createdSlug?: string, chiefPick?: { provider: string | null; model: string | null } | null): void
   (e: 'master-edit-done'): void
   (e: 'stop-chief'): void
 }>()
@@ -565,9 +565,9 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
         }
       "
       @saved="
-        () => {
+        (pick) => {
           projectModal = null
-          emit('projects-changed')
+          emit('projects-changed', undefined, pick)
         }
       "
     />

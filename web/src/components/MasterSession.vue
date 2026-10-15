@@ -28,14 +28,19 @@ const termEl = ref<HTMLElement | null>(null)
 const myTasks = computed(() =>
   props.packages
     .flatMap((pkg) => pkg.tasks.map((t) => ({ pkg, task: t })))
-    .filter(({ task }) => task.master === props.master.id || (task.master === null && props.master.id === 'frontend'))
+    .filter(
+      ({ task }) =>
+        task.master === props.master.id ||
+        task.master === props.master.name || // live 名册校验按名称派发（tasks.master = 主代理名）
+        (task.master === null && props.master.id === 'frontend'),
+    )
     .slice(0, 8),
 )
 
-/** 在跑（或本会话有直播输出）的任务：终端风逐个展示输出尾部 */
+/** 在跑（或本会话有直播输出）的任务：终端风逐个展示输出尾部（timeout 已死，不再等输出） */
 const liveTasks = computed(() =>
   myTasks.value.filter(({ task }) => {
-    const busy = ['dispatched', 'running', 'timeout'].includes(task.status)
+    const busy = ['dispatched', 'running'].includes(task.status)
     return busy || (props.liveOutputs[task.task_id]?.length ?? 0) > 0
   }),
 )
@@ -170,11 +175,11 @@ watch(
         <section class="msession__sec">
           <h6 class="msession__sec-title">过程流</h6>
           <p v-if="activity.length === 0" class="msession__empty">
-            暂无过程记录（真实遥测 R-M2 接入；mock 模式下从「队列」一键开始即可看到模拟过程）。
+            暂无派发记录（派发任务并产出回执后，这里显示任务时间线、回执摘要与输出尾部）。
           </p>
-          <ul ref="el" class="msession__feed">
+          <ul v-else ref="el" class="msession__feed">
             <li v-for="item in activity" :key="item.id" class="act" :class="`act--${item.kind}`">
-              <span class="act__ts">{{ item.ts.slice(11, 19) }}</span>
+              <span v-if="item.ts" class="act__ts">{{ item.ts.slice(11, 19) }}</span>
               <span v-if="item.kind === 'thinking'" class="act__text act__text--dim">⏻ {{ item.text }}</span>
               <span v-else-if="item.kind === 'tool'" class="act__text">
                 <span class="act__tool">{{ item.text }}</span>

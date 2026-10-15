@@ -5,9 +5,9 @@ import type { ModelPick } from '../types'
 import { findChiefEntry } from '../types'
 
 /**
- * 核心代理模型选择列表（/model 命令弹层与右上角弹层共用）：只列 provider
- * 非空的登记条目（切换传 {provider, model}，harness 不是 provider——
- * harness 专属条目只用于主代理绑定）；当前生效模型高亮；「默认」=
+ * 核心代理模型选择列表（/model 命令弹层与右上角弹层共用）：核心代理永远由
+ * pi 承载，只列 harness=pi 的登记条目（标签 provider · model；mcode 等条目
+ * 是主代理绑定用的，出现在这里切了也切不动）；当前生效模型高亮；「默认」=
  * 跟随项目配置；次级入口管理登记。
  */
 const props = defineProps<{
@@ -22,11 +22,11 @@ const emit = defineEmits<{
   (e: 'manage'): void
 }>()
 
-/** 可切换条目：provider 非空（harness 专属条目不能当 provider 传） */
-const chiefEntries = computed(() => props.entries.filter((e) => e.provider))
+/** 可切换条目：pi 承载（provider 为供应商名，切换传 {provider, model}） */
+const chiefEntries = computed(() => props.entries.filter((e) => e.harness === 'pi' && e.provider))
 
-/** 当前生效模型对应的登记条目（高亮用；provider/model 全串或 model 段匹配） */
-const currentEntry = computed(() => findChiefEntry(props.currentModel, props.entries))
+/** 当前生效模型对应的条目（在可切换列表内高亮；provider/model 全串或 model 段匹配） */
+const currentEntry = computed(() => findChiefEntry(props.currentModel, chiefEntries.value))
 </script>
 
 <template>
@@ -47,11 +47,12 @@ const currentEntry = computed(() => findChiefEntry(props.currentModel, props.ent
       :class="{ 'is-current': e === currentEntry }"
       @click="emit('pick', { kind: 'entry', provider: e.provider!, model: e.model })"
     >
-      <span class="mmenu__name">{{ e.harness }} · {{ e.model }}</span>
+      <span class="mmenu__name">{{ e.provider }} · {{ e.model }}</span>
       <span v-if="e === currentEntry" class="mmenu__cur">当前</span>
     </button>
     <p v-if="chiefEntries.length === 0" class="mmenu__empty">
-      登记里暂无带 provider 的条目——在「管理登记」里补上 provider 后即可切换。
+      登记里暂无 pi 承载的条目——在「管理登记」里登记 Harness=pi、provider
+      为供应商名的条目后即可切换。
     </p>
     <footer class="mmenu__foot">
       <button type="button" class="mmenu__manage" @click="emit('manage')">管理登记 →</button>

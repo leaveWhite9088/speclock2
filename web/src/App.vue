@@ -19,7 +19,8 @@ import {
   getMockActivity,
   isMockQueueRunning,
 } from './api/mock'
-import type { ChatBubble, DrawerKey, FeedRound, ModelPick, SessionTarget } from './types'
+import type { ActivityItem, ChatBubble, DrawerKey, FeedRound, ModelPick, SessionTarget } from './types'
+import { TASK_STATUS_LABELS } from './types'
 import { ApiError } from './api/client'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
@@ -432,6 +433,13 @@ async function refreshProjectStats(): Promise<void> {
 /** 核心代理行徽标：待批准卡片数 */
 const corePending = computed(() => feed.value.flatMap((fr) => fr.cards).filter((c) => c.status === 'pending').length)
 
+/** tasks.master 的值：live 按名册校验存主代理名称，mock 存 id——统一折算成主代理 id */
+function taskMasterId(tMaster: string | null): string | null {
+  if (tMaster == null) return null
+  if (masters.value.some((m) => m.id === tMaster)) return tMaster
+  return masters.value.find((m) => m.name === tMaster)?.id ?? tMaster
+}
+
 /** 主代理状态（完整显示：执行中/排队/待审计/超时，带任务号） */
 interface MasterState {
   label: string
@@ -442,15 +450,16 @@ const masterStates = computed<Record<string, MasterState>>(() => {
   const states: Record<string, MasterState> = {}
   for (const pkg of packages.value) {
     for (const t of pkg.tasks) {
-      if (!t.master) continue
-      const cur = states[t.master]
+      const mid = taskMasterId(t.master)
+      if (!mid) continue
+      const cur = states[mid]
       const rank = (s: MasterState['kind']) => ({ timeout: 0, running: 1, queued: 2, auditing: 3 })[s]
       let next: MasterState | null = null
       if (t.status === 'timeout') next = { label: `超时 · ${t.task_id}`, kind: 'timeout' }
       else if (t.status === 'dispatched' || t.status === 'running') next = { label: `执行中 · ${t.task_id}`, kind: 'running' }
       else if (t.status === 'queued') next = { label: `排队中 · ${t.task_id}`, kind: 'queued' }
       else if (t.status === 'reported' || t.status === 'auditing') next = { label: `待审计 · ${t.task_id}`, kind: 'auditing' }
-      if (next && (!cur || rank(next.kind) < rank(cur.kind))) states[t.master] = next
+      if (next && (!cur || rank(next.kind) < rank(cur.kind))) states[mid] = next
     }
   }
   return states
@@ -461,10 +470,11 @@ const masterTelemetry = computed<Record<string, { ms: number; tokens: number } |
   const out: Record<string, { ms: number; tokens: number } | null> = {}
   for (const pkg of packages.value) {
     for (const t of pkg.tasks) {
-      if (!t.master) continue
-      if (out[t.master]) continue
+      const mid = taskMasterId(t.master)
+      if (!mid) continue
+      if (out[mid]) continue
       if (t.duration_ms != null || t.tokens != null) {
-        out[t.master] = { ms: t.duration_ms ?? 0, tokens: t.tokens ?? 0 }
+        out[mid] = { ms: t.duration_ms ?? 0, tokens: t.tokens ?? 0 }
       }
     }
   }
@@ -484,9 +494,41 @@ const activeMaster = computed<MasterInfo | null>(() => {
   return masters.value.find((m) => m.id === target.masterId) ?? null
 })
 
-const masterActivity = computed(() => {
+/** live 主代理过程流：任务时间线（任务号/状态/回执/FILES）+ 输出尾部 + SSE 直播行合并 */
+const liveMasterActivity = computed<ActivityItem[]>(() => {
   const target = session.value
   if (target.kind !== 'master') return []
+  const rows = packages.value
+    .flatMap((pkg) => pkg.tasks.map((t) => ({ pkg, t })))
+    .filter(({ t }) => taskMasterId(t.master) === target.masterId)
+    .sort((a, b) => taskNo(a.t) - taskNo(b.t)) // 时间正序：自动滚底后最新在下
+  const out: ActivityItem[] = []
+  for (const { t } of rows) {
+    out.push({ id: `${t.task_id}:head`, ts: '', kind: 'message', text: `${t.task_id} · ${TASK_STATUS_LABELS[t.status]}` })
+    if (t.receipt) {
+      out.push({ id: `${t.task_id}:rcpt`, ts: '', kind: 'note', text: `回执：${t.receipt.summary}` })
+      if (t.receipt.files_changed.length > 0) {
+        out.push({ id: `${t.task_id}:files`, ts: '', kind: 'edit', text: 'FILES', meta: t.receipt.files_changed.join(' ') })
+      }
+    }
+    const tail = (t.output_tail ?? '').split('\n').filter((l) => l.trim()).slice(-30)
+    tail.forEach((line, i) => out.push({ id: `${t.task_id}:tail${i}`, ts: '', kind: 'message', text: line }))
+    ;(masterLive.value[t.task_id] ?? []).forEach((line, i) =>
+      out.push({ id: `${t.task_id}:live${i}`, ts: '', kind: 'message', text: line }),
+    )
+  }
+  return out
+})
+
+/** 任务号里的数字（T-0005 → 5），跨包排序用 */
+function taskNo(t: { task_id: string }): number {
+  return Number(t.task_id.replace(/\D/g, '')) || 0
+}
+
+const masterActivity = computed<ActivityItem[]>(() => {
+  const target = session.value
+  if (target.kind !== 'master') return []
+  if (mode.value !== 'mock') return liveMasterActivity.value
   return getMockActivity()[target.masterId] ?? []
 })
 
@@ -615,8 +657,12 @@ async function reloadMasters(): Promise<void> {
   }
 }
 
-/** 项目列表变化（新建/设置保存/删除）：刷新列表；新建的项目直接选中；当前项目被删则切到第一个 */
-async function onProjectsChanged(createdSlug?: string): Promise<void> {
+/** 项目列表变化（新建/设置保存/删除）：刷新列表；新建的项目直接选中；当前项目被删则切到第一个。
+ *  chiefPick = 项目设置保存后的核心代理模型（修复单 18）：运行中直接热切换，别让顶栏纹丝不动。 */
+async function onProjectsChanged(
+  createdSlug?: string,
+  chiefPick?: { provider: string | null; model: string | null } | null,
+): Promise<void> {
   if (!client.value) return
   try {
     projects.value = (await client.value.listProjects()).items
@@ -631,6 +677,13 @@ async function onProjectsChanged(createdSlug?: string): Promise<void> {
     await selectProject(projects.value[0]?.slug ?? '')
   } else {
     void refreshProjectStats()
+  }
+  if (chiefPick && currentSlug.value && agent.value?.running) {
+    if (chiefPick.provider && chiefPick.model) {
+      await switchChiefModel(chiefPick)
+    } else {
+      pushChat('system', '项目 LLM 已保存为跟随默认；当前会话模型不变，重启核心代理后生效。')
+    }
   }
 }
 

@@ -253,6 +253,8 @@ export interface Task {
   status: TaskStatus
   watchdog_deadline: string | null
   receipt: TaskReceipt | null
+  /** 被派发进程的过程输出尾部（≤4KB 滚动保留，task_out 已输出） */
+  output_tail?: string | null
   /** 过程遥测（DESIGN §13.5：派发→回执的耗时与 token 消耗；token 为估算，R-M2 接真实数据） */
   duration_ms?: number | null
   tokens?: number | null
@@ -682,7 +684,8 @@ export function createApiClient(): ApiClient {
       request<Project>(p(slug), { method: 'PATCH', body: JSON.stringify(body) }),
     listFsDirs: (path) =>
       request<{ items: FsDirEntry[] }>(`/api/fs/dirs?path=${encodeURIComponent(path)}`),
-    deleteProject: (slug) => request<void>(p(slug), { method: 'DELETE' }),
+    // 删除只注册在 /api/projects/{slug}（/api/p/{slug} 仅 GET/PATCH，走错路径 FastAPI 回 405）
+    deleteProject: (slug) => request<void>(`/api/projects/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
     updateMaster: (slug, id, body) =>
       request<MasterInfo>(`${p(slug)}/masters/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteMaster: (slug, id) => request<void>(`${p(slug)}/masters/${id}`, { method: 'DELETE' }),

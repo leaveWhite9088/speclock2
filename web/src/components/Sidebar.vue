@@ -491,12 +491,15 @@ function avatarText(name: string): string {
 
 .amaster {
   display: grid;
+  /* minmax(0,1fr)：列可收缩到容器宽——select 的固有宽（最长选项文本，
+     如 CLI 会话长标题）不许把表单撑出弹窗 */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
 }
 
 .amaster__grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sp-3);
 }
 
@@ -508,6 +511,7 @@ function avatarText(name: string): string {
 }
 
 .amaster__input {
+  width: 100%;
   font: inherit;
   font-size: var(--fs-13);
   padding: 5px 8px;

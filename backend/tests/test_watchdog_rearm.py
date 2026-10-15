@@ -94,6 +94,5 @@ def test_rearm_clean_directory_is_noop(client):
     _setup_project(client)
     from speclock2.routers.queue import rearm_watchdogs
 
-    stats = rearm_watchdogs(client.app.state.db, client.app.state.timers,
-                            client.app.state.settings.ledgers_dir)
+    stats = rearm_watchdogs(client.app, client.app.state.settings.ledgers_dir)
     assert stats == {"zombies": 0, "rearmed": 0, "timed_out": 0}

@@ -171,7 +171,7 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
             return {"task_id": task_id, "outcome": "skipped",
                     "reason": f"task in state {task.status}"}
 
-    dispatch_service(db, app.state.timers, slug, task_id, watchdog_minutes)
+    dispatch_service(app, slug, task_id, watchdog_minutes)
     command, argv = plan["command"], plan["argv"]
     if plan["wrap_cmd"]:
         command, argv = "cmd", ["/c", plan["command"], *argv]

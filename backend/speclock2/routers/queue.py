@@ -69,7 +69,7 @@ def _transition(task: models.Task, to_status: str) -> None:
         raise ApiError(409, "conflict", f"非法状态迁移：{task.status} → {to_status}")
 
 
-def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime) -> None:
+def _start_watchdog(app, db, timers: set, slug: str, task_id: int, deadline: datetime) -> None:
     """内存看门狗：到期仍未回执 → timeout + task.timeout 事件（§9.4）。
     定时器带 slug/task_id 标记（修复单 21）：/fail 收尸时按任务精确定位取消。"""
     delay = max((deadline - datetime.now().astimezone()).total_seconds(), 0.1)
@@ -77,7 +77,7 @@ def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime
     def fire() -> None:
         timers.discard(timer)
         try:
-            _mark_task_timeout(db, slug, task_id)
+            _mark_task_timeout(app, db, slug, task_id)
         except Exception:
             pass  # 看门狗尽力而为，不向外抛
 
@@ -102,8 +102,9 @@ def _cancel_watchdog(timers: set, slug: str, task_id: int) -> bool:
 ZOMBIE_STATUSES = ("dispatched", "running")  # 已派发未回执的状态（看门狗管辖范围）
 
 
-def _mark_task_timeout(db, slug: str, task_id: int) -> bool:
-    """僵尸任务收尸：仍处 dispatched/running → timeout + task.timeout 事件；返回是否标记。"""
+def _mark_task_timeout(app, db, slug: str, task_id: int) -> bool:
+    """僵尸任务收尸：仍处 dispatched/running → timeout + task.timeout 事件；返回是否标记。
+    收尸即通知（慢工单）：chief 没在跟单时，由通知回合把超时事实送回对话流。"""
     with db.ledger_session(slug) as session:
         task = session.get(models.Task, task_id)
         if task is None or task.status not in ZOMBIE_STATUSES:
@@ -116,16 +117,27 @@ def _mark_task_timeout(db, slug: str, task_id: int) -> bool:
             {"task": fmt_id("T", task_id)}, {"deadline": task.watchdog_deadline},
         )
         session.commit()
+        session.refresh(task)
+        master = task.master
+    from .. import chief_notify
+    chief_notify.enqueue(
+        app, slug,
+        f"系统通知：任务 {fmt_id('T', task_id)}（{master or '未指派'}）看门狗超时"
+        f"（期限 {task.watchdog_deadline}），未收到回执。"
+        "请向用户转述：任务未完成；过程输出里可能有线索，不要臆测原因。",
+    )
     return True
 
 
-def rearm_watchdogs(db, timers: set, ledgers_dir) -> dict:
+def rearm_watchdogs(app, ledgers_dir) -> dict:
     """重启后重建看门狗（追加项 9）：定时器是内存态，进程重启即丢。
 
     扫描全部账本里 dispatched/running 的僵尸任务，按落库的 watchdog_deadline
     重武装；已过期（或无 deadline）的立即收尸标 timeout。派发时落库的
     dispatched_at/watchdog_minutes 是 deadline 的来源与审计字段。
     """
+    db = app.state.db
+    timers = app.state.timers
     stats = {"zombies": 0, "rearmed": 0, "timed_out": 0}
     ledgers_dir = Path(ledgers_dir)
     if not ledgers_dir.is_dir():
@@ -147,19 +159,20 @@ def rearm_watchdogs(db, timers: set, ledgers_dir) -> dict:
             except (TypeError, ValueError):
                 deadline = None
             if deadline is not None and deadline > now:
-                _start_watchdog(db, timers, slug, task_id, deadline)
+                _start_watchdog(app, db, timers, slug, task_id, deadline)
                 stats["rearmed"] += 1
-            elif _mark_task_timeout(db, slug, task_id):
+            elif _mark_task_timeout(app, db, slug, task_id):
                 stats["timed_out"] += 1
     return stats
 
 
-def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes: float) -> tuple[models.Task, bool]:
+def dispatch_service(app, slug: str, task_id: int, watchdog_minutes: float) -> tuple[models.Task, bool]:
     """queued→dispatched + deadline + 事件 + 启动看门狗（端点与派发执行器共用）。
 
     幂等（修复单 2）：非 queued 任务不再 409——原样返回 (task, skipped=True)，
     不做任何迁移、不启动看门狗、无副作用；双派发路径重叠时后来者安全跳过。
     """
+    db = app.state.db
     with db.ledger_session(slug) as session:
         task = session.get(models.Task, task_id)
         if task is None:
@@ -181,7 +194,7 @@ def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes:
         session.commit()
         session.refresh(task)
         snapshot = task
-    _start_watchdog(db, timers, slug, task_id, deadline)
+    _start_watchdog(app, db, app.state.timers, slug, task_id, deadline)
     return snapshot, False
 
 
@@ -277,7 +290,7 @@ def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request)
     if body.watchdog_minutes <= 0:
         raise ApiError(422, "validation_error", "watchdog_minutes 必须为正数")
     task, skipped = dispatch_service(
-        request.app.state.db, request.app.state.timers, slug,
+        request.app, slug,
         parse_prefixed_id(task_id, "T") or -1, body.watchdog_minutes,
     )
     if skipped:  # 幂等跳过（修复单 2）：进程没起来、无副作用
@@ -327,6 +340,14 @@ def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> 
         session.commit()
         session.refresh(task)
         data = serialize.task_out(task)
+    # 落定即通知（慢工单）：崩溃收尸同样要回到 chief 的对话流
+    from .. import chief_notify
+    chief_notify.enqueue(
+        request.app, slug,
+        f"系统通知：任务 {fmt_id('T', tid)}（{task.master or '未指派'}）进程失败退出：{reason}。"
+        + (f"stderr 尾部：{details['stderr_tail']}" if "stderr_tail" in details else "")
+        + "请向用户转述失败原因，不要臆测。",
+    )
     return data
 
 
@@ -385,6 +406,16 @@ def submit_receipt(slug: str, task_id: str, body: ReceiptBody, request: Request)
     with request.app.state.db.ledger_session(slug) as session:
         task = session.get(models.Task, receipt.task_id)
         data = serialize.task_out(task, receipt)
+        master = task.master
+    # 落定即通知（慢工单）：后台派发时 chief 没在跟单，由通知回合把结果送回对话流
+    files = "、".join(receipt.files_changed or []) or "（回执未声明文件）"
+    from .. import chief_notify
+    chief_notify.enqueue(
+        request.app, slug,
+        f"系统通知：任务 {fmt_id('T', receipt.task_id)}（{master or '未指派'}）已完成并回执。"
+        f"回执文件：{files}；摘要：{(receipt.summary or '')[:280]}。"
+        "请向用户简报结果：文件名与数量以本回执为准，不要另编路径。",
+    )
     return data
 
 

@@ -54,9 +54,11 @@ function hostPathRejection(prompt: string) {
 	};
 }
 
-/** 派发链共享体（修复单 19）：dispatch 工具与 create_task(prompt) 一步派发共用——
- *  状态机推进 → launch-plan → spawn+逐行解析 → 回执。返回工具结果对象。 */
-async function runDispatchChain(taskId: string, prompt: string, watchdogMinutes: number) {
+/** 派发（慢工单异步化）：同步段只做 状态机→唤醒计划→spawn，随即返回；
+ *  跟单（输出上报/回执/收尸）在后台继续——mcode 一跑十几分钟，同步等待会
+ *  撑爆 chief 的回合超时（testproj T-0001 实证 981 秒）。落定后由工作台
+ *  通知回合把结果送回对话流，chief 再向用户转述。 */
+async function startDispatch(taskId: string, prompt: string, watchdogMinutes: number) {
 	// 1. 状态机推进 + 看门狗；非 queued 任务返回 skipped：不 spawn、无副作用
 	const dispatchRes = await api("POST", `/tasks/${taskId}/dispatch`, { watchdog_minutes: watchdogMinutes });
 	if (dispatchRes.skipped) {
@@ -67,106 +69,105 @@ async function runDispatchChain(taskId: string, prompt: string, watchdogMinutes:
 		};
 	}
 
-	// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续，
-	//    与 mock 执行器同一事实源）；这里只负责 spawn + 监控
+	// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续）
 	const plan = await api("POST", `/tasks/${taskId}/launch-plan`, { prompt });
 	const argv: string[] = plan.argv ?? [];
 	const isCmd = !!plan.wrap_cmd;
 	const finalArgv = isCmd ? ["cmd", "/c", plan.command, ...argv] : argv;
 	const command = isCmd ? "cmd" : plan.command;
 
-	// 3. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
-	//    过程输出每 2s 节流上报工作台（output_tail + SSE master_output）
-	const started = Date.now();
-	const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
-		const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
-		let buffer = "";
-		let text = "";
-		let usage: any = null;
-		let stderrTail = "";
-		let allOutput = "";      // 全量 stdout（增量计算用）
-		let reportedLen = 0;     // 已上报的字符数
-		let lastOutputPost = 0;
-		const postOutput = (force: boolean) => {
-			if (allOutput.length <= reportedLen) return;
-			const now = Date.now();
-			if (!force && now - lastOutputPost < 2000) return;
-			const increment = allOutput.slice(reportedLen);
-			reportedLen = allOutput.length;
-			lastOutputPost = now;
-			// 上报失败静默忽略：过程输出是尽力而为，不影响派发主链
-			api("POST", `/tasks/${taskId}/output`, { text: increment }).catch(() => {});
-		};
-		const processLine = (line: string) => {
-			if (!line.trim()) return;
-			let event: any;
-			try {
-				event = JSON.parse(line);
-			} catch {
-				return;
-			}
-			if (event.type === "message_end" && event.message?.role === "assistant") {
-				text = (event.message.content ?? [])
-					.filter((b: any) => b.type === "text")
-					.map((b: any) => b.text)
-					.join("");
-				usage = event.message.usage ?? usage;
-			}
-		};
-		proc.stdout.on("data", (data: Buffer) => {
-			const chunk = data.toString("utf-8");
-			allOutput += chunk;
-			buffer += chunk;
-			const lines = buffer.split("\n");
-			buffer = lines.pop() ?? "";
-			for (const line of lines) processLine(line);
-			postOutput(false);
-		});
-		proc.stderr.on("data", (data: Buffer) => {
-			stderrTail = (stderrTail + data.toString("utf-8")).slice(-500); // 尾部诊断
-		});
-		proc.on("close", (code) => {
-			if (buffer.trim()) processLine(buffer);
-			postOutput(true); // 收尾补一发增量，之后停播
-			resolve({ exitCode: code ?? 1, text, usage, stderrTail });
-		});
-		proc.on("error", (err) => {
-			resolve({ exitCode: 1, text, usage, stderrTail: String(err) });
-		});
-	});
-
-	if (result.exitCode !== 0) {
-		// 快速失败收尸（修复单 21）：立即标 timeout 并取消看门狗，不干等剩余时限
-		// （今晚 T-0006 崩溃后干等了一小时）。收尸失败不阻断：如实把退出事实呈给模型，看门狗兜底
-		await api("POST", `/tasks/${taskId}/fail`, {
-			reason: `被派发进程异常退出（码 ${result.exitCode}）`,
-			exit_code: result.exitCode,
-			stderr: result.stderrTail || undefined,
-		}).catch(() => {});
-		return {
-			content: [{ type: "text", text: `任务 ${taskId} 进程异常退出（码 ${result.exitCode}）：${result.stderrTail || "无 stderr"}。已标记 timeout（快速收尸，无需等看门狗）。工作目录：${plan.cwd}` }],
-			details: { outcome: "crashed", exit_code: result.exitCode, stderr: result.stderrTail, cwd: plan.cwd },
-		};
-	}
-
-	// 4. 回执 + 遥测（token 解析不到标估算，DESIGN §13.5）
-	const files = (result.text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
-	const receipt = await api("POST", `/tasks/${taskId}/receipt`, {
-		files_changed: files,
-		self_check: `主代理进程退出码 0`,
-		summary: result.text.slice(0, 200),
-		telemetry: {
-			duration_ms: Date.now() - started,
-			tokens: result.usage
-				? { input: result.usage.input, output: result.usage.output }
-				: null,
-			token_source: result.usage ? "exact" : "estimated",
-		},
-	});
+	// 3. spawn + 后台跟单（不等待进程结束）
+	const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+	monitorDispatch(taskId, plan, proc);
 	return {
-		content: [{ type: "text", text: `任务 ${taskId} 完成：${files.length} 个文件改动，已回执（${receipt.status}）。工作目录：${plan.cwd}` }],
-		details: { outcome: "reported", files_changed: files, cwd: plan.cwd },
+		content: [{ type: "text", text: `任务 ${taskId} 已派发（工作目录：${plan.cwd}）。后台执行中：完成或失败都会由系统通知你，届时向用户转述——文件与结论以回执为准，不要现在声称完成。` }],
+		details: { outcome: "dispatched", cwd: plan.cwd },
 	};
+}
+
+/** 后台跟单：逐行聚合 stdout（message_end 取全文）、stderr 留尾；
+ *  过程输出每 2s 节流上报；进程结束按退出码回执或快速收尸。失败静默。 */
+function monitorDispatch(taskId: string, plan: any, proc: any): void {
+	const started = Date.now();
+	let buffer = "";
+	let text = "";
+	let usage: any = null;
+	let stderrTail = "";
+	let allOutput = "";
+	let reportedLen = 0;
+	let lastOutputPost = 0;
+	const postOutput = (force: boolean) => {
+		if (allOutput.length <= reportedLen) return;
+		const now = Date.now();
+		if (!force && now - lastOutputPost < 2000) return;
+		const increment = allOutput.slice(reportedLen);
+		reportedLen = allOutput.length;
+		lastOutputPost = now;
+		api("POST", `/tasks/${taskId}/output`, { text: increment }).catch(() => {});
+	};
+	const processLine = (line: string) => {
+		if (!line.trim()) return;
+		let event: any;
+		try {
+			event = JSON.parse(line);
+		} catch {
+			return;
+		}
+		if (event.type === "message_end" && event.message?.role === "assistant") {
+			text = (event.message.content ?? [])
+				.filter((b: any) => b.type === "text")
+				.map((b: any) => b.text)
+				.join("");
+			usage = event.message.usage ?? usage;
+		}
+	};
+	proc.stdout.on("data", (data: Buffer) => {
+		const chunk = data.toString("utf-8");
+		allOutput += chunk;
+		buffer += chunk;
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) processLine(line);
+		postOutput(false);
+	});
+	proc.stderr.on("data", (data: Buffer) => {
+		stderrTail = (stderrTail + data.toString("utf-8")).slice(-500);
+	});
+	proc.on("error", (err: Error) => {
+		// spawn 失败（命令不存在等）：快速收尸，失败原因回流
+		api("POST", `/tasks/${taskId}/fail`, {
+			reason: `进程无法启动：${String(err)}`,
+			stderr: stderrTail || undefined,
+		}).catch(() => {});
+	});
+	proc.on("close", (code: number | null) => {
+		if (buffer.trim()) processLine(buffer);
+		postOutput(true); // 收尾补一发增量，之后停播
+		const exitCode = code ?? 1;
+		if (exitCode !== 0) {
+			// 快速失败收尸（修复单 21）：立即标 timeout，不干等看门狗。
+			// mcode 类 harness 的报错在 stdout（模型路由拒绝等），一并带上
+			const stdoutTail = allOutput.slice(-500);
+			api("POST", `/tasks/${taskId}/fail`, {
+				reason: `被派发进程异常退出（码 ${exitCode}）`,
+				exit_code: exitCode,
+				stderr: (stderrTail || stdoutTail || "").slice(-500) || undefined,
+			}).catch(() => {});
+			return;
+		}
+		// 回执 + 遥测；任务若已被看门狗收尸（409）则静默放弃——账本为准
+		const files = (text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+		api("POST", `/tasks/${taskId}/receipt`, {
+			files_changed: files,
+			self_check: `主代理进程退出码 0`,
+			summary: (text || allOutput).slice(0, 200),
+			telemetry: {
+				duration_ms: Date.now() - started,
+				tokens: usage ? { input: usage.input, output: usage.output } : null,
+				token_source: usage ? "exact" : "estimated",
+			},
+		}).catch(() => {});
+	});
 }
 
 export default function (pi: ExtensionAPI) {
@@ -239,7 +240,7 @@ export default function (pi: ExtensionAPI) {
 	);
 
 	/** 新建任务（修复单 17/19）：用户直达请求（叫某主代理做 X）的合法入口。
-	 *  带 prompt 时一步完成建单+派发+回执——消灭「拿任务号调另一个工具」的交接
+	 *  带 prompt 时一步完成建单+派发——消灭「拿任务号调另一个工具」的交接
 	 *  （17:50 故障的失败点正是模型在交接环节编造了任务号）。 */
 	pi.registerTool(
 		defineTool({
@@ -261,7 +262,7 @@ export default function (pi: ExtensionAPI) {
 				acceptance: Type.Array(Type.String(), { default: [], description: "验收标准列表" }),
 				master: Type.String({ description: "执行的主代理名（名册里的名字）" }),
 				prompt: Type.Optional(Type.String({
-					description: "给主代理的任务说明（实现范围与完成标准）；提供即一步完成建单+派发+回执",
+					description: "给主代理的任务说明（实现范围与完成标准，结尾要求主代理输出 FILES: 文件清单）；提供即一步完成建单+派发（异步，结果由系统通知回合送达）",
 				})),
 			}),
 			async execute(_toolCallId, p) {
@@ -279,10 +280,10 @@ export default function (pi: ExtensionAPI) {
 						details: order,
 					};
 				}
-				// 一步派发：同一套 spawn+解析+回执链（runDispatchChain），无任务号交接
-				const result = await runDispatchChain(order.task_id, p.prompt, 60);
+				// 一步派发（异步）：无任务号交接；结果由系统通知回合送达
+				const result = await startDispatch(order.task_id, p.prompt, 60);
 				return {
-					content: [{ type: "text", text: `${created}并直接派发。${(result.content as any[])[0].text}` }],
+					content: [{ type: "text", text: `${created}。${(result.content as any[])[0].text}` }],
 					details: { order, dispatch: result.details },
 				};
 			},
@@ -295,7 +296,8 @@ export default function (pi: ExtensionAPI) {
 			name: "dispatch",
 			label: "派发任务",
 			description:
-				"把任务派发给主代理：启动其 harness 真实进程执行任务说明，监控完成并上报回执。" +
+				"把任务派发给主代理：启动其 harness 真实进程执行任务说明，后台跟单。" +
+				"派发是异步的：工具立即返回「已派发」，完成/失败由系统通知回合送达，届时再向用户转述。" +
 				"只用于已有真实任务号的任务（批准卡片后的派发通知、create_task 不带 prompt 时返回的 task_id）。" +
 				"用户直达请求不要走本工具——直接用 create_task 带 prompt 一步完成。",
 			promptGuidelines: [
@@ -314,7 +316,7 @@ export default function (pi: ExtensionAPI) {
 				// 同一回合内引导 create_task 重试，而不是让模型去写故障报告
 				try {
 					const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
-					return await runDispatchChain(p.task_id, p.prompt, watchdogMinutes);
+					return await startDispatch(p.task_id, p.prompt, watchdogMinutes);
 				} catch (err) {
 					if (err instanceof ApiError && err.status === 404) {
 						return {

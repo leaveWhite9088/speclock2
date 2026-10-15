@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -69,11 +70,16 @@ def make_dispatch_fn(app) -> object:
 
 @asynccontextmanager
 async def lifespan(app):
+    from .. import chief_notify
     from .queue import rearm_watchdogs
 
+    # 通知腿先就位（慢工单）：看门狗启动收尸可能立刻入队
+    app.state.chief_notify: "queue.Queue" = queue.Queue()
+    worker = asyncio.create_task(chief_notify.worker(app))
     # 重启重建看门狗（追加项 9）：定时器是内存态，按落库 deadline 重武装/收尸
-    rearm_watchdogs(app.state.db, app.state.timers, app.state.settings.ledgers_dir)
+    rearm_watchdogs(app, app.state.settings.ledgers_dir)
     yield
+    worker.cancel()
     await app.state.pi.stop_all()  # 有序关闭全部核心代理会话（会话 JSONL 已持久化）
 
 

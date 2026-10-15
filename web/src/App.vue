@@ -500,6 +500,17 @@ async function reloadMasters(): Promise<void> {
   }
 }
 
+/** 项目列表变化（新建/设置保存）：刷新列表；新建的项目直接选中进入 */
+async function onProjectsChanged(createdSlug?: string): Promise<void> {
+  if (!client.value) return
+  try {
+    projects.value = (await client.value.listProjects()).items
+  } catch {
+    /* 列表刷新失败保持现状 */
+  }
+  if (createdSlug) await selectProject(createdSlug)
+}
+
 /** 模型登记与 CLI 会话列表：live 后端未提供端点时用内置登记兜底（主代理表单仍可用） */
 async function loadRegistry(): Promise<void> {
   if (!client.value) return
@@ -638,6 +649,7 @@ onMounted(() => {
         @select-session="onSelectSession"
         @masters-changed="reloadMasters"
         @start-agent="startChiefAgent"
+        @projects-changed="onProjectsChanged"
       >
       <template #foot>
         <span

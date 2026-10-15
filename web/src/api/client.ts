@@ -25,6 +25,11 @@ export interface Project {
   name: string
   created_at: string
   status: string
+  /** 项目目录（该项目主代理的工作领地；契约 v0.4，旧后端可能缺省） */
+  working_dir?: string | null
+  /** 核心代理 LLM（契约 v0.4；null = 跟随全局配置） */
+  chief_provider?: string | null
+  chief_model?: string | null
 }
 
 export interface ProjectDetail {
@@ -387,6 +392,22 @@ export interface VersionDetail {
 export interface CreateProjectBody {
   slug: string
   name: string
+  working_dir?: string
+  chief_provider?: string
+  chief_model?: string
+}
+
+/** PATCH /api/p/{slug}：只更新出现的字段；null 表示清除（回执「契约疑问」：清除语义待裁决） */
+export interface PatchProjectBody {
+  working_dir?: string | null
+  chief_provider?: string | null
+  chief_model?: string | null
+}
+
+/** GET /api/fs/dirs?path= 的子目录条目（契约 v0.4） */
+export interface FsDirEntry {
+  name: string
+  path: string
 }
 
 export interface CreateDomainBody {
@@ -538,6 +559,9 @@ export interface ApiClient {
   getAgent(slug: string): Promise<AgentStatus>
   startAgent(slug: string): Promise<AgentStartResponse>
   stopAgent(slug: string): Promise<AgentStartResponse>
+  /** 项目目录与核心代理 LLM（契约 v0.4；旧后端未上线时 UI 优雅降级） */
+  patchProject(slug: string, body: PatchProjectBody): Promise<Project>
+  listFsDirs(path: string): Promise<{ items: FsDirEntry[] }>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -623,5 +647,9 @@ export function createApiClient(): ApiClient {
     getAgent: (slug) => request<AgentStatus>(`${p(slug)}/agent`),
     startAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/start`, { method: 'POST', body: '{}' }),
     stopAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/stop`, { method: 'POST' }),
+    patchProject: (slug, body) =>
+      request<Project>(p(slug), { method: 'PATCH', body: JSON.stringify(body) }),
+    listFsDirs: (path) =>
+      request<{ items: FsDirEntry[] }>(`/api/fs/dirs?path=${encodeURIComponent(path)}`),
   }
 }

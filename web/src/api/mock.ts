@@ -44,10 +44,6 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
-function notImplemented(endpoint: string): never {
-  throw new ApiError(501, { code: 'not_implemented', message: `mock 模式未实现 ${endpoint}（属后续轮次）` })
-}
-
 function mustFind<T>(record: Record<string, T>, key: string, what: string): T {
   const found = record[key]
   if (!found) throw new ApiError(404, { code: 'not_found', message: `${what} ${key} 不存在（mock）` })
@@ -411,10 +407,40 @@ function expenseLedger(): MockLedger {
 
 /* ---------- 顶层 fixtures ---------- */
 
+/** 可变：mock 新建项目直接追加（物理隔离由按 slug 建账本模拟） */
 const projects: Project[] = [
-  { slug: 'daily-report', name: '日报系统', created_at: '2026-10-12T09:00:00+08:00', status: 'active' },
-  { slug: 'expense', name: '费用报销', created_at: '2026-10-13T14:30:00+08:00', status: 'active' },
+  { slug: 'daily-report', name: '日报系统', created_at: '2026-10-12T09:00:00+08:00', status: 'active', working_dir: 'D:/work/daily-report', chief_provider: 'claude-code', chief_model: 'claude-sonnet-4.5' },
+  { slug: 'expense', name: '费用报销', created_at: '2026-10-13T14:30:00+08:00', status: 'active', working_dir: null, chief_provider: null, chief_model: null },
 ]
+
+/** 「本机目录浏览」的 mock 文件系统（GET /api/fs/dirs）：key = 归一化目录，value = 子目录 */
+const FAKE_FS: Record<string, string[]> = {
+  'D:/': ['D:/work', 'D:/proj'],
+  'D:/work': ['D:/work/daily-report', 'D:/work/expense'],
+  'D:/work/daily-report': ['D:/work/daily-report/backend', 'D:/work/daily-report/web'],
+  'D:/work/expense': ['D:/work/expense/docs'],
+  'D:/proj': ['D:/proj/speclock2'],
+  'D:/proj/speclock2': ['D:/proj/speclock2/backend', 'D:/proj/speclock2/web'],
+}
+
+/** Windows/POSIX 路径归一：反斜杠→斜杠、去尾斜杠；盘符根保留尾斜杠（D:/） */
+export function normalizeFsPath(path: string): string {
+  let p = path.trim().replace(/\\/g, '/')
+  p = p.replace(/\/+$/, '')
+  if (/^[A-Za-z]:$/.test(p)) p += '/'
+  return p
+}
+
+/** 上一级目录：D:/a/b → D:/a；D:/a → D:/；D:/ → null */
+export function parentFsPath(path: string): string | null {
+  const p = normalizeFsPath(path)
+  const i = p.replace(/\/$/, '').lastIndexOf('/')
+  if (i < 0) return null // D:/ 已是根（去掉尾斜杠后没有分隔符）
+  const parent = p.slice(0, i === 1 ? 2 : i) // 盘符根 D:/ 保留斜杠
+  return normalizeFsPath(parent)
+}
+
+const SLUG_RE = /^[A-Za-z0-9_-]{1,64}$/
 
 /* ---------- Harness×模型登记 / CLI 会话（mock 初始数据；live 后端缺端点时也用它兜底） ---------- */
 
@@ -714,7 +740,44 @@ export function createMockApiClient(): ApiClient {
   const api: ApiClient = {
     health: async () => ({ ok: true }),
     listProjects: async () => ({ items: projects.map((x) => ({ ...x })) }),
-    createProject: async () => notImplemented('POST /api/projects'),
+    createProject: async (body) => {
+      const slug = body.slug?.trim() ?? ''
+      const name = body.name?.trim() ?? ''
+      if (!SLUG_RE.test(slug)) {
+        throw new ApiError(422, { code: 'validation_error', message: 'slug 只允许字母、数字、-、_，长度 1~64' })
+      }
+      if (!name) {
+        throw new ApiError(422, { code: 'validation_error', message: '项目名称必填' })
+      }
+      if (projects.some((p) => p.slug === slug)) {
+        throw new ApiError(409, { code: 'conflict', message: `slug 已存在：${slug}` })
+      }
+      if (body.working_dir && !(normalizeFsPath(body.working_dir) in FAKE_FS)) {
+        throw new ApiError(422, { code: 'validation_error', message: '目录不存在或不是目录' })
+      }
+      const project: Project = {
+        slug,
+        name,
+        created_at: now(),
+        status: 'active',
+        working_dir: body.working_dir?.trim() || null,
+        chief_provider: body.chief_provider?.trim() || null,
+        chief_model: body.chief_model?.trim() || null,
+      }
+      projects.push(project)
+      // 独立账本（物理隔离的 mock 形态）：空树 + 第 1 轮 + 无主代理
+      trees[slug] = { items: [] }
+      ledgers[slug] = buildLedger(
+        {},
+        [{ n: 1, opened_at: now(), closed_at: null, approval_card_id: null, versions_manifest: {} }],
+        [],
+        [],
+        [],
+      )
+      blocksBySlug[slug] = {}
+      mastersBySlug[slug] = []
+      return { ...project }
+    },
     getProject: async (slug) => {
       const ledger = ledgerOf(slug)
       tickWatchdogs(ledger)
@@ -1120,6 +1183,28 @@ export function createMockApiClient(): ApiClient {
     stopAgent: async (slug) => {
       agentRunning = false
       return { running: false, model: null, session_id: `speclock2-${slug}` }
+    },
+
+    patchProject: async (slug, body) => {
+      const project = projects.find((x) => x.slug === slug)
+      if (!project) throw new ApiError(404, { code: 'not_found', message: `项目 ${slug} 不存在（mock）` })
+      if (body.working_dir !== undefined) {
+        if (body.working_dir === null) project.working_dir = null
+        else {
+          const dir = normalizeFsPath(body.working_dir)
+          if (!(dir in FAKE_FS)) throw new ApiError(422, { code: 'validation_error', message: '目录不存在或不是目录' })
+          project.working_dir = dir
+        }
+      }
+      if (body.chief_provider !== undefined) project.chief_provider = body.chief_provider?.trim() || null
+      if (body.chief_model !== undefined) project.chief_model = body.chief_model?.trim() || null
+      return { ...project }
+    },
+    listFsDirs: async (path) => {
+      const dir = normalizeFsPath(path)
+      const children = FAKE_FS[dir]
+      if (!children) throw new ApiError(422, { code: 'validation_error', message: '目录不存在或不是目录' })
+      return { items: children.map((p) => ({ name: p.slice(p.replace(/\/$/, '').lastIndexOf('/') + 1), path: p })) }
     },
   }
 

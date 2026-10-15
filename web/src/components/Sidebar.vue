@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import type { AgentStatus, ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
 import type { SessionTarget } from '../types'
 import ModalShell from './ModalShell.vue'
+import ProjectFormModal from './ProjectFormModal.vue'
 
 /**
  * 左侧栏（Kimi Code 风）：上半是项目列表（挂跨项目徽标：别的项目待批准/运行中
@@ -32,7 +33,11 @@ const emit = defineEmits<{
   (e: 'select-session', target: SessionTarget): void
   (e: 'masters-changed'): void
   (e: 'start-agent'): void
+  (e: 'projects-changed', createdSlug?: string): void
 }>()
+
+/** 新建 / 编辑项目弹窗（同一张表单复用） */
+const projectModal = ref<null | { mode: 'create' } | { mode: 'edit'; project: Project }>(null)
 
 const showModal = ref(false)
 const newName = ref('')
@@ -134,7 +139,7 @@ function avatarText(name: string): string {
     <section class="sidebar__sec">
       <h6 class="sidebar__sec-title">项目</h6>
       <ul class="sidebar__list">
-        <li v-for="p in projects" :key="p.slug">
+        <li v-for="p in projects" :key="p.slug" class="sidebar__proj">
           <button
             type="button"
             class="sidebar__item"
@@ -145,6 +150,7 @@ function avatarText(name: string): string {
             <span class="sidebar__item-text">
               <span class="sidebar__item-name">{{ p.name }}</span>
               <span class="sidebar__item-sub">{{ p.slug }}</span>
+              <span v-if="p.working_dir" class="sidebar__item-sub sidebar__dir" :title="p.working_dir">{{ p.working_dir }}</span>
             </span>
             <span
               v-if="(projectStats[p.slug]?.pending ?? 0) > 0"
@@ -157,9 +163,19 @@ function avatarText(name: string): string {
               title="有任务在运行"
             >{{ projectStats[p.slug].active }} 运行中</span>
           </button>
+          <button
+            type="button"
+            class="sidebar__gear"
+            title="项目设置（目录 / 核心代理 LLM）"
+            @click.stop="projectModal = { mode: 'edit', project: p }"
+          >⚙</button>
         </li>
-        <li v-if="projects.length === 0" class="sidebar__empty">（暂无项目）</li>
+        <li v-if="projects.length === 0" class="sidebar__empty">
+          （暂无项目）
+          <button type="button" class="sidebar__add" @click="projectModal = { mode: 'create' }">＋ 新建项目</button>
+        </li>
       </ul>
+      <button v-if="projects.length > 0" type="button" class="sidebar__add" @click="projectModal = { mode: 'create' }">＋ 新建项目</button>
     </section>
 
     <section class="sidebar__sec">
@@ -280,6 +296,29 @@ function avatarText(name: string): string {
         </footer>
       </form>
     </ModalShell>
+
+    <!-- 新建 / 编辑项目（同一张表单：目录 + 核心代理 LLM） -->
+    <ProjectFormModal
+      v-if="projectModal"
+      :key="projectModal.mode + (projectModal.mode === 'edit' ? projectModal.project.slug : '')"
+      :client="client"
+      :mode="projectModal.mode"
+      :project="projectModal.mode === 'edit' ? projectModal.project : null"
+      :model-entries="modelEntries"
+      @close="projectModal = null"
+      @created="
+        (s) => {
+          projectModal = null
+          emit('projects-changed', s)
+        }
+      "
+      @saved="
+        () => {
+          projectModal = null
+          emit('projects-changed')
+        }
+      "
+    />
   </aside>
 </template>
 
@@ -408,6 +447,49 @@ function avatarText(name: string): string {
   padding: 0 7px;
   line-height: 17px;
   white-space: nowrap;
+}
+
+/* 项目条目：悬停时副行切换为绑定的目录，右侧浮出设置齿轮 */
+.sidebar__proj {
+  position: relative;
+}
+
+.sidebar__proj .sidebar__item {
+  padding-right: 26px;
+}
+
+.sidebar__gear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  padding: 2px 4px;
+  border-radius: var(--radius-m);
+  z-index: 1;
+}
+
+.sidebar__gear:hover {
+  color: var(--c-ink);
+  background: var(--c-border);
+}
+
+.sidebar__proj:hover .sidebar__gear {
+  display: inline-flex;
+}
+
+.sidebar__dir {
+  display: none;
+}
+
+.sidebar__proj:hover .sidebar__item-sub {
+  display: none;
+}
+
+.sidebar__proj:hover .sidebar__dir {
+  display: block;
 }
 
 .sidebar__flag--pending {

@@ -6,15 +6,18 @@ import { TASK_STATUS_LABELS, formatDuration, formatTokens } from '../types'
 
 /**
  * 主代理工作流：盯进程时才看——工具调用、文件编辑、思考耗时等技术过程；
- * 核心代理 ↔ 主代理的通信细节默认收在这里，不打扰主对话。
+ * 过程直播（SSE master_output，按当前主代理的任务过滤）与最近回执摘要也在这。
  */
 const props = defineProps<{
   master: MasterInfo
   activity: ActivityItem[]
   packages: Package[]
+  /** SSE master_output 按 task_id 聚合的输出尾部（≤50 行，App 捕获） */
+  liveOutputs: Record<string, string[]>
 }>()
 
 const el = ref<HTMLElement | null>(null)
+const termEl = ref<HTMLElement | null>(null)
 
 const myTasks = computed(() =>
   props.packages
@@ -22,6 +25,25 @@ const myTasks = computed(() =>
     .filter(({ task }) => task.master === props.master.id || (task.master === null && props.master.id === 'frontend'))
     .slice(0, 8),
 )
+
+/** 在跑（或本会话有直播输出）的任务：终端风逐个展示输出尾部 */
+const liveTasks = computed(() =>
+  myTasks.value.filter(({ task }) => {
+    const busy = ['dispatched', 'running', 'timeout'].includes(task.status)
+    return busy || (props.liveOutputs[task.task_id]?.length ?? 0) > 0
+  }),
+)
+
+/** 空闲态：最近一个有回执的任务（显示回执摘要） */
+const lastReceiptTask = computed(() =>
+  myTasks.value.find(({ task }) => task.receipt && ['done', 'reported', 'auditing', 'rejected'].includes(task.status))?.task ?? null,
+)
+
+const lastReceiptText = computed(() => {
+  const t = lastReceiptTask.value
+  if (!t?.receipt) return ''
+  return `${t.receipt.summary}\n自检：${t.receipt.self_check}\n改动文件：${t.receipt.files_changed.join('、')}`
+})
 
 /** 累计遥测：该主代理已完成任务的耗时与 token 总量（DESIGN §13.5 仪表盘一行的原料） */
 const totals = computed(() => {
@@ -53,6 +75,18 @@ watch(
   () => {
     void scrollToEnd()
   },
+)
+
+// 过程直播：新输出到达时终端自动滚底
+watch(
+  () => props.liveOutputs,
+  () => {
+    nextTick(() => {
+      const node = termEl.value
+      if (node) node.scrollTop = node.scrollHeight
+    })
+  },
+  { deep: true },
 )
 </script>
 
@@ -90,6 +124,32 @@ watch(
             </span>
           </li>
           </ul>
+        </section>
+
+        <section class="msession__sec">
+          <h6 class="msession__sec-title">过程直播</h6>
+          <p v-if="liveTasks.length === 0" class="msession__empty">
+            暂无在跑的任务的过程输出（派发任务后这里实时滚动该主代理的输出尾部）。
+          </p>
+          <div v-else ref="termEl" class="mterm">
+            <div v-for="{ pkg, task } in liveTasks" :key="task.task_id" class="mterm__blk">
+              <p class="mterm__head">
+                <span class="mterm__dot" aria-hidden="true"></span>
+                <code>{{ task.task_id }}</code>
+                <span class="mterm__pkg">{{ pkg.package_id }}{{ pkg.origin === 'tech' ? ' · 技术单' : '' }}</span>
+                <span class="badge" :class="`badge--${task.status}`">{{ TASK_STATUS_LABELS[task.status] }}</span>
+              </p>
+              <pre class="mterm__body">{{ (liveOutputs[task.task_id] ?? []).join('\n') || '（等待输出…）' }}</pre>
+            </div>
+          </div>
+          <div v-if="liveTasks.length === 0 && lastReceiptTask?.receipt" class="mterm mterm--idle">
+            <p class="mterm__head">
+              <span class="mterm__dot mterm__dot--idle" aria-hidden="true"></span>
+              <code>{{ lastReceiptTask.task_id }}</code>
+              <span class="mterm__pkg">最近回执</span>
+            </p>
+            <pre class="mterm__body">{{ lastReceiptText }}</pre>
+          </div>
         </section>
 
         <section class="msession__sec">
@@ -201,6 +261,68 @@ watch(
 .msession__empty {
   color: var(--c-ink-3);
   font-size: var(--fs-12);
+}
+
+/* 过程直播终端：等宽、限高、自动滚底；空闲态展示最近回执摘要 */
+.mterm {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.mterm__blk {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-m);
+  background: var(--c-panel);
+  overflow: hidden;
+}
+
+.mterm--idle {
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-m);
+  padding: var(--sp-2);
+}
+
+.mterm__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.mterm__head code {
+  font-family: var(--font-mono);
+}
+
+.mterm__pkg {
+  color: var(--c-ink-3);
+}
+
+.mterm__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-ok);
+  flex: none;
+}
+
+.mterm__dot--idle {
+  background: var(--c-border-strong);
+}
+
+.mterm__body {
+  margin: 0;
+  padding: var(--sp-2);
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  color: var(--c-ink-2);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .msession__tasks {

@@ -332,11 +332,14 @@ export interface CreateMasterBody {
 
 /* ---------- Harness 模型登记（工作台只唤醒 Harness，不替它配模型；端点为提议形状） ---------- */
 
-/** 一条登记：Harness × 模型（纯信息记录，添加主代理时从这里选） */
+/** 一条登记：Harness × 模型（纯信息记录，添加主代理时从这里选）。
+ *  provider：核心代理切换用（/model 只列 provider 非空的条目，切换传
+ *  {provider, model}）；provider 为空 = harness 专属条目，只用于主代理绑定 */
 export interface ModelEntry {
   id: string
   harness: string
   model: string
+  provider?: string | null
 }
 
 export interface RegisterModelBody {
@@ -576,6 +579,11 @@ export interface ApiClient {
   /** 项目目录与核心代理 LLM（契约 v0.4；旧后端未上线时 UI 优雅降级） */
   patchProject(slug: string, body: PatchProjectBody): Promise<Project>
   listFsDirs(path: string): Promise<{ items: FsDirEntry[] }>
+  /** 删除项目（账本文件后端保留为 .deleted；后端未上线时 UI 行内报错） */
+  deleteProject(slug: string): Promise<void>
+  /** 主代理编辑/删除（提议端点：后端未上线时 UI 行内报错；删除时在跑任务 409） */
+  updateMaster(slug: string, id: string, body: CreateMasterBody): Promise<MasterInfo>
+  deleteMaster(slug: string, id: string): Promise<void>
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -667,5 +675,9 @@ export function createApiClient(): ApiClient {
       request<Project>(p(slug), { method: 'PATCH', body: JSON.stringify(body) }),
     listFsDirs: (path) =>
       request<{ items: FsDirEntry[] }>(`/api/fs/dirs?path=${encodeURIComponent(path)}`),
+    deleteProject: (slug) => request<void>(p(slug), { method: 'DELETE' }),
+    updateMaster: (slug, id, body) =>
+      request<MasterInfo>(`${p(slug)}/masters/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    deleteMaster: (slug, id) => request<void>(`${p(slug)}/masters/${id}`, { method: 'DELETE' }),
   }
 }

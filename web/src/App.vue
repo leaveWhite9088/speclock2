@@ -67,6 +67,10 @@ const streamText = ref('')
 const agent = ref<AgentStatus | null>(null)
 /** /model 弹层（输入框上方） */
 const modelMenuOpen = ref(false)
+/** 主代理过程直播：SSE master_output 按 task_id 聚合的输出尾部（≤50 行） */
+const masterLive = ref<Record<string, string[]>>({})
+/** 顶栏「编辑绑定」请求：让侧栏打开对应主代理的编辑弹窗 */
+const requestMasterEdit = ref<MasterInfo | null>(null)
 let chatSource: EventSource | null = null
 let lastHuman = ''
 /** 用户主动停止：抑制随之而来的 agent_error 错误气泡 */
@@ -155,6 +159,14 @@ function openStream(retry = 0): void {
   })
   es.addEventListener('card_proposed', () => {
     void refreshAll()
+  })
+  es.addEventListener('master_output', (ev) => {
+    const data = JSON.parse((ev as MessageEvent<string>).data) as Record<string, unknown>
+    const taskId = typeof data.task_id === 'string' ? data.task_id : null
+    const text = [data.delta, data.line, data.output, data.text].find((v) => typeof v === 'string')
+    if (!taskId || typeof text !== 'string' || !text) return
+    const lines = masterLive.value[taskId] ?? []
+    masterLive.value = { ...masterLive.value, [taskId]: [...lines, text].slice(-50) }
   })
   es.addEventListener('agent_error', (ev) => {
     const data = JSON.parse((ev as MessageEvent<string>).data) as { error?: unknown }
@@ -530,6 +542,8 @@ async function selectProject(slug: string): Promise<void> {
   closeStream()
   stopAgentLoop()
   agent.value = null
+  masterLive.value = {}
+  requestMasterEdit.value = null
   streaming.value = false
   streamText.value = ''
   userStop = false
@@ -714,6 +728,11 @@ function onSelectSession(target: SessionTarget): void {
   docsView.value = false
 }
 
+/** 顶栏在主代理视图点「编辑绑定」：让侧栏打开该主代理的编辑弹窗 */
+function onEditBinding(): void {
+  if (activeMaster.value) requestMasterEdit.value = activeMaster.value
+}
+
 watch(
   () => isMockQueueRunning(),
   (running) => {
@@ -744,12 +763,14 @@ onMounted(() => {
         :master-telemetry="masterTelemetry"
         :model-entries="modelEntries"
         :cli-sessions="cliSessions"
+        :edit-master="requestMasterEdit"
         :style="{ width: `${sidebarWidth}px` }"
         @select-project="selectProject"
         @select-session="onSelectSession"
         @masters-changed="reloadMasters"
         @start-agent="startChiefAgent"
         @projects-changed="onProjectsChanged"
+        @master-edit-done="requestMasterEdit = null"
       >
       <template #foot>
         <span
@@ -775,10 +796,12 @@ onMounted(() => {
         :chief-model="agent?.model ?? null"
         :model-entries="modelEntries"
         :project-has-default="projectDefaultModel != null"
+        :chip-master="session.kind === 'master' ? activeMaster : null"
         @toggle-drawer="onToggleDrawer"
         @toggle-docs="docsView = !docsView"
         @pick-model="onModelPick"
         @manage-models="drawer = 'models'"
+        @edit-binding="onEditBinding"
       />
 
       <div class="app__body">
@@ -801,6 +824,7 @@ onMounted(() => {
             :master="activeMaster"
             :activity="masterActivity"
             :packages="packages"
+            :live-outputs="masterLive"
           />
           <CoreChat
             v-else

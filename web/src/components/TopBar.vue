@@ -1,19 +1,31 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ModelEntry } from '../api/client'
+import type { MasterInfo, ModelEntry } from '../api/client'
 import type { DrawerKey, ModelPick } from '../types'
 import { findChiefEntry } from '../types'
 import ModelMenu from './ModelMenu.vue'
 
 /**
- * 顶栏：右侧入口。模型按钮直接显示当前生效 harness+模型（GET /agent 轮询值），
- * 点击弹层切换（与 /model 同一数据源与端点）；模型登记降为弹层内「管理登记」。
+ * 顶栏：右侧入口。模型区随会话对象切换——核心代理视图显示生效 harness+模型
+ * （点击弹层切换，与 /model 同一端点）；主代理视图显示该主代理的绑定，
+ * 点击弹层改为「编辑绑定」（数据源登记处，不调 /agent/model）。
  */
 const emit = defineEmits<{
   (e: 'toggle-drawer', key: DrawerKey): void
   (e: 'toggle-docs'): void
   (e: 'pick-model', sel: ModelPick): void
   (e: 'manage-models'): void
+  (e: 'edit-binding'): void
+}>()
+
+const props = defineProps<{
+  sessionTitle: string
+  drawer: DrawerKey | null
+  docsActive: boolean
+  chiefModel: string | null
+  modelEntries: ModelEntry[]
+  projectHasDefault: boolean
+  chipMaster: MasterInfo | null
 }>()
 
 const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
@@ -23,15 +35,6 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
 
 const modelMenuOpen = ref(false)
 
-const props = defineProps<{
-  sessionTitle: string
-  drawer: DrawerKey | null
-  docsActive: boolean
-  chiefModel: string | null
-  modelEntries: ModelEntry[]
-  projectHasDefault: boolean
-}>()
-
 /** 核心代理 harness（按模型登记匹配当前模型；匹配不到不显示） */
 const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.modelEntries)?.harness ?? null)
 </script>
@@ -39,21 +42,47 @@ const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.m
 <template>
   <header class="topbar">
     <span class="topbar__title" :title="sessionTitle">{{ sessionTitle }}</span>
-    <!-- 当前生效模型：贴在会话名右侧，点击弹层切换 -->
+    <!-- 模型区：随会话对象切换（核心代理 = 切换弹层；主代理 = 编辑绑定） -->
     <div class="topbar__model">
       <button
         type="button"
         class="topbar__entry topbar__model-btn"
-        :title="chiefModel ? `核心代理当前：${chiefHarnessName ? chiefHarnessName + ' · ' : ''}${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
+        :title="chipMaster
+          ? `${chipMaster.name} 绑定：${chipMaster.harness} · ${chipMaster.model}（点击编辑）`
+          : chiefModel
+            ? `核心代理当前：${chiefHarnessName ? chiefHarnessName + ' · ' : ''}${chiefModel}（点击切换）`
+            : '核心代理未运行（点击选择模型）'"
         @click="modelMenuOpen = !modelMenuOpen"
       >
         <span class="topbar__model-dot" aria-hidden="true"></span>
-        <span class="topbar__model-name"><template v-if="chiefHarnessName">{{ chiefHarnessName }} · </template>{{ chiefModel ?? '模型' }}</span>
+        <span class="topbar__model-name">
+          <template v-if="chipMaster">{{ chipMaster.harness }} · {{ chipMaster.model }}</template>
+          <template v-else><template v-if="chiefHarnessName">{{ chiefHarnessName }} · </template>{{ chiefModel ?? '模型' }}</template>
+        </span>
       </button>
       <template v-if="modelMenuOpen">
         <div class="topbar__mmask" @click="modelMenuOpen = false"></div>
         <div class="topbar__mpanel">
+          <!-- 主代理视图：编辑该主代理的 Harness×模型绑定（不调 /agent/model） -->
+          <template v-if="chipMaster">
+            <div class="topbar__bind">
+              <p class="topbar__bind-line">
+                <b>{{ chipMaster.name }}</b> 当前绑定
+              </p>
+              <p class="topbar__bind-val">
+                <code>{{ chipMaster.harness }} · {{ chipMaster.model }}</code>
+              </p>
+              <button type="button" class="btn btn--sm btn--primary" @click="modelMenuOpen = false; emit('edit-binding')">
+                编辑绑定
+              </button>
+            </div>
+            <footer class="topbar__bind-foot">
+              <button type="button" class="topbar__manage" @click="modelMenuOpen = false; emit('manage-models')">管理登记 →</button>
+            </footer>
+          </template>
+          <!-- 核心代理视图：切换弹层 -->
           <ModelMenu
+            v-else
             :entries="modelEntries"
             :current-model="chiefModel"
             :show-default="projectHasDefault"
@@ -193,5 +222,39 @@ const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.m
   padding: var(--sp-1);
   max-height: 340px;
   overflow-y: auto;
+}
+
+/* 主代理视图的绑定面板 */
+.topbar__bind {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+}
+
+.topbar__bind-line {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+}
+
+.topbar__bind-val code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+}
+
+.topbar__bind-foot {
+  border-top: 1px solid var(--c-border);
+  margin-top: 2px;
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.topbar__bind-foot .topbar__manage {
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  padding: 2px 6px;
+}
+
+.topbar__bind-foot .topbar__manage:hover {
+  color: var(--c-ink);
 }
 </style>

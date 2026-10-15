@@ -41,6 +41,11 @@ const emit = defineEmits<{
 
 const el = ref<HTMLElement | null>(null)
 const draft = ref('')
+/** 钉底：用户上翻查看历史时解除，出现「回到最新」；内容更新只在其钉底时跟随 */
+const pinned = ref(true)
+let lastMsgCount = 0
+/** 程序化滚动保护窗：平滑滚底途中产生的 scroll 事件不当作用户上翻 */
+let programmaticUntil = 0
 
 const hasChat = computed(() => Object.keys(props.chatByRound).length > 0)
 
@@ -52,9 +57,59 @@ const tailChat = computed(() => {
     .flatMap(([, list]) => list)
 })
 
-async function scrollToEnd(): Promise<void> {
-  await nextTick()
-  if (el.value) el.value.scrollTop = el.value.scrollHeight
+const msgCount = computed(() => Object.values(props.chatByRound).reduce((n, list) => n + list.length, 0))
+
+function onScroll(): void {
+  const node = el.value
+  if (!node) return
+  if (Date.now() < programmaticUntil) return
+  pinned.value = node.scrollHeight - node.scrollTop - node.clientHeight < 80
+}
+
+/** rAF 平滑滚动；rAF 不活跃的环境（内嵌浏览器节流成 0 帧）200ms 内直接落位 */
+let scrollAnim = 0
+
+function animateScrollTo(node: HTMLElement, target: number): void {
+  cancelAnimationFrame(scrollAnim)
+  const from = node.scrollTop
+  const dist = target - from
+  if (Math.abs(dist) < 1) return
+  let fired = false
+  const t0 = performance.now()
+  const dur = 320
+  const step = (t: number): void => {
+    fired = true
+    const p = Math.min(1, (t - t0) / dur)
+    node.scrollTop = from + dist * (1 - (1 - p) ** 3)
+    if (p < 1) scrollAnim = requestAnimationFrame(step)
+  }
+  scrollAnim = requestAnimationFrame(step)
+  setTimeout(() => {
+    if (!fired) {
+      cancelAnimationFrame(scrollAnim)
+      node.scrollTop = target
+    }
+  }, 200)
+}
+
+function scrollToEnd(behavior: ScrollBehavior = 'auto'): void {
+  nextTick(() => {
+    const node = el.value
+    if (!node) return
+    const target = node.scrollHeight
+    if (behavior === 'smooth') {
+      animateScrollTo(node, target)
+      programmaticUntil = Date.now() + 480
+    } else {
+      node.scrollTop = target
+      programmaticUntil = Date.now() + 100
+    }
+  })
+}
+
+function jumpToLatest(): void {
+  pinned.value = true
+  scrollToEnd('smooth')
 }
 
 onMounted(() => {
@@ -62,9 +117,13 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.feed, Object.keys(props.chatByRound).length, props.streaming, props.streamText],
-  () => {
-    void scrollToEnd()
+  () => [props.feed, msgCount.value, props.streaming, props.streamText],
+  ([, count], prev) => {
+    if (!pinned.value) return
+    // 新消息落底用平滑滚动，流式增量用瞬时跟随
+    const newMsg = Array.isArray(prev) && (count as number) > (prev[1] as number)
+    scrollToEnd(newMsg || (count as number) > lastMsgCount ? 'smooth' : 'auto')
+    lastMsgCount = count as number
   },
 )
 
@@ -72,6 +131,8 @@ function send(): void {
   const text = draft.value.trim()
   if (!text || props.streaming) return
   draft.value = ''
+  pinned.value = true
+  scrollToEnd('smooth')
   emit('send', text)
 }
 
@@ -116,35 +177,14 @@ function verdictLines(fr: FeedRound): string[] {
 
 <template>
   <div class="core">
-    <div ref="el" class="core__feed">
+    <div ref="el" class="core__feed" @scroll.passive="onScroll">
       <div class="core__inner">
         <p v-if="feed.length === 0 && !hasChat" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
 
         <template v-for="fr in feed" :key="fr.info.n">
           <RoundDivider :info="fr.info" />
 
-          <!-- 本轮对话（chat.* 事件投影：人 ↔ 核心代理） -->
-          <template v-for="(msg, i) in chatByRound[fr.info.n] ?? []" :key="`c-${fr.info.n}-${i}`">
-            <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
-            <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
-              <span class="core__avatar" aria-hidden="true">核</span>
-              <div class="core__bubble core__bubble--error">
-                {{ msg.text }}
-                <button
-                  v-if="msg.action?.kind === 'start-retry-model'"
-                  type="button"
-                  class="core__retry"
-                  @click="emit('start-retry', msg)"
-                >启动核心代理</button>
-                <button v-else type="button" class="core__retry" @click="emit('retry')">重试</button>
-              </div>
-            </div>
-            <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
-              <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
-              <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
-            </div>
-          </template>
-
+          <!-- 轮内账本事实在前（卡片/版本/派发与回执汇报）…… -->
           <template v-for="card in fr.cards" :key="card.card_id">
             <div v-if="cardIntro(card)" class="core__msg core__msg--core">
               <span class="core__avatar" aria-hidden="true">核</span>
@@ -170,6 +210,28 @@ function verdictLines(fr: FeedRound): string[] {
             <span class="core__avatar" aria-hidden="true">核</span>
             <div class="core__bubble core__bubble--core">{{ line }}</div>
           </div>
+
+          <!-- ……对话沉底：新消息始终出现在底部（时间正序） -->
+          <template v-for="(msg, i) in chatByRound[fr.info.n] ?? []" :key="`c-${fr.info.n}-${i}`">
+            <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
+            <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
+              <span class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble core__bubble--error">
+                {{ msg.text }}
+                <button
+                  v-if="msg.action?.kind === 'start-retry-model'"
+                  type="button"
+                  class="core__retry"
+                  @click="emit('start-retry', msg)"
+                >启动核心代理</button>
+                <button v-else type="button" class="core__retry" @click="emit('retry')">重试</button>
+              </div>
+            </div>
+            <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
+              <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
+              <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
+            </div>
+          </template>
         </template>
 
         <!-- 轮次未入列时的兜底渲染（如轮次列表尚未刷新） -->
@@ -202,6 +264,9 @@ function verdictLines(fr: FeedRound): string[] {
           </div>
         </div>
       </div>
+
+      <!-- 用户上翻后出现；新内容不再强制拽回 -->
+      <button v-if="!pinned" type="button" class="core__jump" @click="jumpToLatest">↓ 回到最新</button>
     </div>
 
     <footer class="core__composer">
@@ -263,6 +328,22 @@ function verdictLines(fr: FeedRound): string[] {
   color: var(--c-ink-3);
   padding: var(--sp-5);
   text-align: center;
+}
+
+/* 上翻后悬浮的「回到最新」 */
+.core__jump {
+  position: sticky;
+  bottom: 12px;
+  margin: -34px auto 0;
+  display: block;
+  z-index: 5;
+  font-size: var(--fs-12);
+  color: var(--c-ink);
+  background: var(--c-panel);
+  border: 1px solid var(--c-border-strong);
+  border-radius: 999px;
+  padding: 4px 14px;
+  box-shadow: 0 4px 14px rgba(29, 37, 48, 0.14);
 }
 
 .core__msg {

@@ -451,7 +451,8 @@ export const FALLBACK_MODEL_ENTRIES: ModelEntry[] = [
   { id: 'mdl-4', harness: 'codex', model: 'deepseek-v3.2' },
   { id: 'mdl-5', harness: 'kimicode', model: 'kimi-k2.5' },
   { id: 'mdl-6', harness: 'kimicode', model: 'qwen3-max' },
-  { id: 'mdl-7', harness: 'mcode', model: 'minimax-m2.7' },
+  { id: 'mdl-7', harness: 'mcode', model: 'minimax/MiniMax-M3', provider: 'minimax-cn' },
+  { id: 'mdl-8', harness: 'pi', model: 'MiniMax-M3', provider: 'minimax-cn' },
 ]
 
 /** 「读取 CLI 内部的会话列表」的 mock 形态（R-M2 接真实 CLI 会话目录） */
@@ -512,11 +513,11 @@ export function createMockApiClient(): ApiClient {
   const mastersBySlug: Record<string, MasterInfo[]> = {
     'daily-report': [
       { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax-m2.7', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax/MiniMax-M3', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
     expense: [
       { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax-m2.7', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax/MiniMax-M3', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
   }
   let masterSeq = 0
@@ -1216,6 +1217,50 @@ export function createMockApiClient(): ApiClient {
       const children = FAKE_FS[dir]
       if (!children) throw new ApiError(422, { code: 'validation_error', message: '目录不存在或不是目录' })
       return { items: children.map((p) => ({ name: p.slice(p.replace(/\/$/, '').lastIndexOf('/') + 1), path: p })) }
+    },
+
+    deleteProject: async (slug) => {
+      const idx = projects.findIndex((x) => x.slug === slug)
+      if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `项目 ${slug} 不存在（mock）` })
+      projects.splice(idx, 1)
+      delete trees[slug]
+      delete ledgers[slug]
+      delete blocksBySlug[slug]
+      delete mastersBySlug[slug]
+    },
+
+    updateMaster: async (slug, id, body) => {
+      const masters = mastersBySlug[slug] ?? []
+      const master = masters.find((m) => m.id === id)
+      if (!master) throw new ApiError(404, { code: 'not_found', message: `主代理 ${id} 不存在（mock）` })
+      const name = body.name?.trim() ?? master.name
+      const duty = body.duty?.trim() ?? master.duty
+      if (!name || !duty) throw new ApiError(422, { code: 'validation_error', message: '名称与职责必填' })
+      const harness = body.harness?.trim() || master.harness
+      const model = body.model?.trim() || master.model
+      if (!harness || !model) throw new ApiError(422, { code: 'validation_error', message: 'Harness 与模型必选（从「模型」登记里选）' })
+      if (masters.some((m) => m.id !== id && m.name === name)) {
+        throw new ApiError(409, { code: 'conflict', message: `同名主代理已存在：${name}` })
+      }
+      const session = body.session?.trim() || master.session || ''
+      master.name = name
+      master.duty = duty
+      master.dir = body.dir?.trim() || master.dir
+      master.harness = harness
+      master.model = model
+      master.session = session
+      master.session_title = sessionTitle(session)
+      return { ...master }
+    },
+    deleteMaster: async (slug, id) => {
+      const masters = mastersBySlug[slug] ?? []
+      const idx = masters.findIndex((m) => m.id === id)
+      if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `主代理 ${id} 不存在（mock）` })
+      const busy = ledgers[slug]?.packages.some((p) =>
+        p.tasks.some((t) => t.master === id && !['done', 'rejected'].includes(t.status)),
+      )
+      if (busy) throw new ApiError(409, { code: 'conflict', message: '该主代理有在跑的任务，等任务结束或先处理任务再删除' })
+      masters.splice(idx, 1)
     },
   }
 

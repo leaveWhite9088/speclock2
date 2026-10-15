@@ -29,6 +29,8 @@ const props = defineProps<{
   modelEntries: ModelEntry[]
   /** CLI 内部的会话列表：主代理唤醒后接续选定的会话工作 */
   cliSessions: CliSession[]
+  /** 顶栏「编辑绑定」请求：非空时打开对应主代理的编辑弹窗 */
+  editMaster: MasterInfo | null
 }>()
 
 const emit = defineEmits<{
@@ -37,12 +39,20 @@ const emit = defineEmits<{
   (e: 'masters-changed'): void
   (e: 'start-agent'): void
   (e: 'projects-changed', createdSlug?: string): void
+  (e: 'master-edit-done'): void
 }>()
 
 /** 新建 / 编辑项目弹窗（同一张表单复用） */
 const projectModal = ref<null | { mode: 'create' } | { mode: 'edit'; project: Project }>(null)
 
-const showModal = ref(false)
+/** 主代理新建 / 编辑弹窗；editViaRequest = 顶栏「编辑绑定」触发（关闭时回执） */
+const masterModal = ref<null | { mode: 'add' } | { mode: 'edit'; master: MasterInfo }>(null)
+const editViaRequest = ref(false)
+/** 行菜单（项目/主代理）：confirm = 删除二次确认态；error = 行内报错（如 409 在跑任务） */
+const projMenu = ref<null | { slug: string; confirm: boolean; error: string }>(null)
+const masterMenu = ref<null | { id: string; confirm: boolean; error: string }>(null)
+const menuBusy = ref(false)
+
 const newName = ref('')
 const newDuty = ref('')
 const newDir = ref('')
@@ -73,8 +83,9 @@ function sessionLabel(s: CliSession): string {
   return `${s.title} · ${s.id} · ${day}`
 }
 
-function openAdd(): void {
-  showModal.value = true
+function openMasterAdd(): void {
+  masterModal.value = { mode: 'add' }
+  editViaRequest.value = false
   newName.value = ''
   newDuty.value = ''
   newDir.value = ''
@@ -84,12 +95,38 @@ function openAdd(): void {
   addError.value = ''
 }
 
-function closeAdd(): void {
-  showModal.value = false
+function openMasterEdit(m: MasterInfo): void {
+  masterModal.value = { mode: 'edit', master: m }
+  newName.value = m.name
+  newDuty.value = m.duty
+  newDir.value = m.dir
+  newHarness.value = m.harness
+  newModel.value = m.model
+  newSession.value = m.session ?? ''
   addError.value = ''
 }
 
-async function submitAdd(): Promise<void> {
+function closeMasterModal(): void {
+  masterModal.value = null
+  addError.value = ''
+  if (editViaRequest.value) {
+    editViaRequest.value = false
+    emit('master-edit-done')
+  }
+}
+
+/** 顶栏「编辑绑定」请求：打开对应主代理的编辑弹窗 */
+watch(
+  () => props.editMaster,
+  (m) => {
+    if (m) {
+      editViaRequest.value = true
+      openMasterEdit(m)
+    }
+  },
+)
+
+async function submitMaster(): Promise<void> {
   if (!props.client || creating.value) return
   if (!newName.value.trim() || !newDuty.value.trim()) {
     addError.value = '名称与职责必填'
@@ -107,23 +144,58 @@ async function submitAdd(): Promise<void> {
     addError.value = '请选择要绑定的 CLI 会话'
     return
   }
+  const body = {
+    name: newName.value,
+    duty: newDuty.value,
+    dir: newDir.value,
+    harness: newHarness.value,
+    model: newModel.value,
+    session: newSession.value,
+  }
   creating.value = true
   addError.value = ''
   try {
-    await props.client.createMaster(props.currentSlug, {
-      name: newName.value,
-      duty: newDuty.value,
-      dir: newDir.value,
-      harness: newHarness.value,
-      model: newModel.value,
-      session: newSession.value,
-    })
-    closeAdd()
+    if (masterModal.value?.mode === 'edit') {
+      await props.client.updateMaster(props.currentSlug, masterModal.value.master.id, body)
+    } else {
+      await props.client.createMaster(props.currentSlug, body)
+    }
+    closeMasterModal()
     emit('masters-changed')
   } catch (err) {
     addError.value = err instanceof Error ? err.message : String(err)
   } finally {
     creating.value = false
+  }
+}
+
+/* ---------- 行菜单动作 ---------- */
+
+async function removeProject(slug: string): Promise<void> {
+  if (!props.client || menuBusy.value) return
+  menuBusy.value = true
+  try {
+    await props.client.deleteProject(slug)
+    projMenu.value = null
+    emit('projects-changed')
+  } catch (err) {
+    if (projMenu.value) projMenu.value = { ...projMenu.value, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    menuBusy.value = false
+  }
+}
+
+async function removeMaster(id: string): Promise<void> {
+  if (!props.client || menuBusy.value) return
+  menuBusy.value = true
+  try {
+    await props.client.deleteMaster(props.currentSlug, id)
+    masterMenu.value = null
+    emit('masters-changed')
+  } catch (err) {
+    if (masterMenu.value) masterMenu.value = { ...masterMenu.value, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    menuBusy.value = false
   }
 }
 
@@ -183,8 +255,8 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
           <button
             type="button"
             class="sidebar__gear"
-            title="项目设置（目录 / 核心代理 LLM）"
-            @click.stop="projectModal = { mode: 'edit', project: p }"
+            title="项目菜单"
+            @click.stop="projMenu = projMenu?.slug === p.slug ? null : { slug: p.slug, confirm: false, error: '' }"
           >
             <svg
               class="sidebar__gear-icon"
@@ -202,6 +274,30 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               />
             </svg>
           </button>
+          <!-- 项目行菜单：设置 / 删除（二次确认，账本保留为 .deleted） -->
+          <template v-if="projMenu?.slug === p.slug">
+            <div class="rowmenu__mask" @click="projMenu = null"></div>
+            <div class="rowmenu">
+              <template v-if="!projMenu.confirm">
+                <button type="button" class="rowmenu__item" @click="projectModal = { mode: 'edit', project: p }; projMenu = null">
+                  项目设置…
+                </button>
+                <button type="button" class="rowmenu__item rowmenu__item--danger" @click="projMenu = { ...projMenu, confirm: true }">
+                  删除项目…
+                </button>
+              </template>
+              <template v-else>
+                <p class="rowmenu__warn">删除后不可恢复；账本文件将保留为 <code>.deleted</code>。</p>
+                <p v-if="projMenu.error" class="rowmenu__error">{{ projMenu.error }}</p>
+                <div class="rowmenu__acts">
+                  <button type="button" class="rowmenu__cancel" :disabled="menuBusy" @click="projMenu = null">取消</button>
+                  <button type="button" class="rowmenu__del" :disabled="menuBusy" @click="removeProject(p.slug)">
+                    {{ menuBusy ? '删除中…' : '确认删除' }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </template>
         </li>
         <li v-if="projects.length === 0" class="sidebar__empty">
           （暂无项目）
@@ -247,7 +343,7 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
           </button>
         </li>
 
-        <li v-for="m in masters" :key="m.id">
+        <li v-for="m in masters" :key="m.id" class="sidebar__proj">
           <button
             type="button"
             class="sidebar__item"
@@ -281,19 +377,54 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               :title="masterStates[m.id].label"
             ></span>
           </button>
+          <button
+            type="button"
+            class="sidebar__gear"
+            title="主代理菜单"
+            @click.stop="masterMenu = masterMenu?.id === m.id ? null : { id: m.id, confirm: false, error: '' }"
+          >
+            <svg class="sidebar__gear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+          <!-- 主代理行菜单：编辑（PATCH）/ 删除（409 在跑任务行内提示） -->
+          <template v-if="masterMenu?.id === m.id">
+            <div class="rowmenu__mask" @click="masterMenu = null"></div>
+            <div class="rowmenu">
+              <template v-if="!masterMenu.confirm">
+                <button type="button" class="rowmenu__item" @click="openMasterEdit(m); masterMenu = null">
+                  编辑…
+                </button>
+                <button type="button" class="rowmenu__item rowmenu__item--danger" @click="masterMenu = { ...masterMenu, confirm: true }">
+                  删除…
+                </button>
+              </template>
+              <template v-else>
+                <p class="rowmenu__warn">删除主代理 {{ m.name }}？</p>
+                <p v-if="masterMenu.error" class="rowmenu__error">{{ masterMenu.error }}</p>
+                <div class="rowmenu__acts">
+                  <button type="button" class="rowmenu__cancel" :disabled="menuBusy" @click="masterMenu = null">取消</button>
+                  <button type="button" class="rowmenu__del" :disabled="menuBusy" @click="removeMaster(m.id)">
+                    {{ menuBusy ? '删除中…' : '确认删除' }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </template>
         </li>
       </ul>
 
-      <button v-if="!showModal" type="button" class="sidebar__add" :disabled="!client" @click="openAdd">＋ 添加主代理</button>
+      <button v-if="!masterModal" type="button" class="sidebar__add" :disabled="!client" @click="openMasterAdd">＋ 添加主代理</button>
     </section>
 
     <footer class="sidebar__foot">
       <slot name="foot" />
     </footer>
 
-    <!-- 添加主代理：详细弹窗（后续要与核心代理通信，配置要一次说清） -->
-    <ModalShell v-if="showModal" title="添加主代理" @close="closeAdd">
-      <form class="amaster" @submit.prevent="submitAdd">
+    <!-- 添加 / 编辑主代理：同一张表单（编辑走 PATCH，绑定从登记与会话列表选） -->
+    <ModalShell v-if="masterModal" :title="masterModal.mode === 'add' ? '添加主代理' : '编辑主代理'" @close="closeMasterModal">
+      <form class="amaster" @submit.prevent="submitMaster">
         <label class="amaster__field">
           名称
           <input v-model="newName" class="amaster__input" type="text" placeholder="如：数据主代理" :disabled="creating" />
@@ -333,9 +464,9 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
         <p v-if="addError" class="amaster__error">{{ addError }}</p>
 
         <footer class="amaster__actions">
-          <button type="button" class="btn" :disabled="creating" @click="closeAdd">取消</button>
+          <button type="button" class="btn" :disabled="creating" @click="closeMasterModal">取消</button>
           <button type="submit" class="btn btn--primary" :disabled="creating">
-            {{ creating ? '创建中…' : '创建主代理' }}
+            {{ creating ? '保存中…' : masterModal.mode === 'add' ? '创建主代理' : '保存' }}
           </button>
         </footer>
       </form>
@@ -525,6 +656,93 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
 .sidebar__gear-icon {
   width: 14px;
   height: 14px;
+}
+
+/* 行菜单（项目/主代理齿轮弹出）：设置/编辑 + 删除二次确认 */
+.rowmenu__mask {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+}
+
+.rowmenu {
+  position: absolute;
+  right: 6px;
+  top: calc(100% + 2px);
+  z-index: 46;
+  width: 200px;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-m);
+  box-shadow: 0 8px 24px rgba(29, 37, 48, 0.14);
+  padding: var(--sp-1);
+  display: grid;
+  gap: 1px;
+}
+
+.rowmenu__item {
+  width: 100%;
+  text-align: left;
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  padding: 5px 9px;
+  border-radius: var(--radius-m);
+}
+
+.rowmenu__item:hover {
+  background: var(--c-panel-2);
+}
+
+.rowmenu__item--danger {
+  color: var(--c-danger);
+}
+
+.rowmenu__warn {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  padding: 4px 8px 2px;
+}
+
+.rowmenu__warn code {
+  font-family: var(--font-mono);
+  color: var(--c-danger);
+}
+
+.rowmenu__error {
+  font-size: var(--fs-12);
+  color: var(--c-danger);
+  padding: 2px 8px;
+  word-break: break-all;
+}
+
+.rowmenu__acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-1);
+}
+
+.rowmenu__cancel {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  padding: 2px 8px;
+}
+
+.rowmenu__cancel:hover {
+  color: var(--c-ink);
+}
+
+.rowmenu__del {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: #fff;
+  background: var(--c-danger);
+  border-radius: var(--radius-m);
+  padding: 2px 10px;
+}
+
+.rowmenu__del:disabled {
+  opacity: 0.6;
 }
 
 .sidebar__proj:hover .sidebar__gear {

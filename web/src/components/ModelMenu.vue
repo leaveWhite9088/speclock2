@@ -5,8 +5,10 @@ import type { ModelPick } from '../types'
 import { findChiefEntry } from '../types'
 
 /**
- * 核心代理模型选择列表（/model 命令弹层与右上角弹层共用，同一数据源 =
- * 模型登记；当前生效模型高亮；「默认」= 跟随项目配置；次级入口管理登记）。
+ * 核心代理模型选择列表（/model 命令弹层与右上角弹层共用）：只列 provider
+ * 非空的登记条目（切换传 {provider, model}，harness 不是 provider——
+ * harness 专属条目只用于主代理绑定）；当前生效模型高亮；「默认」=
+ * 跟随项目配置；次级入口管理登记。
  */
 const props = defineProps<{
   entries: ModelEntry[]
@@ -19,6 +21,9 @@ const emit = defineEmits<{
   (e: 'pick', sel: ModelPick): void
   (e: 'manage'): void
 }>()
+
+/** 可切换条目：provider 非空（harness 专属条目不能当 provider 传） */
+const chiefEntries = computed(() => props.entries.filter((e) => e.provider))
 
 /** 当前生效模型对应的登记条目（高亮用；provider/model 全串或 model 段匹配） */
 const currentEntry = computed(() => findChiefEntry(props.currentModel, props.entries))
@@ -35,16 +40,19 @@ const currentEntry = computed(() => findChiefEntry(props.currentModel, props.ent
       <span class="mmenu__name">默认（跟随项目配置）</span>
     </button>
     <button
-      v-for="e in entries"
+      v-for="e in chiefEntries"
       :key="e.id"
       type="button"
       class="mmenu__item"
       :class="{ 'is-current': e === currentEntry }"
-      @click="emit('pick', { kind: 'entry', provider: e.harness, model: e.model })"
+      @click="emit('pick', { kind: 'entry', provider: e.provider!, model: e.model })"
     >
       <span class="mmenu__name">{{ e.harness }} · {{ e.model }}</span>
       <span v-if="e === currentEntry" class="mmenu__cur">当前</span>
     </button>
+    <p v-if="chiefEntries.length === 0" class="mmenu__empty">
+      登记里暂无带 provider 的条目——在「管理登记」里补上 provider 后即可切换。
+    </p>
     <footer class="mmenu__foot">
       <button type="button" class="mmenu__manage" @click="emit('manage')">管理登记 →</button>
     </footer>
@@ -93,6 +101,12 @@ const currentEntry = computed(() => findChiefEntry(props.currentModel, props.ent
   font-size: var(--fs-12);
   color: var(--c-ok);
   font-weight: 600;
+}
+
+.mmenu__empty {
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  padding: 6px 10px;
 }
 
 .mmenu__foot {

@@ -160,6 +160,31 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 
 对外 id 格式：`E-0001`（事件）/ `C-0001`（卡片）/ `P-0001`（任务包）/ `T-0001`（任务）/ `O-0001`（技术单）/ `mdl-N`（模型登记）；block/domain/document/master id 为纯数字字符串。
 
+## mcode 接入（第二真实 harness，2026-10-15 真机侦察）
+
+mcode = Minimax Code CLI v0.6.8（`~/.minimax-code/`，认证在 `~/.minimax/`）。
+
+- **headless**：`mcode exec "<prompt>" --permission full --cwd <dir>`——**纯文本 stdout**（无事件流），
+  全部 stdout 即回复文本；`FILES:` 约定照旧；token 不暴露 → 遥测恒 `estimated`；
+- **启动命令**：必须用 mcode 自带 Node 运行时（`~/.minimax-code/runtime/node-*/node.exe` +
+  `node_modules/@minimax-ai/code/cli.js`）——其 better-sqlite3 按自带版本编译，系统 Node 会报
+  NODE_MODULE_VERSION 不匹配（127 vs 137 实测）；`SPECLOCK2_MCODE_CMD` 可整体覆盖；
+- **会话**：默认每次 exec 新建会话；`--session <id>` 原地接续（不新建目录，记忆延续，实测跨进程派发
+  回忆暗号成功）；id 形如 `mvs_<32hex>`，只存于 `~/.minimax/v2/sessions/<yyyy>/<mm>/<dd>/…/manifest.json`
+  的 `sessionId`（目录名里是编码 id，不可直接用）；会话发现（`/api/cli-sessions`）只读 manifest 的
+  id 与时间；接续目标丢失 → 优雅降级为新会话（同 pi）；
+- **模型**：`--model` 须 `provider/model` 全名（实测 `minimax/MiniMax-M3` 可用、`minimax-cn/MiniMax-M3`
+  不可用、裸 `MiniMax-M3` 参数错误）；无 `--model` 时用 mcode 自身默认（受其账号 token plan 影响）；
+- **退出码**：0 成功；2 参数错误（如 --timeout 格式）；4 运行失败（模型不可用 / 会话不存在，错误行在
+  stdout：`mcode exec failed: …`）；6 超时（`mcode exec timeout: …`）。非零退出 → 派发器记 crashed
+  （结果带 stdout 尾部），不回执，看门狗兜底 timeout；
+- **`--permission full` 完全无人值守**（hello 级任务实测无任何交互）；`--timeout` 是上限不是下限
+  （5s 内完成则正常返回）；
+- **升级路径（本轮不用）**：`mcode exec --output-format json|stream-json` 存在，将来要结构化事件时再上；
+- **已知限制**：老会话可能因 mcode 内部迁移失效（实测报 "Canonical history target is missing after
+  migration"，exit 4）——此时按接续丢失降级为新会话即可；模型服务慢时单回合可达 10+ 分钟，看门狗
+  默认 60 分钟够用。
+
 ## 唤醒与探测边界（用户原则）
 
 工作台**只做两件事**：启动 Harness（launch-plan + spawn）与监控/探测（会话扫描、看门狗、遥测解析）。

@@ -179,7 +179,23 @@ function activityLabel(slug: string): string {
             class="sidebar__gear"
             title="项目设置（目录 / 核心代理 LLM）"
             @click.stop="projectModal = { mode: 'edit', project: p }"
-          >⚙</button>
+          >
+            <svg
+              class="sidebar__gear-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+              />
+            </svg>
+          </button>
         </li>
         <li v-if="projects.length === 0" class="sidebar__empty">
           （暂无项目）
@@ -460,7 +476,7 @@ function activityLabel(slug: string): string {
   white-space: nowrap;
 }
 
-/* 项目条目：悬停时副行切换为绑定的目录，右侧浮出设置齿轮 */
+/* 项目条目：悬停时在 slug 下方追加显示绑定的目录（高亮），右侧浮出设置齿轮 */
 .sidebar__proj {
   position: relative;
 }
@@ -471,13 +487,15 @@ function activityLabel(slug: string): string {
 
 .sidebar__gear {
   position: absolute;
-  right: 4px;
+  right: 5px;
   top: 50%;
   transform: translateY(-50%);
   display: none;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
   color: var(--c-ink-3);
-  font-size: var(--fs-12);
-  padding: 2px 4px;
   border-radius: var(--radius-m);
   z-index: 1;
 }
@@ -487,16 +505,19 @@ function activityLabel(slug: string): string {
   background: var(--c-border);
 }
 
+.sidebar__gear-icon {
+  width: 14px;
+  height: 14px;
+}
+
 .sidebar__proj:hover .sidebar__gear {
   display: inline-flex;
 }
 
 .sidebar__dir {
   display: none;
-}
-
-.sidebar__proj:hover .sidebar__item-sub {
-  display: none;
+  color: var(--c-ink-2);
+  font-weight: 500;
 }
 
 .sidebar__proj:hover .sidebar__dir {

@@ -31,7 +31,7 @@ def main() -> None:
         Path(record).write_text(json.dumps(sys.argv), encoding="utf-8")
 
     args = sys.argv[1:]
-    sleep_s, fail, positional = 0.0, False, []
+    sleep_s, fail, plain, positional = 0.0, False, False, []
     i = 0
     while i < len(args):
         if args[i] == "--sleep":
@@ -39,6 +39,9 @@ def main() -> None:
             i += 2
         elif args[i] == "--fail":
             fail = True
+            i += 1
+        elif args[i] == "--plain":
+            plain = True  # 模拟 mcode：只输出纯文本，不发 NDJSON
             i += 1
         else:
             positional.append(args[i])
@@ -65,6 +68,11 @@ def main() -> None:
         files = ["backend/hello-from-agent.txt"]
 
     duration_ms = round((time.time() - started) * 1000)
+    text = f"任务完成：写入 {len(files)} 个文件。FILES: {' '.join(files)}"
+    if plain:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+        sys.exit(0)
     send({"type": "message_start", "message": {"role": "user", "content": prompt}})
     send({"type": "message_end", "message": {
         "role": "assistant",

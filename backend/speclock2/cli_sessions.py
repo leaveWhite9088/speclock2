@@ -22,12 +22,20 @@ TITLE_MAX = 60
 
 
 def session_roots() -> list[Path]:
-    """会话根目录：pi 官方覆盖变量优先，其次工作台变量，最后默认目录。"""
+    """pi 会话根目录：pi 官方覆盖变量优先，其次工作台变量，最后默认目录。"""
     for var in ("PI_CODING_AGENT_SESSION_DIR", "SPECLOCK2_PI_SESSIONS_DIR"):
         value = os.environ.get(var)
         if value:
             return [Path(value).expanduser()]
     return [Path.home() / ".pi" / "agent" / "sessions"]
+
+
+def _mcode_roots() -> list[Path]:
+    """mcode 会话根目录（~/.minimax/v2/sessions/<yyyy>/<mm>/<dd>/）；测试可覆盖。"""
+    override = os.environ.get("SPECLOCK2_MCODE_SESSIONS_DIR")
+    if override:
+        return [Path(override).expanduser()]
+    return [Path.home() / ".minimax" / "v2" / "sessions"]
 
 
 def _parse_file(path: Path) -> dict | None:
@@ -77,6 +85,42 @@ def _parse_file(path: Path) -> dict | None:
     return {"id": sid, "title": title, "mtime": mtime, "path": path}
 
 
+def _scan_mcode() -> list[dict]:
+    """mcode 会话发现（只读 id 与时间，不解析其内部消息格式）。
+
+    每个会话是 ~/.minimax/v2/sessions/<yyyy>/<mm>/<dd>/<ts>_session_<blob>/ 下的
+    一个目录，manifest.json 首部带 sessionId 与 createdAt/updatedAt（毫秒时间戳）——
+    目录名里是编码 id，不能直接用，id 一律取 manifest。
+    """
+    found: list[dict] = []
+    for root in _mcode_roots():
+        if not root.is_dir():
+            continue
+        try:
+            manifests = sorted(root.rglob("manifest.json"),
+                               key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            continue
+        for manifest in manifests[:MAX_FILES]:
+            path = manifest.parent
+            if not path.is_dir():
+                continue
+            try:
+                meta = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            sid = meta.get("sessionId")
+            if not isinstance(sid, str) or not sid:
+                continue
+            ts = meta.get("updatedAtMs") or meta.get("createdAtMs")
+            try:
+                mtime = (ts / 1000) if isinstance(ts, (int, float)) else path.stat().st_mtime
+            except OSError:
+                continue
+            found.append({"id": sid, "title": "mcode 会话", "mtime": mtime, "path": path})
+    return found
+
+
 def _scan_all() -> list[dict]:
     found: list[dict] = []
     for root in session_roots():
@@ -90,6 +134,7 @@ def _scan_all() -> list[dict]:
             info = _parse_file(path)
             if info:
                 found.append(info)
+    found.extend(_scan_mcode())
     found.sort(key=lambda x: x["mtime"], reverse=True)
     return found
 
@@ -107,8 +152,9 @@ def scan() -> list[dict]:
 
 
 def find_session_dir(session_id: str) -> Path | None:
-    """按会话 id 定位其文件所在目录（pi --session-dir 恢复用）；找不到返回 None。"""
+    """按会话 id 定位其存储目录（pi 供 --session-dir，mcode 作存在性检查）；找不到返回 None。"""
     for info in _scan_all():
         if info["id"] == session_id:
-            return info["path"].parent
+            path: Path = info["path"]
+            return path.parent if path.is_file() else path
     return None

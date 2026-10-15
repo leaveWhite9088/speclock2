@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "data"
     monkeypatch.setenv("SPECLOCK2_DATA_DIR", str(d))
-    # CLI 会话探测指向临时目录：测试不扫开发机 ~/.pi 的真实会话
+    # CLI 会话探测指向临时目录：测试不扫开发机 ~/.pi 与 ~/.minimax 的真实会话
     monkeypatch.setenv("SPECLOCK2_PI_SESSIONS_DIR", str(tmp_path / "cli-sessions"))
+    monkeypatch.setenv("SPECLOCK2_MCODE_SESSIONS_DIR", str(tmp_path / "mcode-sessions"))
     # 隔离开发机 backend/.env 的本地配置（key/模型配置不进测试环境）
     for key in ("SPECLOCK2_CHIEF_PROVIDER", "SPECLOCK2_CHIEF_MODEL", "SPECLOCK2_MASTER_MODEL",
                 "MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "SPECLOCK2_PI_CMD",
-                "PI_CODING_AGENT_SESSION_DIR", "SPECLOCK2_FAKE_RECORD_ARGV"):
+                "SPECLOCK2_MCODE_CMD", "PI_CODING_AGENT_SESSION_DIR",
+                "SPECLOCK2_FAKE_RECORD_ARGV"):
         monkeypatch.delenv(key, raising=False)
     return d
 

@@ -96,17 +96,16 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
     roster_model = (row.model or "").strip() if row is not None else ""
     model = roster_model or effective_chief_model_str(db, slug) or None
 
-    full = harness_map.build_argv(harness, prompt)  # [command, *args]
+    full = harness_map.build_argv(harness, prompt, cwd=cwd)  # [command, *args]
     command, args = full[0], harness_map.apply_model(full[1:], model)
     if row is not None:
         bound = (row.session_policy or {}).get("cli_session")
         if bound:
             resume_dir = cli_sessions.find_session_dir(bound)
-            extra = harness_map.build_resume_args(
-                harness, bound, str(resume_dir) if resume_dir else None
-            )
-            if extra:
-                args = [a for a in args if a != "--no-session"] + extra
+            if resume_dir is not None:  # 接续存储还在才接（mcode/pi 同一降级语义）
+                extra = harness_map.build_resume_args(harness, bound, str(resume_dir))
+                if extra:
+                    args = [a for a in args if a != "--no-session"] + extra
 
     return {
         "harness": name,
@@ -114,6 +113,8 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
         "argv": args,
         "cwd": cwd,
         "model": model,
+        # 输出形态：pi 等走 NDJSON 事件流；mcode exec 是纯文本（全部 stdout 即回复）
+        "output": harness.get("output", "ndjson"),
         "wrap_cmd": command.lower().endswith((".cmd", ".bat")),
         "watchdog_minutes": float(cfg.get("watchdog_minutes_default", 60)),
         "chief": effective_chief(db, slug),
@@ -173,15 +174,17 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
         return {"task_id": task_id, "outcome": "spawn_failed", "error": f"{type(e).__name__}: {e}"}
     records: list[dict] = []
     buffer = b""
+    stdout_raw = bytearray()
     stderr_tail = b""
 
     async def read_stdout() -> None:
-        nonlocal buffer
+        nonlocal buffer, stdout_raw
         assert proc.stdout
         while True:
             chunk = await proc.stdout.read(4096)
             if not chunk:
                 break
+            stdout_raw += chunk
             buffer += chunk
             lines, buffer = split_records(buffer)  # 与 pi_runtime 同款 LF 分帧
             for line in lines:
@@ -210,19 +213,29 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
 
     duration_ms = round((asyncio.get_running_loop().time() - started) * 1000)
     if proc.returncode != 0:
+        # mcode 失败时错误行走 stdout（如 "mcode exec failed: ..."），一并带上
         return {"task_id": task_id, "outcome": "crashed", "exit_code": proc.returncode,
-                "stderr": stderr_tail.decode("utf-8", "replace")}
+                "stderr": stderr_tail.decode("utf-8", "replace"),
+                "stdout_tail": bytes(stdout_raw[-300:]).decode("utf-8", "replace")}
 
-    text, usage = _assistant_text_and_usage(records)
+    if plan.get("output") == "text":
+        # mcode exec：纯文本 stdout，全部文本即回复；token 不暴露 → 恒估算
+        text = bytes(stdout_raw).decode("utf-8", "replace").strip()
+        usage = None
+    else:
+        text, usage = _assistant_text_and_usage(records)
     files = parse_files_changed(text)
     telemetry = {
         "duration_ms": duration_ms,
         "tokens": {k: usage.get(k) for k in ("input", "output", "cacheRead", "cacheWrite")} if usage else None,
         "token_source": "exact" if usage else "estimated",  # 解析不到精确值就标估算
     }
+    ok_word = "0" if proc.returncode == 0 else str(proc.returncode)
+    detail = (f"输出 {len(records)} 条事件" if usage
+              else f"输出 {len(text)} 字符（纯文本 harness）")
     receipt = receipt_service(db, slug, task_id, ReceiptBody(
         files_changed=files,
-        self_check=f"主代理进程退出码 0；输出 {len(records)} 条事件",
+        self_check=f"主代理进程退出码 {ok_word}；{detail}",
         summary=text[:200],
         telemetry=telemetry,
     ))

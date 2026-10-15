@@ -155,6 +155,10 @@ class BaseSession:
     async def prompt(self, message: str, draft: dict | None = None) -> str:
         raise NotImplementedError
 
+    async def set_model(self, model: str) -> dict:
+        """会话内切换模型（契约 v0.5 /agent/model）；返回 {ok, model}。"""
+        raise NotImplementedError
+
     async def stats(self) -> dict | None:
         return None
 
@@ -300,6 +304,18 @@ class PiSession(BaseSession):
                 raise RuntimeError("核心代理回合超时（agent_settled 未到达）")
             return self._final_text if self._final_text is not None else "".join(self._turn_deltas)
 
+    async def set_model(self, model: str) -> dict:
+        """pi RPC set_model：会话内持久切换（pi 原生行为），并反映到 model 属性。"""
+        provider, _, model_id = model.rpartition("/")
+        payload: dict = {"type": "set_model", "modelId": model_id}
+        if provider:
+            payload["provider"] = provider
+        response = await self._send(payload)
+        if not response.get("success"):
+            raise RuntimeError(f"set_model 失败：{response.get('error')}")
+        self._model_args = ["--model", model]
+        return {"ok": True, "model": model, "data": response.get("data") or {}}
+
     async def stats(self) -> dict | None:
         if not self.running:
             return self.last_stats
@@ -333,10 +349,15 @@ class MockSession(BaseSession):
         self.session_id = f"mock-{slug}"
         self.create_card_fn = create_card_fn  # async (slug, draft) -> card dict
         self.dispatch_fn = dispatch_fn  # async (slug, package_id) -> [task 结果]
+        self._model_override: str | None = None
 
     @property
     def model(self) -> str:
-        return "mock"
+        return self._model_override or "mock"
+
+    async def set_model(self, model: str) -> dict:
+        self._model_override = model
+        return {"ok": True, "model": model}
 
     @property
     def running(self) -> bool:

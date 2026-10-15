@@ -184,6 +184,35 @@ async def agent_start(slug: str, body: AgentStartBody, request: Request) -> dict
     return {"running": True, "model": session.model, "session_id": session.session_id}
 
 
+class AgentModelBody(BaseModel):
+    provider: str | None = None
+    model: str = ""
+
+
+@router.post("/agent/model")
+async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> dict:
+    """切换核心代理当前会话模型（契约 v0.5）：pi RPC set_model，会话内持久。
+
+    会话未运行 → 409（先 /agent/start）；模型名非法由 pi 报错透传 502。
+    """
+    _project_or_404(request, slug)
+    model = (body.model or "").strip()
+    if not model:
+        raise ApiError(422, "validation_error", "model 不能为空")
+    provider = (body.provider or "").strip()
+    target = f"{provider}/{model}" if provider else model
+    session = request.app.state.pi.get(slug)
+    if session is None or not session.running:
+        raise ApiError(409, "conflict", "核心代理会话未运行，无法切换模型（先 POST /agent/start）")
+    try:
+        result = await session.set_model(target)
+    except NotImplementedError:
+        raise ApiError(501, "not_implemented", "当前会话类型不支持切换模型")
+    except Exception as exc:
+        raise ApiError(502, "agent_error", f"切换模型失败：{exc}")
+    return {"ok": True, "model": result.get("model", target)}
+
+
 @router.post("/agent/stop")
 async def agent_stop(slug: str, request: Request) -> dict:
     _project_or_404(request, slug)

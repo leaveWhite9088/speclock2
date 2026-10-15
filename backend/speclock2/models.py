@@ -202,6 +202,10 @@ class Task(LedgerBase):
     session_ref: Mapped[str | None] = mapped_column(sa.Text)
     dispatch_prompt_event: Mapped[str | None] = mapped_column(sa.Text)
     watchdog_deadline: Mapped[str | None] = mapped_column(sa.Text)
+    # 看门狗重启重建（追加项 9）：定时器是内存态，派发时刻与时长落库，
+    # 启动时按 deadline 重武装（老数据只有 deadline 也兼容）
+    dispatched_at: Mapped[str | None] = mapped_column(sa.Text)
+    watchdog_minutes: Mapped[float | None] = mapped_column(sa.Float)
     created_at: Mapped[str] = mapped_column(sa.Text)
     updated_at: Mapped[str] = mapped_column(sa.Text)
 

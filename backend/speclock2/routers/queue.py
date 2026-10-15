@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -69,24 +70,13 @@ def _transition(task: models.Task, to_status: str) -> None:
 
 
 def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime) -> None:
-    """内存看门狗：到期仍未回执（dispatched）→ timeout + task.timeout 事件（§9.4）。"""
+    """内存看门狗：到期仍未回执 → timeout + task.timeout 事件（§9.4）。"""
     delay = max((deadline - datetime.now().astimezone()).total_seconds(), 0.1)
 
     def fire() -> None:
         timers.discard(timer)
         try:
-            with db.ledger_session(slug) as session:
-                task = session.get(models.Task, task_id)
-                if task is None or task.status != "dispatched":
-                    return  # 已回执/已处理，忽略
-                task.status = "timeout"
-                task.updated_at = now_iso()
-                round_ = flow.get_open_round(session)
-                flow.add_event(
-                    session, round_.n if round_ else 0, "system", "task.timeout",
-                    {"task": fmt_id("T", task_id)}, {"deadline": task.watchdog_deadline},
-                )
-                session.commit()
+            _mark_task_timeout(db, slug, task_id)
         except Exception:
             pass  # 看门狗尽力而为，不向外抛
 
@@ -94,6 +84,61 @@ def _start_watchdog(db, timers: set, slug: str, task_id: int, deadline: datetime
     timer.daemon = True
     timers.add(timer)
     timer.start()
+
+
+ZOMBIE_STATUSES = ("dispatched", "running")  # 已派发未回执的状态（看门狗管辖范围）
+
+
+def _mark_task_timeout(db, slug: str, task_id: int) -> bool:
+    """僵尸任务收尸：仍处 dispatched/running → timeout + task.timeout 事件；返回是否标记。"""
+    with db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is None or task.status not in ZOMBIE_STATUSES:
+            return False  # 已回执/已处理，忽略
+        task.status = "timeout"
+        task.updated_at = now_iso()
+        round_ = flow.get_open_round(session)
+        flow.add_event(
+            session, round_.n if round_ else 0, "system", "task.timeout",
+            {"task": fmt_id("T", task_id)}, {"deadline": task.watchdog_deadline},
+        )
+        session.commit()
+    return True
+
+
+def rearm_watchdogs(db, timers: set, ledgers_dir) -> dict:
+    """重启后重建看门狗（追加项 9）：定时器是内存态，进程重启即丢。
+
+    扫描全部账本里 dispatched/running 的僵尸任务，按落库的 watchdog_deadline
+    重武装；已过期（或无 deadline）的立即收尸标 timeout。派发时落库的
+    dispatched_at/watchdog_minutes 是 deadline 的来源与审计字段。
+    """
+    stats = {"zombies": 0, "rearmed": 0, "timed_out": 0}
+    ledgers_dir = Path(ledgers_dir)
+    if not ledgers_dir.is_dir():
+        return stats
+    now = datetime.now().astimezone()
+    for db_file in sorted(ledgers_dir.glob("*.db")):
+        slug = db_file.stem
+        with db.ledger_session(slug) as session:
+            rows = [
+                (t.id, t.watchdog_deadline)
+                for t in session.scalars(
+                    select(models.Task).where(models.Task.status.in_(ZOMBIE_STATUSES))
+                ).all()
+            ]
+        for task_id, deadline_str in rows:
+            stats["zombies"] += 1
+            try:
+                deadline = datetime.fromisoformat(deadline_str)
+            except (TypeError, ValueError):
+                deadline = None
+            if deadline is not None and deadline > now:
+                _start_watchdog(db, timers, slug, task_id, deadline)
+                stats["rearmed"] += 1
+            elif _mark_task_timeout(db, slug, task_id):
+                stats["timed_out"] += 1
+    return stats
 
 
 def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes: float) -> models.Task:
@@ -106,6 +151,8 @@ def dispatch_service(db, timers: set, slug: str, task_id: int, watchdog_minutes:
         deadline = datetime.now().astimezone() + timedelta(minutes=watchdog_minutes)
         task.status = "dispatched"
         task.watchdog_deadline = deadline.isoformat(timespec="seconds")
+        task.dispatched_at = now_iso()  # 落库：重启后重建看门狗的审计字段（追加项 9）
+        task.watchdog_minutes = float(watchdog_minutes)
         task.updated_at = now_iso()
         round_ = flow.get_open_round(session)
         flow.add_event(

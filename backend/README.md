@@ -177,7 +177,10 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
   被派发 agent 不可能把文件写进工作台自己（2026-10-15 事故修复）；
 - 项目核心代理模型：`chief_provider/chief_model` 按项目生效，空回退全局 env；
   `GET /api/p/{slug}/agent` 返回生效值与来源（`chief.source: project|env`）；
-- registry.db 无迁移框架：启动时对缺列做幂等 `ALTER TABLE ADD COLUMN`（老库自动补齐）。
+- registry.db 无迁移框架：启动时对缺列做幂等 `ALTER TABLE ADD COLUMN`（老库自动补齐）；
+- **看门狗重启重建**：派发时 `dispatched_at`/`watchdog_minutes` 落库（定时器本身是内存态，
+  进程重启即丢）；应用启动扫描全部账本里 dispatched/running 的僵尸任务，按落库
+  watchdog_deadline 重武装，已过期（或无 deadline）的立即收尸标 timeout + `task.timeout` 事件。
 
 ## 账本表
 

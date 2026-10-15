@@ -1,6 +1,7 @@
 """数据库连接管理：注册表引擎 + 按需打开的账本引擎（进程内缓存）。
 
-无迁移框架：启动时建注册表，打开账本时幂等建表（沿用 v1 做法）。
+无迁移框架：启动时建注册表，打开账本时幂等建表；已存在的表缺列时
+补 ALTER TABLE ADD COLUMN（列清单见各 *_COLUMNS）。
 """
 
 from __future__ import annotations
@@ -13,6 +14,14 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .config import Settings
+
+# 已发布表的增量列（表名 → [(列名, SQL 类型)]）；create_all 不改已有表，缺列在此补齐
+_REGISTRY_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "projects": [("working_dir", "TEXT"), ("chief_provider", "TEXT"), ("chief_model", "TEXT")],
+}
+_LEDGER_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "tasks": [("dispatched_at", "TEXT"), ("watchdog_minutes", "REAL")],
+}
 
 
 def make_engine(db_path: Path) -> sa.Engine:
@@ -29,30 +38,28 @@ class Database:
 
     def init_registry(self) -> None:
         models.RegistryBase.metadata.create_all(self.registry_engine)
-        self._ensure_registry_columns()
+        self._ensure_columns(self.registry_engine, _REGISTRY_COLUMNS)
 
-    def _ensure_registry_columns(self) -> None:
-        """无迁移框架下的最小列补齐：create_all 不改已有表，缺的列用 ALTER TABLE 补。"""
-        wanted = {
-            "projects": ["working_dir", "chief_provider", "chief_model"],
-        }
-        with self.registry_engine.connect() as conn:
+    def _ensure_columns(self, engine: sa.Engine, wanted: dict[str, list[tuple[str, str]]]) -> None:
+        """幂等补列：已存在的表按 PRAGMA table_info 对账，缺的 ALTER TABLE ADD COLUMN。"""
+        with engine.connect() as conn:
             for table, columns in wanted.items():
                 existing = {
                     row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
                 }
-                for name in columns:
+                for name, sql_type in columns:
                     if name not in existing:
-                        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} TEXT")
+                        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
             conn.commit()
 
     def ledger_engine(self, slug: str) -> sa.Engine:
-        """打开（必要时创建）项目账本文件；建表幂等。"""
+        """打开（必要时创建）项目账本文件；建表幂等 + 增量补列。"""
         with self._lock:
             engine = self._ledger_engines.get(slug)
             if engine is None:
                 engine = make_engine(self.settings.ledger_path(slug))
                 models.LedgerBase.metadata.create_all(engine)
+                self._ensure_columns(engine, _LEDGER_COLUMNS)
                 self._ledger_engines[slug] = engine
             return engine
 

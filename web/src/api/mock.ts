@@ -1094,9 +1094,7 @@ export function createMockApiClient(): ApiClient {
       if (!body.name.trim() || !body.duty.trim()) {
         throw new ApiError(422, { code: 'validation_error', message: '名称与职责必填' })
       }
-      if (!body.session?.trim()) {
-        throw new ApiError(422, { code: 'validation_error', message: '请选择要绑定的 CLI 会话' })
-      }
+      // 会话绑定可选（修复单 22）：空 = 开始新对话，与真实后端一致
       if (!body.harness?.trim() || !body.model?.trim()) {
         throw new ApiError(422, { code: 'validation_error', message: 'Harness 与模型必选（从「模型」登记里选）' })
       }
@@ -1107,7 +1105,7 @@ export function createMockApiClient(): ApiClient {
         dir: body.dir?.trim() || '（待定）',
         harness: body.harness.trim(),
         model: body.model.trim(),
-        session: body.session.trim(),
+        session: body.session?.trim() || '',
         session_title: sessionTitle(body.session),
       }
       ;(mastersBySlug[slug] ??= []).push(master)

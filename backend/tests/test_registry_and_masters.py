@@ -163,10 +163,14 @@ def test_master_create_validations(seeded):
     res = seeded.post("/api/p/a/masters", json={
         "name": "x", "duty": "y", "dir": "z", "harness": "pi", "model": "glm-4.7", "session": "sess-x"})
     assert res.status_code == 422 and "CLI 会话不存在" in res.json()["message"]
-    # 名称/职责/会话缺失
-    for bad in ({"name": " ", "duty": "y"}, {"name": "x", "duty": ""}, {"name": "x", "duty": "y", "session": ""}):
+    # 名称/职责缺失 → 422；会话缺失不拦（修复单 22：空 = 开始新对话）
+    for bad in ({"name": " ", "duty": "y"}, {"name": "x", "duty": ""}):
         body = {"harness": "pi", "model": "glm-4.7", "session": "sess-a", "dir": "d", **bad}
         assert seeded.post("/api/p/a/masters", json=body).status_code == 422
+    res = seeded.post("/api/p/a/masters", json={
+        "name": "无会话代理", "duty": "y", "harness": "pi", "model": "glm-4.7",
+        "session": "", "dir": "d"})
+    assert res.status_code == 201 and res.json()["session"] is None
     # 同名 → 409
     _add_master(seeded)
     res = seeded.post("/api/p/a/masters", json={

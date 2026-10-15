@@ -90,13 +90,21 @@ def _validate_binding(db, harness: str, model: str) -> models.ModelEntry:
 
 
 def _validate_session(session_id: str) -> str | None:
+    """会话绑定可选（修复单 22）：空 = 开始新对话，不绑定、不校验；
+    提供了 id 才要求存在于 CLI 会话清单。返回会话标题或 None。"""
     if not session_id:
-        raise ApiError(422, "validation_error", "请选择要绑定的 CLI 会话")
+        return None
     sessions = cli_sessions.scan()
     hit = next((s for s in sessions if s["id"] == session_id), None)
     if hit is None:
         raise ApiError(422, "validation_error", f"CLI 会话不存在：{session_id}（请刷新会话列表）")
     return hit["title"]
+
+
+def _session_policy(session_id: str, title: str | None) -> dict:
+    """session_policy：绑定会话时落 {cli_session, session_title}；未绑定落 {}。"""
+    sid = (session_id or "").strip()
+    return {"cli_session": sid, "session_title": title} if sid else {}
 
 
 def _master_or_404(session, master_id: str) -> models.Master:
@@ -147,8 +155,7 @@ def create_master(body: CreateMasterBody, slug: str, request: Request) -> dict:
             model=model,
             provider=provider or None,
             working_dir=(body.dir or "").strip(),
-            session_policy={"cli_session": (body.session or "").strip(),
-                            "session_title": session_title},
+            session_policy=_session_policy(body.session, session_title),
             created_at=now_iso(),
         )
         session.add(row)
@@ -194,8 +201,7 @@ def patch_master(body: PatchMasterBody, slug: str, master_id: str, request: Requ
             row.working_dir = (body.dir or "").strip()
         if "session" in fields:
             title = _validate_session((body.session or "").strip())
-            row.session_policy = {"cli_session": (body.session or "").strip(),
-                                  "session_title": title}
+            row.session_policy = _session_policy(body.session, title)
         session.commit()
         session.refresh(row)
         return master_out(row)

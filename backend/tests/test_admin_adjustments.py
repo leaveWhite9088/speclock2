@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from speclock2 import models
 from speclock2.utils import now_iso, parse_prefixed_id
@@ -182,19 +183,36 @@ def test_create_master_with_provider(client):
         "harness": "mcode", "model": "MiniMax-M3", "provider": "minimax-cn"})
     body = {"name": "m主代理", "duty": "d", "dir": ".", "harness": "mcode",
             "model": "MiniMax-M3", "provider": "minimax-cn"}
-    # 会话必选（同创建校验）
+    # 会话绑定可选（修复单 22）：空 = 开始新对话 → 201，session_policy 无 cli_session
     r = client.post("/api/p/ad2/masters", json={**body, "session": ""})
-    assert r.status_code == 422
-    # 用 pi 会话清单造一个（探测接口与 harness 无关，见 cli_sessions 测试）
+    assert r.status_code == 201, r.text
+    assert r.json()["session"] is None
+    with client.app.state.db.ledger_session("ad2") as s:
+        row = s.scalars(select(models.Master).where(models.Master.name == "m主代理")).first()
+        assert row.session_policy == {}
+    # 绑定不存在的会话 → 仍 422（提示刷新）
+    r = client.post("/api/p/ad2/masters", json={**body, "name": "坏会话代理", "session": "mvs_no_such_session"})
+    assert r.status_code == 422 and "不存在" in r.json()["message"]
+    # 绑定存在的会话 → 正常落 id 与 title（用 mcode 会话清单造一个）
     import os
 
     root = Path(os.environ["SPECLOCK2_MCODE_SESSIONS_DIR"]) / "d"
     root.mkdir(parents=True, exist_ok=True)
     (root / "manifest.json").write_text(json.dumps(
         {"sessionId": "mvs_prov000000000000000000000000", "createdAtMs": 1}), encoding="utf-8")
-    r = client.post("/api/p/ad2/masters", json={**body, "session": "mvs_prov000000000000000000000000"})
+    r = client.post("/api/p/ad2/masters", json={**body, "name": "绑定会话代理", "session": "mvs_prov000000000000000000000000"})
     assert r.status_code == 201, r.text
     assert r.json()["provider"] == "minimax-cn"
+    assert r.json()["session"] == "mvs_prov000000000000000000000000"
+    assert r.json()["session_title"] == "mcode 会话"
+    # 编辑端点同语义：解绑会话 → policy 落 {}、session 为 null
+    mid = r.json()["id"]
+    r = client.patch(f"/api/p/ad2/masters/{mid}", json={"session": ""})
+    assert r.status_code == 200, r.text
+    assert r.json()["session"] is None
+    with client.app.state.db.ledger_session("ad2") as s:
+        row = s.get(models.Master, int(mid))
+        assert row.session_policy == {}
 
 
 # ---------- 5. 过程输出通道 ----------

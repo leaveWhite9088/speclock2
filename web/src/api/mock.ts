@@ -1192,6 +1192,7 @@ export function createMockApiClient(): ApiClient {
       agentRunning = false
       return { running: false, model: null, session_id: `speclock2-${slug}` }
     },
+    resetAgent: async (_slug) => ({ ok: true }),
     setAgentModel: async (_slug, body) => {
       if (!agentRunning) {
         throw new ApiError(409, { code: 'conflict', message: '核心代理会话未运行' })

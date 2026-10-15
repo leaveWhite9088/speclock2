@@ -284,8 +284,33 @@ async function onStartRetryModel(bubble: ChatBubble): Promise<void> {
   await switchChiefModel({ provider: bubble.action.provider, model: bubble.action.model })
 }
 
-/** 停止 = 停核心代理会话（pi 会话持久化，可再唤醒）；已生成的部分文本定稿保留 */
-async function stopCore(): Promise<void> {
+/** 重建核心代理会话（修复单 20）：归档旧 pi 会话，下次对话全新上下文（会话可弃，账本 SSOT）。
+ *  404 = 后端路由未上线：顶栏弹层内提示降级，不动对话。 */
+const resetBusy = ref(false)
+const resetUnsupported = ref(false)
+const resetDoneTick = ref(0)
+
+async function onResetAgent(): Promise<void> {
+  if (!client.value || resetBusy.value) return
+  resetBusy.value = true
+  try {
+    await client.value.resetAgent(currentSlug.value)
+    resetUnsupported.value = false
+    pushChat('system', '会话已重建，下一次对话将从全新上下文开始。')
+    void refreshAgent()
+    resetDoneTick.value++
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      resetUnsupported.value = true
+    } else {
+      pushChat('error', err instanceof Error ? err.message : String(err))
+    }
+  } finally {
+    resetBusy.value = false
+  }
+}
+
+/** 停止 = 停核心代理会话（pi 会话持久化，可再唤醒）；已生成的部分文本定稿保留 */async function stopCore(): Promise<void> {
   if (!client.value || !currentSlug.value) return
   userStop = true
   try {
@@ -873,11 +898,15 @@ onMounted(() => {
         :model-entries="modelEntries"
         :project-has-default="projectDefaultModel != null"
         :chip-master="session.kind === 'master' ? activeMaster : null"
+        :reset-busy="resetBusy"
+        :reset-unsupported="resetUnsupported"
+        :reset-done-tick="resetDoneTick"
         @toggle-drawer="onToggleDrawer"
         @toggle-docs="docsView = !docsView"
         @pick-model="onModelPick"
         @manage-models="drawer = 'models'"
         @edit-binding="onEditBinding"
+        @reset-agent="onResetAgent"
       />
 
       <div class="app__body">

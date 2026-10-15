@@ -580,6 +580,8 @@ export interface ApiClient {
   getAgent(slug: string): Promise<AgentStatus>
   startAgent(slug: string): Promise<AgentStartResponse>
   stopAgent(slug: string): Promise<AgentStartResponse>
+  /** 重建核心代理会话（修复单 20）：后端归档旧 pi 会话 JSONL，下次对话全新上下文；旧后端 404 降级 */
+  resetAgent(slug: string): Promise<{ ok: boolean }>
   setAgentModel(slug: string, body: AgentModelBody): Promise<AgentModelResponse>
   /** 项目目录与核心代理 LLM（契约 v0.4；旧后端未上线时 UI 优雅降级） */
   patchProject(slug: string, body: PatchProjectBody): Promise<Project>
@@ -678,6 +680,7 @@ export function createApiClient(): ApiClient {
     getAgent: (slug) => request<AgentStatus>(`${p(slug)}/agent`),
     startAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/start`, { method: 'POST', body: '{}' }),
     stopAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/stop`, { method: 'POST' }),
+    resetAgent: (slug) => request<{ ok: boolean }>(`${p(slug)}/agent/reset`, { method: 'POST' }),
     setAgentModel: (slug, body) =>
       request<AgentModelResponse>(`${p(slug)}/agent/model`, { method: 'POST', body: JSON.stringify(body) }),
     patchProject: (slug, body) =>

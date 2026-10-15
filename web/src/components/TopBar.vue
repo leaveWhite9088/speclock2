@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { MasterInfo, ModelEntry } from '../api/client'
 import type { DrawerKey, ModelPick } from '../types'
 import { findChiefEntry } from '../types'
@@ -9,6 +9,8 @@ import ModelMenu from './ModelMenu.vue'
  * 顶栏：右侧入口。模型区随会话对象切换——核心代理视图显示生效 harness+模型
  * （点击弹层切换，与 /model 同一端点）；主代理视图显示该主代理的绑定，
  * 点击弹层改为「编辑绑定」（数据源登记处，不调 /agent/model）。
+ * 「重建会话」只在核心代理视图出现：归档当前 pi 会话，下次对话全新上下文
+ * （DESIGN A1：会话可弃，账本是 SSOT）；后端 404 时弹层内提示降级。
  */
 const emit = defineEmits<{
   (e: 'toggle-drawer', key: DrawerKey): void
@@ -16,6 +18,7 @@ const emit = defineEmits<{
   (e: 'pick-model', sel: ModelPick): void
   (e: 'manage-models'): void
   (e: 'edit-binding'): void
+  (e: 'reset-agent'): void
 }>()
 
 const props = defineProps<{
@@ -26,6 +29,12 @@ const props = defineProps<{
   modelEntries: ModelEntry[]
   projectHasDefault: boolean
   chipMaster: MasterInfo | null
+  /** 重建会话请求进行中（确认按钮禁用） */
+  resetBusy: boolean
+  /** 后端未提供 /agent/reset（404）：弹层内提示 */
+  resetUnsupported: boolean
+  /** 重建成功计数：App 侧成功后 +1，弹层自动收起 */
+  resetDoneTick: number
 }>()
 
 const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
@@ -34,6 +43,14 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
 ]
 
 const modelMenuOpen = ref(false)
+const resetOpen = ref(false)
+
+watch(
+  () => props.resetDoneTick,
+  () => {
+    resetOpen.value = false
+  },
+)
 
 /** 核心代理 harness（按模型登记匹配当前模型；匹配不到不显示） */
 const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.modelEntries)?.harness ?? null)
@@ -99,6 +116,30 @@ const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.m
               }
             "
           />
+        </div>
+      </template>
+    </div>
+    <!-- 重建会话：仅核心代理视图；确认弹层防误触 -->
+    <div v-if="!chipMaster" class="topbar__reset">
+      <button
+        type="button"
+        class="topbar__entry"
+        title="归档当前 pi 会话，下次对话全新上下文"
+        @click="resetOpen = !resetOpen"
+      >重建会话</button>
+      <template v-if="resetOpen">
+        <div class="topbar__mmask" @click="resetOpen = false"></div>
+        <div class="topbar__mpanel topbar__rpanel">
+          <p class="topbar__rline">
+            当前对话上下文将归档清空，对话历史仍可在事件日志里查看；核心代理会以全新上下文启动。
+          </p>
+          <p v-if="resetUnsupported" class="topbar__rerr">后端未提供重建会话（/agent/reset 未上线）。</p>
+          <div class="topbar__ractions">
+            <button type="button" class="btn btn--sm" :disabled="resetBusy" @click="resetOpen = false">取消</button>
+            <button type="button" class="btn btn--sm btn--primary" :disabled="resetBusy" @click="emit('reset-agent')">
+              {{ resetBusy ? '重建中…' : '确认重建' }}
+            </button>
+          </div>
         </div>
       </template>
     </div>
@@ -222,6 +263,36 @@ const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.m
   padding: var(--sp-1);
   max-height: 340px;
   overflow-y: auto;
+}
+
+/* 重建会话：按钮贴模型区右侧，弹层同款下拉 */
+.topbar__reset {
+  position: relative;
+  flex: none;
+}
+
+.topbar__rpanel {
+  width: 320px;
+  padding: var(--sp-2);
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.topbar__rline {
+  font-size: var(--fs-12);
+  color: var(--c-ink-2);
+  line-height: 1.6;
+}
+
+.topbar__rerr {
+  font-size: var(--fs-12);
+  color: var(--c-danger);
+}
+
+.topbar__ractions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
 
 /* 主代理视图的绑定面板 */

@@ -31,7 +31,7 @@ speclock2/
 
 ---
 
-## 2. API 契约 v0.4（新增：项目绑定目录/核心代理模型、目录浏览、派发 cwd 修复）
+## 2. API 契约 v0.5（新增：核心代理 /model 会话切换；mcode 接入为可派发 harness）
 
 **通用约定**（与 DESIGN.md §5.5 全局约定的子集一致）：
 
@@ -109,6 +109,7 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 | GET | `/api/p/{slug}/agent` | 核心代理状态：`{running, model, context_usage_percent, session_id}` | R-M2 |
 | POST | `/api/p/{slug}/agent/start` | `{model?}` 启动/唤醒核心代理会话（幂等） | R-M2 |
 | POST | `/api/p/{slug}/agent/stop` | 停止会话（pi 会话持久化，可再唤醒） | R-M2 |
+| POST | `/api/p/{slug}/agent/model` | `{provider?, model}` 切换核心代理当前会话模型（pi RPC `set_model`，会话内持久）；响应 `{ok, model}`；未运行 409 | v0.5 |
 
 ---
 
@@ -155,6 +156,7 @@ approve响应: { "versions": [{"block_id":"1","version":"1.1.0","breaking":false
 
 5. **环境**：Windows 10 + Git Bash；Python 3.11；Node ≥ 22；pip/npm 可直连，GitHub 直连不通（需要时走镜像）；全部文件 UTF-8；中文文案。
 6. **测试派发最小化**：开发期验证派发链路一律用最小任务（如"只回复一个词：hello"），**禁止派发真实业务任务**——派发 cwd 未绑定目标仓库前，真实任务会写坏工作台仓库（2026-10-15 事故）。
+7. **mcode 接入事实**（2026-10-15 侦察）：mcode = Minimax Code CLI v0.6.8（`D:\Environment\nodejs\mcode`）。headless = `mcode exec [prompt]`（**纯文本 stdout**，无事件流；exit code 可用）；`--cwd` 指定工作目录；`--session <id>` / `-c` 接续原会话；`-m/--model <provider/model>` 按会话/按次选模型（TUI 内 `/model` 原生切换）；`--permission smart|full|off`（headless 用 full，smart 会卡许可）；`--timeout 30s/2m`；`--append-system-prompt` 可用；另有 `acp`（Agent Client Protocol stdio 服务，本轮不用，记录备选）。token 不暴露 → 遥测标"估算"。
 
 ---
 

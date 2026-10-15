@@ -314,18 +314,33 @@ function resetDrag(): void {
   sidebarWidth.value = SIDEBAR_DEFAULT
 }
 
-/** 跨项目徽标（§14.3）：其他项目的 待批准/运行中 在不切界面的情况下可见 */
-const projectStats = ref<Record<string, { pending: number; active: number }>>({})
+/** 跨项目徽标（§14.3）：其他项目的 待批准/任务进度 在不切界面的情况下可见。
+ *  任务按状态分类（验收修正）：dispatched/running=运行中、queued=排队、
+ *  reported/auditing=待验收；timeout 并入运行中（仍在占用主代理）。 */
+const projectStats = ref<Record<string, { pending: number; running: number; queued: number; reviewing: number }>>({})
 
 async function refreshProjectStats(): Promise<void> {
   if (!client.value) return
   const entries = await Promise.all(
     projects.value.map(async (p) => {
       try {
-        const s = await client.value!.getStats(p.slug)
-        return [p.slug, { pending: s.cards.pending, active: s.packages.active }] as const
+        const [s, pkgs] = await Promise.all([
+          client.value!.getStats(p.slug),
+          client.value!.listPackages(p.slug),
+        ])
+        let running = 0
+        let queued = 0
+        let reviewing = 0
+        for (const pkg of pkgs.items) {
+          for (const t of pkg.tasks) {
+            if (t.status === 'dispatched' || t.status === 'running' || t.status === 'timeout') running++
+            else if (t.status === 'queued') queued++
+            else if (t.status === 'reported' || t.status === 'auditing') reviewing++
+          }
+        }
+        return [p.slug, { pending: s.cards.pending, running, queued, reviewing }] as const
       } catch {
-        return [p.slug, { pending: 0, active: 0 }] as const
+        return [p.slug, { pending: 0, running: 0, queued: 0, reviewing: 0 }] as const
       }
     }),
   )

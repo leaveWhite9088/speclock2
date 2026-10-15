@@ -17,7 +17,7 @@ const props = defineProps<{
   currentSlug: string
   masters: MasterInfo[]
   session: SessionTarget
-  projectStats: Record<string, { pending: number; active: number }>
+  projectStats: Record<string, { pending: number; running: number; queued: number; reviewing: number }>
   masterStates: Record<string, { label: string; kind: 'running' | 'queued' | 'auditing' | 'timeout' }>
   corePending: number
   /** 核心代理会话状态（10s 轮询；null = 探测中/不可用） */
@@ -127,6 +127,17 @@ async function submitAdd(): Promise<void> {
 function avatarText(name: string): string {
   return name.replace(/主代理$/, '').slice(0, 1) || '代'
 }
+
+/** 项目活动徽标：按任务状态组合显示（如「2 运行中 · 1 待验收」），全零为空 */
+function activityLabel(slug: string): string {
+  const s = props.projectStats[slug]
+  if (!s) return ''
+  const parts: string[] = []
+  if (s.running > 0) parts.push(`${s.running} 运行中`)
+  if (s.queued > 0) parts.push(`${s.queued} 排队`)
+  if (s.reviewing > 0) parts.push(`${s.reviewing} 待验收`)
+  return parts.join(' · ')
+}
 </script>
 
 <template>
@@ -158,10 +169,10 @@ function avatarText(name: string): string {
               title="有待批准卡片"
             >待批准 {{ projectStats[p.slug].pending }}</span>
             <span
-              v-else-if="(projectStats[p.slug]?.active ?? 0) > 0"
+              v-else-if="activityLabel(p.slug)"
               class="sidebar__flag"
-              title="有任务在运行"
-            >{{ projectStats[p.slug].active }} 运行中</span>
+              :title="`${activityLabel(p.slug)}（按任务状态统计）`"
+            >{{ activityLabel(p.slug) }}</span>
           </button>
           <button
             type="button"

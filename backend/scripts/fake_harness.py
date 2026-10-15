@@ -70,6 +70,11 @@ def main() -> None:
     duration_ms = round((time.time() - started) * 1000)
     text = f"任务完成：写入 {len(files)} 个文件。FILES: {' '.join(files)}"
     if plain:
+        # 模拟 mcode：纯文本 + 分阶段增量输出（过程输出通道 / output_tail 的验收探针）
+        sys.stdout.write("fake-harness: 已收到任务，开始处理\n")
+        sys.stdout.flush()
+        time.sleep(2.5)  # >2s 节流窗：让观察方能抓到增量
+        sys.stdout.write("fake-harness: 处理完成\n")
         sys.stdout.write(text + "\n")
         sys.stdout.flush()
         sys.exit(0)

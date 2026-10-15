@@ -136,6 +136,9 @@ curl -s -X POST $BASE/api/p/a/tasks/T-0001/audit -H "Content-Type: application/j
 | POST | `/api/projects` | `{slug,name}`；slug 冲突 409；创建即初始化独立账本 |
 | GET | `/api/p/{slug}` | `{slug,name,current_round,open_card,working_dir,chief_provider,chief_model}` |
 | PATCH | `/api/p/{slug}` | 更新绑定（契约 v0.4）：`{working_dir?,chief_provider?,chief_model?}`，只动显式传入的字段（显式 `""` 清空）；working_dir 必须存在且为目录（422） |
+| DELETE | `/api/projects/{slug}` | 删除项目：注册表删行、核心代理会话停止；账本**不物理删除**，改名 `{slug}.db.deleted` 可手工恢复 |
+| PATCH/DELETE | `/api/p/{slug}/masters/{id}` | 编辑主代理（name/duty/dir/harness/model/provider/session，校验同创建；改名查重 409）；删除在有 dispatched/running 任务时 409（先处理在跑的任务） |
+| POST | `/api/p/{slug}/tasks/{id}/output` | 派发方上报过程输出增量（真实 chief 的 dispatch 工具 2s 节流调用）：滚动写 task.output_tail（保留最后 4KB）并广播 SSE `master_output` {task_id,master,text} |
 | GET | `/api/fs/dirs?path=` | 列出绝对路径下的子目录 `{"items":[{name,path}]}`；path 不存在/不是目录 422。**仅本机单用户工具（无鉴权只读），不要暴露到公网** |
 | GET | `/api/p/{slug}/tree` | 三层树 domains→documents→blocks |
 | POST | `/api/p/{slug}/domains` `/documents` `/blocks` | 草稿态创建 |

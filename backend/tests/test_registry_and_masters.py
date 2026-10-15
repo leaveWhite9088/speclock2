@@ -78,7 +78,7 @@ def _add_master(client: TestClient, slug: str = "a", **overrides) -> dict:
 def test_model_registry_crud(client):
     assert client.get("/api/models").json() == {"items": []}
     entry = _register(client, "pi", "glm-4.7")
-    assert entry == {"id": "mdl-1", "harness": "pi", "model": "glm-4.7"}
+    assert entry == {"id": "mdl-1", "harness": "pi", "model": "glm-4.7", "provider": ""}
     _register(client, "pi", "kimi-k2.5")
     _register(client, "claude-code", "claude-sonnet-4.5")
 

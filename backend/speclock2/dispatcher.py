@@ -17,10 +17,11 @@ from sqlalchemy import select
 from . import cli_sessions, harness_map, models
 from .errors import ApiError
 from .pi_runtime import effective_chief, effective_chief_model_str, parse_record, split_records
-from .routers.queue import ReceiptBody, dispatch_service, receipt_service
+from .routers.queue import ReceiptBody, dispatch_service, receipt_service, record_task_output
 
 FILES_LINE_RE = re.compile(r"FILES:\s*(.+)")
 GRACE_SECONDS = 8  # 看门狗后的回执宽限：进程仍未退出则 kill
+OUTPUT_FLUSH_SECONDS = 2.0  # 过程输出节流（调整单 5）
 
 
 def _resolve_dispatch_cwd(master_dir: str, project_dir: str) -> str:
@@ -92,9 +93,16 @@ def plan_task_launch(app, slug: str, task_id: int, prompt: str) -> dict:
     master_dir = (row.working_dir or "").strip() if row is not None else ""
     cwd = _resolve_dispatch_cwd(master_dir, project_dir)
 
-    # 模型：名册登记的模型 → 项目核心代理模型兜底 → 无（摘除 {model} 占位）
+    # 模型：名册登记的模型 → 项目核心代理模型兜底 → 无（摘除 {model} 占位）。
+    # 名册 model 无 "/" 且登记了 provider → 组合成 provider/model（两 harness 各用各的供应商名）
     roster_model = (row.model or "").strip() if row is not None else ""
-    model = roster_model or effective_chief_model_str(db, slug) or None
+    roster_provider = (row.provider or "").strip() if row is not None else ""
+    if roster_model:
+        model = (roster_model if "/" in roster_model
+                 else f"{roster_provider}/{roster_model}" if roster_provider
+                 else roster_model)
+    else:
+        model = effective_chief_model_str(db, slug) or None
 
     full = harness_map.build_argv(harness, prompt, cwd=cwd)  # [command, *args]
     command, args = full[0], harness_map.apply_model(full[1:], model)
@@ -176,9 +184,11 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
     buffer = b""
     stdout_raw = bytearray()
     stderr_tail = b""
+    reported = 0  # 已上报（广播+落库）的字节偏移
+    last_flush = 0.0
 
     async def read_stdout() -> None:
-        nonlocal buffer, stdout_raw
+        nonlocal buffer, stdout_raw, last_flush, reported
         assert proc.stdout
         while True:
             chunk = await proc.stdout.read(4096)
@@ -191,6 +201,12 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
                 rec = parse_record(line)
                 if rec is not None:
                     records.append(rec)
+            now = asyncio.get_running_loop().time()
+            if now - last_flush >= OUTPUT_FLUSH_SECONDS and len(stdout_raw) > reported:
+                record_task_output(app, slug, task_id,
+                                   bytes(stdout_raw[reported:]).decode("utf-8", "replace"))
+                reported = len(stdout_raw)
+                last_flush = now
 
     async def drain_stderr() -> None:
         nonlocal stderr_tail
@@ -212,6 +228,11 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
         await asyncio.wait_for(asyncio.gather(reader, err_drain), timeout=5)
 
     duration_ms = round((asyncio.get_running_loop().time() - started) * 1000)
+    # 进程结束：剩余增量只落库不再广播（调整单 5：结束即停播）
+    if len(stdout_raw) > reported:
+        record_task_output(app, slug, task_id,
+                           bytes(stdout_raw[reported:]).decode("utf-8", "replace"),
+                           broadcast=False)
     if proc.returncode != 0:
         # mcode 失败时错误行走 stdout（如 "mcode exec failed: ..."），一并带上
         return {"task_id": task_id, "outcome": "crashed", "exit_code": proc.returncode,

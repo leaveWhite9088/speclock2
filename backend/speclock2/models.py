@@ -47,6 +47,8 @@ class ModelEntry(RegistryBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     harness: Mapped[str] = mapped_column(sa.Text)
     model: Mapped[str] = mapped_column(sa.Text)
+    # LLM 供应商名（pi 等）：空 = 该条只作 harness 绑定，不出现在核心代理 /model 列表
+    provider: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[str] = mapped_column(sa.Text)
 
 
@@ -206,6 +208,8 @@ class Task(LedgerBase):
     # 启动时按 deadline 重武装（老数据只有 deadline 也兼容）
     dispatched_at: Mapped[str | None] = mapped_column(sa.Text)
     watchdog_minutes: Mapped[float | None] = mapped_column(sa.Float)
+    # 过程输出尾部（追加单 5）：派发期间滚动保留最后 4KB stdout
+    output_tail: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[str] = mapped_column(sa.Text)
     updated_at: Mapped[str] = mapped_column(sa.Text)
 
@@ -260,6 +264,8 @@ class Master(LedgerBase):
     role: Mapped[str] = mapped_column(sa.Text)
     harness: Mapped[str] = mapped_column(sa.Text)
     model: Mapped[str | None] = mapped_column(sa.Text)
+    # LLM 供应商名（登记侧引用；dispatch --model 组合 provider/model 用）
+    provider: Mapped[str | None] = mapped_column(sa.Text)
     working_dir: Mapped[str | None] = mapped_column(sa.Text)
     agents_md: Mapped[str | None] = mapped_column(sa.Text)
     session_policy: Mapped[dict | None] = mapped_column(sa.JSON)

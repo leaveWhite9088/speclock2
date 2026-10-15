@@ -108,6 +108,7 @@ def task_out(t: models.Task, receipt: models.Receipt | None = None) -> dict:
         "status": t.status,
         "watchdog_deadline": t.watchdog_deadline,
         "receipt": receipt_out(receipt) if receipt else None,
+        "output_tail": t.output_tail,
     }
 
 

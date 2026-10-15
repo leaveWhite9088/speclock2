@@ -21,10 +21,12 @@ router = APIRouter()
 class RegisterModelBody(BaseModel):
     harness: str = ""
     model: str = ""
+    provider: str | None = None  # LLM 供应商名（如 minimax-cn）；空 = 只作 harness 绑定
 
 
 def _entry_out(row: models.ModelEntry) -> dict:
-    return {"id": f"mdl-{row.id}", "harness": row.harness, "model": row.model}
+    return {"id": f"mdl-{row.id}", "harness": row.harness, "model": row.model,
+            "provider": row.provider or ""}
 
 
 @router.get("/api/models")
@@ -41,6 +43,7 @@ def list_models(request: Request) -> dict:
 def register_model(body: RegisterModelBody, request: Request) -> dict:
     harness = (body.harness or "").strip()
     model = (body.model or "").strip()
+    provider = (body.provider or "").strip()
     if not harness or not model:
         raise ApiError(422, "validation_error", "Harness 与模型都要填（Harness 有什么模型就登记什么）")
     db = request.app.state.db
@@ -52,7 +55,8 @@ def register_model(body: RegisterModelBody, request: Request) -> dict:
         ).first()
         if exists is not None:
             raise ApiError(409, "conflict", f"{harness} 已登记过模型 {model}")
-        row = models.ModelEntry(harness=harness, model=model, created_at=now_iso())
+        row = models.ModelEntry(harness=harness, model=model, provider=provider or None,
+                                created_at=now_iso())
         session.add(row)
         session.commit()
         session.refresh(row)

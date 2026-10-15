@@ -210,6 +210,48 @@ def list_packages(slug: str, request: Request) -> dict:
     return {"items": data}
 
 
+OUTPUT_TAIL_LIMIT = 4096  # output_tail 滚动保留的最后字节数（调整单 5）
+OUTPUT_BROADCAST_LIMIT = 2000  # 单次 SSE 增量上限（NDJSON 行可能很长）
+
+
+def record_task_output(app, slug: str, task_id: int, text: str, *, broadcast: bool = True) -> None:
+    """追加被派发进程的过程输出：output_tail 滚动保留最后 4KB + SSE master_output 广播。
+
+    dispatch 执行器（Python）与真实 chief 的 dispatch 工具（经 /output 端点）共用。
+    """
+    if not text:
+        return
+    db = app.state.db
+    with db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is None:
+            return
+        tail = (task.output_tail or "") + text
+        task.output_tail = tail[-OUTPUT_TAIL_LIMIT:]
+        task.updated_at = now_iso()
+        session.commit()
+        master = task.master
+    if broadcast:
+        chief = app.state.pi.get(slug)
+        if chief is not None:
+            chief.broadcast("master_output", {
+                "task_id": fmt_id("T", task_id), "master": master,
+                "text": text[-OUTPUT_BROADCAST_LIMIT:],
+            })
+
+
+class TaskOutputBody(BaseModel):
+    text: str = ""
+
+
+@router.post("/tasks/{task_id}/output")
+def push_task_output(slug: str, task_id: str, body: TaskOutputBody, request: Request) -> dict:
+    """真实 chief 的 dispatch 工具上报被派发进程的过程输出（节流由上报方负责）。"""
+    _project_or_404(request, slug)
+    record_task_output(request.app, slug, parse_prefixed_id(task_id, "T") or -1, body.text)
+    return {}
+
+
 @router.post("/tasks/{task_id}/dispatch")
 def dispatch_task(slug: str, task_id: str, body: DispatchBody, request: Request) -> dict:
     _project_or_404(request, slug)

@@ -130,6 +130,7 @@ export default function (pi: ExtensionAPI) {
 				const command = isCmd ? "cmd" : plan.command;
 
 				// 3. spawn + 逐行解析（严格按 LF 切分；聚合 assistant message_end 的 usage）
+				//    过程输出每 2s 节流上报工作台（output_tail + SSE master_output）
 				const started = Date.now();
 				const result = await new Promise<{ exitCode: number; text: string; usage: any; stderrTail: string }>((resolve) => {
 					const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
@@ -137,6 +138,19 @@ export default function (pi: ExtensionAPI) {
 					let text = "";
 					let usage: any = null;
 					let stderrTail = "";
+					let allOutput = "";      // 全量 stdout（增量计算用）
+					let reportedLen = 0;     // 已上报的字符数
+					let lastOutputPost = 0;
+					const postOutput = (force: boolean) => {
+						if (allOutput.length <= reportedLen) return;
+						const now = Date.now();
+						if (!force && now - lastOutputPost < 2000) return;
+						const increment = allOutput.slice(reportedLen);
+						reportedLen = allOutput.length;
+						lastOutputPost = now;
+						// 上报失败静默忽略：过程输出是尽力而为，不影响派发主链
+						api("POST", `/tasks/${p.task_id}/output`, { text: increment }).catch(() => {});
+					};
 					const processLine = (line: string) => {
 						if (!line.trim()) return;
 						let event: any;
@@ -154,16 +168,20 @@ export default function (pi: ExtensionAPI) {
 						}
 					};
 					proc.stdout.on("data", (data: Buffer) => {
-						buffer += data.toString("utf-8");
+						const chunk = data.toString("utf-8");
+						allOutput += chunk;
+						buffer += chunk;
 						const lines = buffer.split("\n");
 						buffer = lines.pop() ?? "";
 						for (const line of lines) processLine(line);
+						postOutput(false);
 					});
 					proc.stderr.on("data", (data: Buffer) => {
 						stderrTail = (stderrTail + data.toString("utf-8")).slice(-500); // 尾部诊断
 					});
 					proc.on("close", (code) => {
 						if (buffer.trim()) processLine(buffer);
+						postOutput(true); // 收尾补一发增量，之后停播
 						resolve({ exitCode: code ?? 1, text, usage, stderrTail });
 					});
 					proc.on("error", (err) => {

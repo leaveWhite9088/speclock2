@@ -39,6 +39,26 @@ def list_projects(request: Request) -> dict:
     return {"items": [serialize.project_out(p) for p in rows]}
 
 
+@router.delete("/api/projects/{slug}", status_code=200)
+async def delete_project(slug: str, request: Request) -> dict:
+    """删除项目（调整单 1）：注册表删行；账本不物理删除，改名 .deleted 可手工恢复。"""
+    db = request.app.state.db
+    with db.registry_session() as session:
+        project = session.get(models.Project, slug)
+        if project is None:
+            raise ApiError(404, "not_found", f"项目不存在：{slug}")
+        session.delete(project)
+        session.commit()
+    await request.app.state.pi.stop(slug)  # 核心代理会话一并停（有则停，无则跳过）
+    db.close_ledger(slug)  # 释放连接，否则 Windows 下文件改名被锁
+    ledger = db.settings.ledger_path(slug)
+    deleted = ledger.with_suffix(".db.deleted")
+    if ledger.exists():
+        deleted.unlink(missing_ok=True)  # 上一次删除残留的 .deleted 让位
+        ledger.rename(deleted)
+    return {"ok": True, "slug": slug, "ledger": deleted.name if deleted.exists() else None}
+
+
 @router.post("/api/projects", status_code=201)
 def create_project(body: schemas.ProjectCreate, request: Request) -> dict:
     if not SLUG_RE.match(body.slug or ""):

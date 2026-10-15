@@ -18,9 +18,11 @@ from .config import Settings
 # 已发布表的增量列（表名 → [(列名, SQL 类型)]）；create_all 不改已有表，缺列在此补齐
 _REGISTRY_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "projects": [("working_dir", "TEXT"), ("chief_provider", "TEXT"), ("chief_model", "TEXT")],
+    "model_entries": [("provider", "TEXT")],
 }
 _LEDGER_COLUMNS: dict[str, list[tuple[str, str]]] = {
-    "tasks": [("dispatched_at", "TEXT"), ("watchdog_minutes", "REAL")],
+    "tasks": [("dispatched_at", "TEXT"), ("watchdog_minutes", "REAL"), ("output_tail", "TEXT")],
+    "masters": [("provider", "TEXT")],
 }
 
 
@@ -39,6 +41,29 @@ class Database:
     def init_registry(self) -> None:
         models.RegistryBase.metadata.create_all(self.registry_engine)
         self._ensure_columns(self.registry_engine, _REGISTRY_COLUMNS)
+        self._migrate_model_entries()
+
+    def _migrate_model_entries(self) -> None:
+        """旧登记条目迁移（调整单 4）：model 带 provider/model 前缀则拆出，否则置空。
+
+        空 provider = 只作 harness 绑定，不出现在核心代理 /model 列表。
+        """
+        with self.registry_engine.connect() as conn:
+            rows = conn.exec_driver_sql(
+                "SELECT id, model FROM model_entries WHERE provider IS NULL OR provider = ''"
+            ).fetchall()
+            for row_id, model in rows:
+                provider, _, bare = str(model).partition("/")
+                if bare:  # 有前缀：拆出；无前缀：provider 保持空
+                    conn.exec_driver_sql(
+                        "UPDATE model_entries SET provider = ?, model = ? WHERE id = ?",
+                        (provider, bare, row_id),
+                    )
+                else:
+                    conn.exec_driver_sql(
+                        "UPDATE model_entries SET provider = '' WHERE id = ?", (row_id,)
+                    )
+            conn.commit()
 
     def _ensure_columns(self, engine: sa.Engine, wanted: dict[str, list[tuple[str, str]]]) -> None:
         """幂等补列：已存在的表按 PRAGMA table_info 对账，缺的 ALTER TABLE ADD COLUMN。"""
@@ -68,3 +93,10 @@ class Database:
 
     def ledger_session(self, slug: str) -> Session:
         return Session(self.ledger_engine(slug))
+
+    def close_ledger(self, slug: str) -> None:
+        """逐出账本引擎并释放连接（删除项目改文件名前必须调用，否则 Windows 文件锁）。"""
+        with self._lock:
+            engine = self._ledger_engines.pop(slug, None)
+        if engine is not None:
+            engine.dispose()

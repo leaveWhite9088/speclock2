@@ -35,6 +35,40 @@ const modelMenuOpen = ref(false)
 <template>
   <header class="topbar">
     <span class="topbar__title" :title="sessionTitle">{{ sessionTitle }}</span>
+    <!-- 当前生效模型：贴在会话名右侧，点击弹层切换 -->
+    <div class="topbar__model">
+      <button
+        type="button"
+        class="topbar__entry topbar__model-btn"
+        :title="chiefModel ? `核心代理当前模型：${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
+        @click="modelMenuOpen = !modelMenuOpen"
+      >
+        <span class="topbar__model-dot" aria-hidden="true"></span>
+        <span class="topbar__model-name">{{ chiefModel ?? '模型' }}</span>
+      </button>
+      <template v-if="modelMenuOpen">
+        <div class="topbar__mmask" @click="modelMenuOpen = false"></div>
+        <div class="topbar__mpanel">
+          <ModelMenu
+            :entries="modelEntries"
+            :current-model="chiefModel"
+            :show-default="projectHasDefault"
+            @pick="
+              (sel) => {
+                modelMenuOpen = false
+                emit('pick-model', sel)
+              }
+            "
+            @manage="
+              () => {
+                modelMenuOpen = false
+                emit('manage-models')
+              }
+            "
+          />
+        </div>
+      </template>
+    </div>
     <nav class="topbar__entries" aria-label="右侧入口">
       <button
         type="button"
@@ -42,39 +76,6 @@ const modelMenuOpen = ref(false)
         :class="{ 'is-active': docsActive }"
         @click="emit('toggle-docs')"
       >文档</button>
-      <div class="topbar__model">
-        <button
-          type="button"
-          class="topbar__entry topbar__model-btn"
-          :title="chiefModel ? `核心代理当前模型：${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
-          @click="modelMenuOpen = !modelMenuOpen"
-        >
-          <span class="topbar__model-dot" aria-hidden="true"></span>
-          <span class="topbar__model-name">{{ chiefModel ?? '模型' }}</span>
-        </button>
-        <template v-if="modelMenuOpen">
-          <div class="topbar__mmask" @click="modelMenuOpen = false"></div>
-          <div class="topbar__mpanel">
-            <ModelMenu
-              :entries="modelEntries"
-              :current-model="chiefModel"
-              :show-default="projectHasDefault"
-              @pick="
-                (sel) => {
-                  modelMenuOpen = false
-                  emit('pick-model', sel)
-                }
-              "
-              @manage="
-                () => {
-                  modelMenuOpen = false
-                  emit('manage-models')
-                }
-              "
-            />
-          </div>
-        </template>
-      </div>
       <button
         v-for="entry in entries"
         :key="entry.key"
@@ -106,6 +107,7 @@ const modelMenuOpen = ref(false)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .topbar__entries {
@@ -138,9 +140,10 @@ const modelMenuOpen = ref(false)
   color: var(--c-ink);
 }
 
-/* 当前模型按钮：mono 字直接显示生效模型名 */
+/* 当前模型按钮：mono 字直接显示生效模型名（贴会话名右侧） */
 .topbar__model {
   position: relative;
+  flex: none;
 }
 
 .topbar__model-btn {
@@ -176,7 +179,7 @@ const modelMenuOpen = ref(false)
 .topbar__mpanel {
   position: absolute;
   top: calc(100% - 2px);
-  right: 0;
+  left: 0;
   z-index: 51;
   width: 300px;
   background: var(--c-panel);

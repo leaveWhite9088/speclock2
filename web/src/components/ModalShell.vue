@@ -36,7 +36,7 @@ const emit = defineEmits<{
 }
 
 .modal {
-  width: 480px;
+  width: 380px;
   max-width: 100%;
   max-height: 84vh;
   display: flex;

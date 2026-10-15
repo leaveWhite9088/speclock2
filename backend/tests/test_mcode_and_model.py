@@ -187,6 +187,9 @@ def test_dispatch_mcode_resume_session(client, data_dir, tmp_path, monkeypatch):
         encoding="utf-8")
     repo = _setup_mcode_project(client, data_dir, tmp_path,
                                 session_id="mvs_bbbb00000000000000000000000000")
+    # 接续证据：会话工作区 = 项目绑定目录（慢工单接缝：mcode 只接证实同目录的会话）
+    (sess / "messages.jsonl").write_text(
+        json.dumps({"agent-context": {"cwd": str(repo)}}) + "\n", encoding="utf-8")
     task_id = _tech_order_task(client, "hello 级任务")
     record = tmp_path / "argv.json"
     monkeypatch.setenv("SPECLOCK2_FAKE_RECORD_ARGV", str(record))

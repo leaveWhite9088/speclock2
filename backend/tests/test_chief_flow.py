@@ -285,3 +285,55 @@ def test_chief_ts_fails_fast_on_crash():
     src = CHIEF_TS.read_text(encoding="utf-8")
     assert "/tasks/${taskId}/fail" in src
     assert "exit_code" in src and "快速收尸" in src
+
+
+def test_launch_plan_drops_resume_on_workspace_mismatch(client, tmp_path, monkeypatch):
+    """慢工单接缝：绑定的 mcode 会话源自别的目录 → launch-plan 放弃接续
+    （新会话），避免 mcode「Session workspace does not match --cwd」秒败。"""
+    _setup_project(client, slug="wm")
+    assert client.post("/api/models", json={
+        "harness": "mcode", "model": "fake-m"}).status_code == 201
+    cfg = {"watchdog_minutes_default": 60, "masters": {}, "harnesses": {
+        "mcode": {"command": sys.executable, "args": [str(FAKE), "{prompt}"],
+                  "prompt_mode": "inline",
+                  "resume_args": ["--session", "{session_id}", "--session-dir", "{session_dir}"]}}}
+    (client.app.state.db.settings.data_dir / "harness-map.json").write_text(
+        json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+    # 两个 mcode 会话：一个 cwd 是别的目录，一个 cwd 就是项目绑定目录
+    root = tmp_path / "mm-sess"
+    other = root / "2026" / "10" / "15" / "10-00-00-000-session_other"
+    other.mkdir(parents=True)
+    (other / "manifest.json").write_text(json.dumps(
+        {"sessionId": "mvs_other_dir", "createdAtMs": 1}), encoding="utf-8")
+    repo = tmp_path / "wm-repo"
+    repo.mkdir(parents=True)
+    here = root / "2026" / "10" / "15" / "10-00-01-000-session_here"
+    here.mkdir(parents=True)
+    (here / "manifest.json").write_text(json.dumps(
+        {"sessionId": "mvs_here_dir", "createdAtMs": 2}), encoding="utf-8")
+    (here / "messages.jsonl").write_text(
+        json.dumps({"agent-context": {"cwd": str(repo)}}) + "\n", encoding="utf-8")
+    monkeypatch.setenv("SPECLOCK2_MCODE_SESSIONS_DIR", str(root))
+
+    def _mk(name: str, session: str) -> None:
+        r = client.post("/api/p/wm/masters", json={
+            "name": name, "duty": "d", "dir": ".", "harness": "mcode",
+            "model": "fake-m", "session": session})
+        assert r.status_code in (200, 201), r.text
+
+    _mk("别目录代理", "mvs_other_dir")
+    _mk("同目录代理", "mvs_here_dir")
+    assert client.patch("/api/p/wm", json={"working_dir": str(repo)}).status_code == 200
+
+    for name, expect_resume in (("别目录代理", False), ("同目录代理", True)):
+        order = client.post("/api/p/wm/tech-orders", json={
+            "intent": "x", "scope": ["./"], "master": name}).json()
+        r = client.post(f"/api/p/wm/tasks/{order['task_id']}/dispatch",
+                        json={"watchdog_minutes": 30})
+        if not expect_resume:  # 秒败路径不用真跑：只看 launch-plan 的 argv
+            client.post(f"/api/p/wm/tasks/{order['task_id']}/fail",
+                        json={"reason": "清理"})
+        plan = client.post(f"/api/p/wm/tasks/{order['task_id']}/launch-plan",
+                           json={"prompt": "hi"}).json()
+        has_resume = "--session" in plan["argv"]
+        assert has_resume is expect_resume, (name, plan["argv"])

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { AgentStatus, ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
 import type { SessionTarget } from '../types'
-import { formatDuration, formatTokens } from '../types'
+import { findChiefEntry, formatDuration, formatTokens } from '../types'
 import ModalShell from './ModalShell.vue'
 import ProjectFormModal from './ProjectFormModal.vue'
 
@@ -141,6 +141,9 @@ function activityLabel(slug: string): string {
   if (s.reviewing > 0) parts.push(`${s.reviewing} 待验收`)
   return parts.join(' · ')
 }
+
+/** 核心代理当前模型对应的 harness（按模型登记匹配；匹配不到不显示） */
+const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? null, props.modelEntries)?.harness ?? null)
 </script>
 
 <template>
@@ -227,7 +230,7 @@ function activityLabel(slug: string): string {
                 class="sidebar__item-sub"
                 :class="{ 'is-warn': (agent.context_usage_percent ?? 0) > 80 }"
                 :title="(agent.context_usage_percent ?? 0) > 80 ? '上下文占用超过 80%：会话退化信号，建议停止后重新启动（账本可重建一切，§12.3）' : '核心代理会话运行中'"
-              >{{ agent.model ?? '运行中' }} · 上下文 {{ agent.context_usage_percent ?? '—' }}%</span>
+              ><template v-if="chiefHarnessName">{{ chiefHarnessName }} · </template>{{ agent.model ?? '运行中' }} · 上下文 {{ agent.context_usage_percent ?? '—' }}%</span>
               <span v-else-if="agent && !agent.running" class="sidebar__item-sub">未运行（发消息会自动唤醒）</span>
               <span v-else class="sidebar__item-sub">需求澄清 · 提案起草 · 汇报</span>
             </span>
@@ -260,7 +263,7 @@ function activityLabel(slug: string): string {
                 <template v-else>{{ m.duty }}</template>
               </span>
               <span class="sidebar__meta">
-                <code class="sidebar__harness" :title="`Harness：${m.harness}`">{{ m.harness }}</code>
+                <code class="sidebar__harness" :title="`Harness：${m.harness} · 模型：${m.model}`">{{ m.harness }} · {{ m.model }}</code>
                 <span
                   v-if="m.harness === 'mcode'"
                   class="sidebar__mcode"

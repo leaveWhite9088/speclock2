@@ -22,6 +22,19 @@ export interface ChatBubble {
 /** 模型选择项（/model 弹层与右上角弹层共用） */
 export type ModelPick = { kind: 'default' } | { kind: 'entry'; provider: string; model: string }
 
+/** 核心代理当前模型对应的登记条目：优先 provider/model 全串匹配，
+ *  退而按 model 段匹配（GET /agent 只有合并串、无 harness 字段，契约缺口） */
+export function findChiefEntry(
+  current: string | null,
+  entries: Array<{ harness: string; model: string }>,
+): { harness: string; model: string } | null {
+  if (!current) return null
+  const direct = entries.find((e) => `${e.harness}/${e.model}` === current)
+  if (direct) return direct
+  const short = current.includes('/') ? (current.split('/').pop() ?? '') : current
+  return entries.find((e) => e.model === short) ?? null
+}
+
 /** 主代理过程流条目（M1 由 mock 模拟；R-M2 接真实遥测） */
 export interface ActivityItem {
   id: string

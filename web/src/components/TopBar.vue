@@ -1,22 +1,14 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { ModelEntry } from '../api/client'
 import type { DrawerKey, ModelPick } from '../types'
+import { findChiefEntry } from '../types'
 import ModelMenu from './ModelMenu.vue'
 
 /**
- * 顶栏：右侧入口。模型按钮直接显示当前生效模型名（GET /agent 轮询值），
+ * 顶栏：右侧入口。模型按钮直接显示当前生效 harness+模型（GET /agent 轮询值），
  * 点击弹层切换（与 /model 同一数据源与端点）；模型登记降为弹层内「管理登记」。
  */
-defineProps<{
-  sessionTitle: string
-  drawer: DrawerKey | null
-  docsActive: boolean
-  chiefModel: string | null
-  modelEntries: ModelEntry[]
-  projectHasDefault: boolean
-}>()
-
 const emit = defineEmits<{
   (e: 'toggle-drawer', key: DrawerKey): void
   (e: 'toggle-docs'): void
@@ -30,6 +22,18 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
 ]
 
 const modelMenuOpen = ref(false)
+
+const props = defineProps<{
+  sessionTitle: string
+  drawer: DrawerKey | null
+  docsActive: boolean
+  chiefModel: string | null
+  modelEntries: ModelEntry[]
+  projectHasDefault: boolean
+}>()
+
+/** 核心代理 harness（按模型登记匹配当前模型；匹配不到不显示） */
+const chiefHarnessName = computed(() => findChiefEntry(props.chiefModel, props.modelEntries)?.harness ?? null)
 </script>
 
 <template>
@@ -40,11 +44,11 @@ const modelMenuOpen = ref(false)
       <button
         type="button"
         class="topbar__entry topbar__model-btn"
-        :title="chiefModel ? `核心代理当前模型：${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
+        :title="chiefModel ? `核心代理当前：${chiefHarnessName ? chiefHarnessName + ' · ' : ''}${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
         @click="modelMenuOpen = !modelMenuOpen"
       >
         <span class="topbar__model-dot" aria-hidden="true"></span>
-        <span class="topbar__model-name">{{ chiefModel ?? '模型' }}</span>
+        <span class="topbar__model-name"><template v-if="chiefHarnessName">{{ chiefHarnessName }} · </template>{{ chiefModel ?? '模型' }}</span>
       </button>
       <template v-if="modelMenuOpen">
         <div class="topbar__mmask" @click="modelMenuOpen = false"></div>

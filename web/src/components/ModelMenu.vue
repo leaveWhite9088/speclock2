@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ModelEntry } from '../api/client'
 import type { ModelPick } from '../types'
+import { findChiefEntry } from '../types'
 
 /**
  * 核心代理模型选择列表（/model 命令弹层与右上角弹层共用，同一数据源 =
  * 模型登记；当前生效模型高亮；「默认」= 跟随项目配置；次级入口管理登记）。
  */
-defineProps<{
+const props = defineProps<{
   entries: ModelEntry[]
   currentModel: string | null
   /** 项目配置了 chief 模型时才显示「默认」项 */
@@ -17,6 +19,9 @@ const emit = defineEmits<{
   (e: 'pick', sel: ModelPick): void
   (e: 'manage'): void
 }>()
+
+/** 当前生效模型对应的登记条目（高亮用；provider/model 全串或 model 段匹配） */
+const currentEntry = computed(() => findChiefEntry(props.currentModel, props.entries))
 </script>
 
 <template>
@@ -34,11 +39,11 @@ const emit = defineEmits<{
       :key="e.id"
       type="button"
       class="mmenu__item"
-      :class="{ 'is-current': currentModel === `${e.harness}/${e.model}` }"
+      :class="{ 'is-current': e === currentEntry }"
       @click="emit('pick', { kind: 'entry', provider: e.harness, model: e.model })"
     >
       <span class="mmenu__name">{{ e.harness }} · {{ e.model }}</span>
-      <span v-if="currentModel === `${e.harness}/${e.model}`" class="mmenu__cur">当前</span>
+      <span v-if="e === currentEntry" class="mmenu__cur">当前</span>
     </button>
     <footer class="mmenu__foot">
       <button type="button" class="mmenu__manage" @click="emit('manage')">管理登记 →</button>

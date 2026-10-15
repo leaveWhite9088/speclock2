@@ -9,12 +9,18 @@ export type DrawerKey = 'queue' | 'convention' | 'models'
 /** 当前会话：核心代理，或某个主代理的工作流视图 */
 export type SessionTarget = { kind: 'core' } | { kind: 'master'; masterId: string }
 
-/** 对话气泡（chat.human / chat.chief 事件的投影；error 为前端本地错误气泡） */
+/** 对话气泡（chat.human / chat.chief 事件的投影）；system/error 为前端本地气泡，
+ *  不入事件日志（/model 是命令不是消息，切模型的确认也只在本会话展示） */
 export interface ChatBubble {
   round: number
-  who: 'human' | 'core' | 'error'
+  who: 'human' | 'core' | 'system' | 'error'
   text: string
+  /** 错误气泡的快捷动作：启动核心代理后重试模型切换 */
+  action?: { kind: 'start-retry-model'; provider: string | null; model: string }
 }
+
+/** 模型选择项（/model 弹层与右上角弹层共用） */
+export type ModelPick = { kind: 'default' } | { kind: 'entry'; provider: string; model: string }
 
 /** 主代理过程流条目（M1 由 mock 模拟；R-M2 接真实遥测） */
 export interface ActivityItem {

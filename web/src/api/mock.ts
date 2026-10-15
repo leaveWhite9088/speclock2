@@ -451,6 +451,7 @@ export const FALLBACK_MODEL_ENTRIES: ModelEntry[] = [
   { id: 'mdl-4', harness: 'codex', model: 'deepseek-v3.2' },
   { id: 'mdl-5', harness: 'kimicode', model: 'kimi-k2.5' },
   { id: 'mdl-6', harness: 'kimicode', model: 'qwen3-max' },
+  { id: 'mdl-7', harness: 'mcode', model: 'minimax-m2.7' },
 ]
 
 /** 「读取 CLI 内部的会话列表」的 mock 形态（R-M2 接真实 CLI 会话目录） */
@@ -511,11 +512,11 @@ export function createMockApiClient(): ApiClient {
   const mastersBySlug: Record<string, MasterInfo[]> = {
     'daily-report': [
       { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax-m2.7', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
     expense: [
       { id: 'backend', name: '后端主代理', duty: '负责 backend/：API 实现与数据模型', dir: 'backend/', harness: 'claude-code', model: 'glm-4.7', session: 'sess_7d21c8', session_title: sessionTitle('sess_7d21c8') },
-      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'claude-code', model: 'claude-sonnet-4.5', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
+      { id: 'frontend', name: '前端主代理', duty: '负责 web/：界面实现与交互', dir: 'web/', harness: 'mcode', model: 'minimax-m2.7', session: 'sess_3a90f2', session_title: sessionTitle('sess_3a90f2') },
     ],
   }
   let masterSeq = 0
@@ -551,7 +552,7 @@ export function createMockApiClient(): ApiClient {
 
   // ---- 对话与核心代理状态（R-M2 同构降级：mock 客户端扮演后端） ----
   let agentRunning = true
-  const MOCK_AGENT_MODEL = 'mock/chief'
+  let agentModel = 'mock/chief'
 
   /** mock 核心代理回复（对应后端 SPECLOCK2_CHIEF_MOCK=1 的模拟行为） */
   function mockChiefReply(message: string): string {
@@ -1172,17 +1173,27 @@ export function createMockApiClient(): ApiClient {
     },
     getAgent: async (slug) => ({
       running: agentRunning,
-      model: agentRunning ? MOCK_AGENT_MODEL : null,
+      model: agentRunning ? agentModel : null,
       context_usage_percent: agentRunning ? 46 : null,
       session_id: `speclock2-${slug}`,
     }),
     startAgent: async (slug) => {
       agentRunning = true
-      return { running: true, model: MOCK_AGENT_MODEL, session_id: `speclock2-${slug}` }
+      return { running: true, model: agentModel, session_id: `speclock2-${slug}` }
     },
     stopAgent: async (slug) => {
       agentRunning = false
       return { running: false, model: null, session_id: `speclock2-${slug}` }
+    },
+    setAgentModel: async (_slug, body) => {
+      if (!agentRunning) {
+        throw new ApiError(409, { code: 'conflict', message: '核心代理会话未运行' })
+      }
+      if (!body.model?.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: 'model 必填' })
+      }
+      agentModel = body.provider ? `${body.provider}/${body.model}` : body.model
+      return { ok: true, model: agentModel }
     },
 
     patchProject: async (slug, body) => {

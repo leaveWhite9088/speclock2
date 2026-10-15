@@ -20,7 +20,8 @@ import {
   getMockActivity,
   isMockQueueRunning,
 } from './api/mock'
-import type { ChatBubble, DrawerKey, FeedRound, SessionTarget } from './types'
+import type { ChatBubble, DrawerKey, FeedRound, ModelPick, SessionTarget } from './types'
+import { ApiError } from './api/client'
 import Sidebar from './components/Sidebar.vue'
 import TopBar from './components/TopBar.vue'
 import CoreChat from './components/CoreChat.vue'
@@ -64,6 +65,8 @@ const streaming = ref(false)
 const streamText = ref('')
 /** 核心代理会话状态（侧栏状态卡：running/model/context_usage_percent） */
 const agent = ref<AgentStatus | null>(null)
+/** /model 弹层（输入框上方） */
+const modelMenuOpen = ref(false)
 let chatSource: EventSource | null = null
 let lastHuman = ''
 /** 用户主动停止：抑制随之而来的 agent_error 错误气泡 */
@@ -79,8 +82,8 @@ const chatByRound = computed<Record<number, ChatBubble[]>>(() => {
   return map
 })
 
-function pushChat(who: ChatBubble['who'], text: string, round = openRoundN.value): void {
-  chatMessages.value = [...chatMessages.value, { round, who, text }]
+function pushChat(who: ChatBubble['who'], text: string, round = openRoundN.value, action?: ChatBubble['action']): void {
+  chatMessages.value = [...chatMessages.value, { round, who, text, action }]
 }
 
 /** 页面加载/切换项目：从事件日志恢复对话历史（chat.human / chat.chief，按 id 序） */
@@ -178,6 +181,18 @@ function openStream(retry = 0): void {
 
 async function sendToCore(text: string): Promise<void> {
   if (!client.value || streaming.value) return
+  // /model 是命令不是消息：不进对话正文、不落事件日志
+  const cmd = text.match(/^\/model(?:\s+(\S+))?\s*$/)
+  if (cmd) {
+    if (cmd[1]) {
+      const arg = cmd[1]
+      const i = arg.indexOf('/')
+      await switchChiefModel(i > 0 ? { provider: arg.slice(0, i), model: arg.slice(i + 1) } : { provider: null, model: arg })
+    } else {
+      modelMenuOpen.value = true
+    }
+    return
+  }
   pushChat('human', text)
   lastHuman = text
   streaming.value = true
@@ -199,6 +214,60 @@ async function sendToCore(text: string): Promise<void> {
   } finally {
     void refreshAgent()
   }
+}
+
+/** 项目配置的默认核心代理模型（「默认（跟随项目配置）」项的目标） */
+const projectDefaultModel = computed(() => {
+  const p = projects.value.find((x) => x.slug === currentSlug.value)
+  if (!p?.chief_model) return null
+  return { provider: p.chief_provider ?? null, model: p.chief_model }
+})
+
+/** 切换核心代理当前会话模型（契约 v0.5）：成功/失败都走系统/错误气泡 */
+async function switchChiefModel(sel: { provider: string | null; model: string | null }): Promise<void> {
+  if (!client.value || !sel.model) return
+  try {
+    const res = await client.value.setAgentModel(currentSlug.value, {
+      ...(sel.provider ? { provider: sel.provider } : {}),
+      model: sel.model,
+    })
+    pushChat('system', `模型已切换为 ${res.model}`)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      pushChat('error', '核心代理会话未运行——启动后即可切换。', undefined, {
+        kind: 'start-retry-model',
+        provider: sel.provider,
+        model: sel.model,
+      })
+    } else {
+      pushChat('error', err instanceof Error ? err.message : String(err))
+    }
+  } finally {
+    void refreshAgent()
+  }
+}
+
+/** /model 与右上角弹层共用的选择入口 */
+function onModelPick(sel: ModelPick): void {
+  modelMenuOpen.value = false
+  if (sel.kind === 'default') {
+    if (projectDefaultModel.value) void switchChiefModel(projectDefaultModel.value)
+    else pushChat('system', '项目未配置默认模型，请直接选一个登记里的模型。')
+    return
+  }
+  void switchChiefModel({ provider: sel.provider, model: sel.model })
+}
+
+/** 错误气泡的「启动核心代理」：启动成功后自动重试切换 */
+async function onStartRetryModel(bubble: ChatBubble): Promise<void> {
+  if (!client.value || bubble.action?.kind !== 'start-retry-model') return
+  chatMessages.value = chatMessages.value.filter((m) => m !== bubble)
+  try {
+    await client.value.startAgent(currentSlug.value)
+  } catch {
+    /* 启动失败由切换请求的报错呈现 */
+  }
+  await switchChiefModel({ provider: bubble.action.provider, model: bubble.action.model })
 }
 
 /** 停止 = 停核心代理会话（pi 会话持久化，可再唤醒）；已生成的部分文本定稿保留 */
@@ -372,6 +441,21 @@ const masterStates = computed<Record<string, MasterState>>(() => {
     }
   }
   return states
+})
+
+/** 主代理最近一次遥测（包按轮次倒序，取该主代理第一条带遥测的任务） */
+const masterTelemetry = computed<Record<string, { ms: number; tokens: number } | null>>(() => {
+  const out: Record<string, { ms: number; tokens: number } | null> = {}
+  for (const pkg of packages.value) {
+    for (const t of pkg.tasks) {
+      if (!t.master) continue
+      if (out[t.master]) continue
+      if (t.duration_ms != null || t.tokens != null) {
+        out[t.master] = { ms: t.duration_ms ?? 0, tokens: t.tokens ?? 0 }
+      }
+    }
+  }
+  return out
 })
 
 const sessionTitle = computed(() => {
@@ -657,6 +741,7 @@ onMounted(() => {
         :master-states="masterStates"
         :core-pending="corePending"
         :agent="agent"
+        :master-telemetry="masterTelemetry"
         :model-entries="modelEntries"
         :cli-sessions="cliSessions"
         :style="{ width: `${sidebarWidth}px` }"
@@ -687,8 +772,13 @@ onMounted(() => {
         :session-title="docsView ? '文档' : sessionTitle"
         :drawer="drawer"
         :docs-active="docsView"
+        :chief-model="agent?.model ?? null"
+        :model-entries="modelEntries"
+        :project-has-default="projectDefaultModel != null"
         @toggle-drawer="onToggleDrawer"
         @toggle-docs="docsView = !docsView"
+        @pick-model="onModelPick"
+        @manage-models="drawer = 'models'"
       />
 
       <div class="app__body">
@@ -718,12 +808,19 @@ onMounted(() => {
             :chat-by-round="chatByRound"
             :streaming="streaming"
             :stream-text="streamText"
+            :model-menu="modelMenuOpen"
+            :model-entries="modelEntries"
+            :current-model="agent?.model ?? null"
+            :project-has-default="projectDefaultModel != null"
             :empty-note="feedError ? `账本数据不可用：${feedError}` : undefined"
             :card-busy="cardBusy"
             :card-error="cardError"
             @send="sendToCore"
             @stop="stopCore"
             @retry="retryLast"
+            @pick-model="onModelPick"
+            @close-model-menu="modelMenuOpen = false"
+            @start-retry="onStartRetryModel"
             @approve="approveCard"
             @reject="rejectCard"
           />

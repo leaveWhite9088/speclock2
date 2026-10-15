@@ -376,6 +376,17 @@ export interface AgentStartResponse {
   session_id: string
 }
 
+/** POST /agent/model（契约 v0.5）：provider 缺省 = 只按 model 切；未运行 409 */
+export interface AgentModelBody {
+  provider?: string
+  model: string
+}
+
+export interface AgentModelResponse {
+  ok: boolean
+  model: string
+}
+
 /* ---------- 版本快照详情（查看版本：当时那份 API/业务；端点为提议形状） ---------- */
 
 export interface VersionDetail {
@@ -479,12 +490,14 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
   let res: Response
   try {
-    res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
+    // timeoutMs：超时中止（fetch 悬挂时不至于永久等待）；未指定则不限时
+    const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
+    res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, signal, ...init })
   } catch (err) {
-    // 网络层失败（后端不可达、连接被拒等）
+    // 网络层失败（后端不可达、连接被拒、超时等）
     throw new ApiError(0, {
       code: 'network_error',
       message: err instanceof Error ? err.message : String(err),
@@ -559,6 +572,7 @@ export interface ApiClient {
   getAgent(slug: string): Promise<AgentStatus>
   startAgent(slug: string): Promise<AgentStartResponse>
   stopAgent(slug: string): Promise<AgentStartResponse>
+  setAgentModel(slug: string, body: AgentModelBody): Promise<AgentModelResponse>
   /** 项目目录与核心代理 LLM（契约 v0.4；旧后端未上线时 UI 优雅降级） */
   patchProject(slug: string, body: PatchProjectBody): Promise<Project>
   listFsDirs(path: string): Promise<{ items: FsDirEntry[] }>
@@ -568,7 +582,7 @@ export interface ApiClient {
 export function createApiClient(): ApiClient {
   const p = (slug: string): string => `/api/p/${slug}`
   return {
-    health: () => request<HealthResponse>('/api/health'),
+    health: () => request<HealthResponse>('/api/health', undefined, 8_000),
     listProjects: () => request<{ items: Project[] }>('/api/projects'),
     createProject: (body) =>
       request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
@@ -647,6 +661,8 @@ export function createApiClient(): ApiClient {
     getAgent: (slug) => request<AgentStatus>(`${p(slug)}/agent`),
     startAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/start`, { method: 'POST', body: '{}' }),
     stopAgent: (slug) => request<AgentStartResponse>(`${p(slug)}/agent/stop`, { method: 'POST' }),
+    setAgentModel: (slug, body) =>
+      request<AgentModelResponse>(`${p(slug)}/agent/model`, { method: 'POST', body: JSON.stringify(body) }),
     patchProject: (slug, body) =>
       request<Project>(p(slug), { method: 'PATCH', body: JSON.stringify(body) }),
     listFsDirs: (path) =>

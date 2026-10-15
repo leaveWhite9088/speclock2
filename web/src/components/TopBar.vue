@@ -1,22 +1,35 @@
 <script setup lang="ts">
-import type { DrawerKey } from '../types'
+import { ref } from 'vue'
+import type { ModelEntry } from '../api/client'
+import type { DrawerKey, ModelPick } from '../types'
+import ModelMenu from './ModelMenu.vue'
 
+/**
+ * 顶栏：右侧入口。模型按钮直接显示当前生效模型名（GET /agent 轮询值），
+ * 点击弹层切换（与 /model 同一数据源与端点）；模型登记降为弹层内「管理登记」。
+ */
 defineProps<{
   sessionTitle: string
   drawer: DrawerKey | null
   docsActive: boolean
+  chiefModel: string | null
+  modelEntries: ModelEntry[]
+  projectHasDefault: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'toggle-drawer', key: DrawerKey): void
   (e: 'toggle-docs'): void
+  (e: 'pick-model', sel: ModelPick): void
+  (e: 'manage-models'): void
 }>()
 
 const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
-  { key: 'models', label: '模型' },
   { key: 'convention', label: '约定' },
   { key: 'queue', label: '队列', primary: true },
 ]
+
+const modelMenuOpen = ref(false)
 </script>
 
 <template>
@@ -29,6 +42,39 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
         :class="{ 'is-active': docsActive }"
         @click="emit('toggle-docs')"
       >文档</button>
+      <div class="topbar__model">
+        <button
+          type="button"
+          class="topbar__entry topbar__model-btn"
+          :title="chiefModel ? `核心代理当前模型：${chiefModel}（点击切换）` : '核心代理未运行（点击选择模型）'"
+          @click="modelMenuOpen = !modelMenuOpen"
+        >
+          <span class="topbar__model-dot" aria-hidden="true"></span>
+          <span class="topbar__model-name">{{ chiefModel ?? '模型' }}</span>
+        </button>
+        <template v-if="modelMenuOpen">
+          <div class="topbar__mmask" @click="modelMenuOpen = false"></div>
+          <div class="topbar__mpanel">
+            <ModelMenu
+              :entries="modelEntries"
+              :current-model="chiefModel"
+              :show-default="projectHasDefault"
+              @pick="
+                (sel) => {
+                  modelMenuOpen = false
+                  emit('pick-model', sel)
+                }
+              "
+              @manage="
+                () => {
+                  modelMenuOpen = false
+                  emit('manage-models')
+                }
+              "
+            />
+          </div>
+        </template>
+      </div>
       <button
         v-for="entry in entries"
         :key="entry.key"
@@ -43,6 +89,7 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
 
 <style scoped>
 .topbar {
+  position: relative;
   height: var(--topbar-h);
   flex: none;
   display: flex;
@@ -89,5 +136,55 @@ const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
   background: var(--c-panel);
   box-shadow: inset 0 0 0 1px var(--c-border-strong);
   color: var(--c-ink);
+}
+
+/* 当前模型按钮：mono 字直接显示生效模型名 */
+.topbar__model {
+  position: relative;
+}
+
+.topbar__model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  max-width: 260px;
+}
+
+.topbar__model-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-ok);
+  flex: none;
+}
+
+.topbar__model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__mmask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.topbar__mpanel {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 0;
+  z-index: 51;
+  width: 300px;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-m);
+  box-shadow: 0 8px 24px rgba(29, 37, 48, 0.12);
+  padding: var(--sp-1);
+  max-height: 340px;
+  overflow-y: auto;
 }
 </style>

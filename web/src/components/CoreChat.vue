@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import type { ChatBubble, FeedRound } from '../types'
+import type { ModelEntry } from '../api/client'
+import type { ChatBubble, FeedRound, ModelPick } from '../types'
 import { formatDuration, formatTokens, masterLabel } from '../types'
 import RoundDivider from './RoundDivider.vue'
 import ApprovalCard from './ApprovalCard.vue'
+import ModelMenu from './ModelMenu.vue'
 
 /**
  * 核心代理会话：平时只看这里——对话（chat.* 事件投影，按轮次内嵌）、流式打字机、
- * 审批卡片内联呈现。人只发自然语言（发送/停止）；卡片由核心代理经 draft_card 起草。
+ * 审批卡片内联呈现。人只发自然语言与 /model 命令；卡片由核心代理经 draft_card 起草。
  */
 const props = defineProps<{
   feed: FeedRound[]
@@ -15,6 +17,11 @@ const props = defineProps<{
   chatByRound: Record<number, ChatBubble[]>
   streaming: boolean
   streamText: string
+  /** /model 命令弹出的模型选择层 */
+  modelMenu: boolean
+  modelEntries: ModelEntry[]
+  currentModel: string | null
+  projectHasDefault: boolean
   emptyNote?: string
   cardBusy: Record<string, boolean>
   cardError: Record<string, string>
@@ -24,6 +31,10 @@ const emit = defineEmits<{
   (e: 'send', text: string): void
   (e: 'stop'): void
   (e: 'retry'): void
+  (e: 'pick-model', sel: ModelPick): void
+  (e: 'close-model-menu'): void
+  (e: 'manage-models'): void
+  (e: 'start-retry', bubble: ChatBubble): void
   (e: 'approve', cardId: string): void
   (e: 'reject', cardId: string): void
 }>()
@@ -114,11 +125,18 @@ function verdictLines(fr: FeedRound): string[] {
 
           <!-- 本轮对话（chat.* 事件投影：人 ↔ 核心代理） -->
           <template v-for="(msg, i) in chatByRound[fr.info.n] ?? []" :key="`c-${fr.info.n}-${i}`">
-            <div v-if="msg.who === 'error'" class="core__msg core__msg--core">
+            <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
+            <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
               <span class="core__avatar" aria-hidden="true">核</span>
               <div class="core__bubble core__bubble--error">
                 {{ msg.text }}
-                <button type="button" class="core__retry" @click="emit('retry')">重试</button>
+                <button
+                  v-if="msg.action?.kind === 'start-retry-model'"
+                  type="button"
+                  class="core__retry"
+                  @click="emit('start-retry', msg)"
+                >启动核心代理</button>
+                <button v-else type="button" class="core__retry" @click="emit('retry')">重试</button>
               </div>
             </div>
             <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
@@ -156,11 +174,18 @@ function verdictLines(fr: FeedRound): string[] {
 
         <!-- 轮次未入列时的兜底渲染（如轮次列表尚未刷新） -->
         <template v-for="(msg, i) in tailChat" :key="`t-${i}`">
-          <div v-if="msg.who === 'error'" class="core__msg core__msg--core">
+          <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
+          <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
             <span class="core__avatar" aria-hidden="true">核</span>
             <div class="core__bubble core__bubble--error">
               {{ msg.text }}
-              <button type="button" class="core__retry" @click="emit('retry')">重试</button>
+              <button
+                v-if="msg.action?.kind === 'start-retry-model'"
+                type="button"
+                class="core__retry"
+                @click="emit('start-retry', msg)"
+              >启动核心代理</button>
+              <button v-else type="button" class="core__retry" @click="emit('retry')">重试</button>
             </div>
           </div>
           <div v-else class="core__msg" :class="`core__msg--${msg.who}`">
@@ -180,11 +205,26 @@ function verdictLines(fr: FeedRound): string[] {
     </div>
 
     <footer class="core__composer">
+      <!-- /model 命令的选择弹层（命令本身不进对话正文） -->
+      <div v-if="modelMenu" class="core__mmask" @click="emit('close-model-menu')"></div>
+      <div v-if="modelMenu" class="core__mpanel">
+        <header class="core__mhead">
+          <span>切换核心代理模型</span>
+          <button type="button" class="core__mclose" title="关闭" @click="emit('close-model-menu')">✕</button>
+        </header>
+        <ModelMenu
+          :entries="modelEntries"
+          :current-model="currentModel"
+          :show-default="projectHasDefault"
+          @pick="emit('pick-model', $event)"
+          @manage="emit('manage-models')"
+        />
+      </div>
       <input
         v-model="draft"
         class="core__input"
         type="text"
-        placeholder="给核心代理发消息…（Enter 发送）"
+        placeholder="给核心代理发消息…（/model 切换模型，Enter 发送）"
         aria-label="核心代理输入框"
         :disabled="streaming"
         @keydown.enter.prevent="send"
@@ -316,6 +356,13 @@ function verdictLines(fr: FeedRound): string[] {
   }
 }
 
+.core__sys {
+  text-align: center;
+  color: var(--c-ink-3);
+  font-size: var(--fs-12);
+  padding: 2px 0;
+}
+
 .core__card {
   margin-left: 32px;
 }
@@ -327,6 +374,7 @@ function verdictLines(fr: FeedRound): string[] {
 }
 
 .core__composer {
+  position: relative;
   flex: none;
   display: flex;
   gap: var(--sp-2);
@@ -336,6 +384,47 @@ function verdictLines(fr: FeedRound): string[] {
   max-width: 812px;
   width: 100%;
   margin: 0 auto;
+}
+
+/* /model 弹层：透明遮罩点击关闭，面板浮在输入框上方 */
+.core__mmask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.core__mpanel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: var(--sp-4);
+  right: var(--sp-4);
+  z-index: 41;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-m);
+  box-shadow: 0 8px 24px rgba(29, 37, 48, 0.12);
+  padding: var(--sp-1);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.core__mhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  font-weight: 600;
+  padding: var(--sp-1) var(--sp-2);
+}
+
+.core__mclose {
+  color: var(--c-ink-3);
+  padding: 0 4px;
+}
+
+.core__mclose:hover {
+  color: var(--c-ink);
 }
 
 .core__input {

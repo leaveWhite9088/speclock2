@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { AgentStatus, ApiClient, CliSession, MasterInfo, ModelEntry, Project } from '../api/client'
 import type { SessionTarget } from '../types'
+import { formatDuration, formatTokens } from '../types'
 import ModalShell from './ModalShell.vue'
 import ProjectFormModal from './ProjectFormModal.vue'
 
@@ -22,6 +23,8 @@ const props = defineProps<{
   corePending: number
   /** 核心代理会话状态（10s 轮询；null = 探测中/不可用） */
   agent: AgentStatus | null
+  /** 主代理最近一次任务遥测（耗时 + token 估） */
+  masterTelemetry: Record<string, { ms: number; tokens: number } | null>
   /** Harness×模型登记（右上角「模型」维护）：主代理的属性只能从这里选 */
   modelEntries: ModelEntry[]
   /** CLI 内部的会话列表：主代理唤醒后接续选定的会话工作 */
@@ -255,6 +258,17 @@ function activityLabel(slug: string): string {
               <span class="sidebar__item-sub">
                 <template v-if="masterStates[m.id]">{{ masterStates[m.id].label }}</template>
                 <template v-else>{{ m.duty }}</template>
+              </span>
+              <span class="sidebar__meta">
+                <code class="sidebar__harness" :title="`Harness：${m.harness}`">{{ m.harness }}</code>
+                <span
+                  v-if="m.harness === 'mcode'"
+                  class="sidebar__mcode"
+                  title="绑定 mcode（可派发 harness）"
+                >M</span>
+                <template v-if="masterTelemetry[m.id]">
+                  · ⏱ {{ formatDuration(masterTelemetry[m.id]!.ms) }} · {{ formatTokens(masterTelemetry[m.id]!.tokens) }} tokens(估)
+                </template>
               </span>
             </span>
             <span
@@ -581,6 +595,35 @@ function activityLabel(slug: string): string {
   color: var(--c-ink-3);
   font-size: var(--fs-12);
   padding: var(--sp-1) var(--sp-2);
+}
+
+/* 主代理条目第三行：harness 名 + 最近遥测 */
+.sidebar__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-12);
+  color: var(--c-ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__harness {
+  font-family: var(--font-mono);
+  color: var(--c-ink-2);
+  flex: none;
+}
+
+.sidebar__mcode {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 12px;
+  color: var(--c-warn);
+  border: 1px solid var(--c-warn);
+  border-radius: 3px;
+  padding: 0 3px;
 }
 
 .sidebar__add {

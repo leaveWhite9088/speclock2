@@ -77,7 +77,7 @@ def test_timeout_enqueues_notice(client):
 
 
 def test_worker_relays_to_running_chief(client):
-    """worker 消费通知：给运行中的 chief 会话发转述回合。"""
+    """worker 消费通知：给运行中的 chief 会话发转述回合，并落账本（chat.system/chat.chief）。"""
     _setup_project(client, slug="nt4")
     spy = _SpySession()
     client.app.state.pi.sessions["nt4"] = spy
@@ -89,6 +89,11 @@ def test_worker_relays_to_running_chief(client):
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(asyncio.wait_for(one_step(), timeout=3))
     assert spy.got and "已完成并回执" in spy.got[0]
+    # 通知回合落账本（账本是 SSOT，回放可见）
+    events = client.get("/api/p/nt4/events", params={"type": "chat.chief"}).json()["items"]
+    assert events and "收到" in events[0]["payload"]["message"]
+    systems = client.get("/api/p/nt4/events", params={"type": "chat.system"}).json()["items"]
+    assert systems and "系统通知" in systems[0]["payload"]["message"]
 
 
 def test_worker_skips_when_chief_not_running(client):

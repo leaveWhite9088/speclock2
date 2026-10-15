@@ -29,7 +29,7 @@ def enqueue(app, slug: str, text: str) -> None:
 
 
 async def worker(app) -> None:
-    """轮询消费通知：给运行中的 chief 会话发一个转述回合。"""
+    """轮询消费通知：给运行中的 chief 会话发一个转述回合，并落账本（SSOT）。"""
     q: queue_mod.Queue = app.state.chief_notify
     while True:
         await asyncio.sleep(POLL_SECONDS)
@@ -42,8 +42,20 @@ async def worker(app) -> None:
                 session = app.state.pi.get(slug)
                 if session is None or not session.running:
                     continue  # chief 未运行：不唤醒、不通知（账本仍是事实源）
-                await asyncio.wait_for(session.prompt(text), timeout=NOTIFY_TURN_TIMEOUT)
+                reply = await asyncio.wait_for(session.prompt(text), timeout=NOTIFY_TURN_TIMEOUT)
+                _record_turn(app, slug, notice=text, reply=reply or "")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 continue  # 通知尽力而为，不影响派发主链
+
+
+def _record_turn(app, slug: str, notice: str, reply: str) -> None:
+    """通知回合落账本：与 /chat 同款（chat.system + chat.chief），回放可见。"""
+    from . import flow
+
+    with app.state.db.ledger_session(slug) as s:
+        round_ = flow.get_open_round(s) or flow.open_round(s, 1)
+        flow.add_event(s, round_.n, "system", "chat.system", {}, {"message": notice})
+        flow.add_event(s, round_.n, "chief", "chat.chief", {}, {"message": reply})
+        s.commit()

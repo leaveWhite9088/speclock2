@@ -155,12 +155,15 @@ function monitorDispatch(taskId: string, plan: any, proc: any): void {
 			}).catch(() => {});
 			return;
 		}
-		// 回执 + 遥测；任务若已被看门狗收尸（409）则静默放弃——账本为准
-		const files = (text.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+		// 回执 + 遥测；任务若已被看门狗收尸（409）则静默放弃——账本为准。
+		// FILES 解析源：NDJSON 的 assistant 全文；text 模式（mcode）没有事件流，
+		// 约定行在纯文本 stdout 里——两个源都找（E2E 实证：mcode 回执曾丢文件清单）
+		const source = text || allOutput;
+		const files = (source.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
 		api("POST", `/tasks/${taskId}/receipt`, {
 			files_changed: files,
 			self_check: `主代理进程退出码 0`,
-			summary: (text || allOutput).slice(0, 200),
+			summary: source.slice(0, 200),
 			telemetry: {
 				duration_ms: Date.now() - started,
 				tokens: usage ? { input: usage.input, output: usage.output } : null,

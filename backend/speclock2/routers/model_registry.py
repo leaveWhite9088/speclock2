@@ -43,6 +43,63 @@ class RegisterModelBody(BaseModel):
     provider: str | None = None
 
 
+class ProviderKeyBody(BaseModel):
+    api_key: str = ""
+
+
+# ---------- 服务商钥匙管理（派单）：钥匙只写不读，任何响应不回显 ----------
+
+
+@router.get("/api/providers")
+def list_providers(request: Request) -> dict:
+    """当前有钥匙的服务商名单（存储 ∪ 进程环境如 .env），{"items":[{name,has_key}]}。"""
+    from .. import providers
+
+    return {"items": [{"name": n, "has_key": providers.has_key(request.app.state.settings, n)}
+                      for n in providers.known_providers(request.app.state.settings)]}
+
+
+@router.put("/api/providers/{name}")
+def put_provider(name: str, body: ProviderKeyBody, request: Request) -> dict:
+    from .. import providers
+
+    reason = providers.validate_name(name)
+    if reason:
+        raise ApiError(422, "validation_error", reason)
+    if not body.api_key.strip():
+        raise ApiError(422, "validation_error", "api_key 不能为空")
+    providers.save_key(request.app.state.settings, name, body.api_key.strip())
+    return {"name": name, "has_key": True}
+
+
+@router.delete("/api/providers/{name}", status_code=204)
+def delete_provider(name: str, request: Request):  # noqa: ANN201 204 无响应体
+    """删除已存钥匙（契约 204；前端 fetch 该端点时不得按 JSON 解析空体）。"""
+    from .. import providers
+
+    reason = providers.validate_name(name)
+    if reason:
+        raise ApiError(422, "validation_error", reason)
+    providers.delete_key(request.app.state.settings, name)
+    from fastapi import Response
+
+    return Response(status_code=204)
+
+
+@router.post("/api/providers/{name}/probe")
+def probe_provider(name: str, request: Request) -> dict:
+    """带钥匙跑 `pi --list-models`（10 秒超时）。失败 ok=false + error，绝不 5xx。"""
+    from .. import pi_runtime, providers
+
+    reason = providers.validate_name(name)
+    if reason:
+        raise ApiError(422, "validation_error", reason)
+    settings = request.app.state.settings
+    key = providers.load_keys(settings).get(name)
+    result = providers.probe(pi_runtime.resolve_pi_command() or [], name, key)
+    return {"name": name, "ok": result["ok"], "models": result["models"], "error": result["error"]}
+
+
 # 模型发现（派单）：opencode 实查命令；mcode 无列模型命令，静态兜底
 # （安装包路由表，2026-10-15 实测）；pi 走登记手工维护（catalog 查询太慢，不发现）
 MCODE_STATIC_MODELS = ("MiniMax-M3", "MiniMax-M2.7-highspeed", "MiniMax-M2.7")
@@ -74,8 +131,24 @@ def _discover_opencode_models() -> tuple[list[str], str]:
     return ids, ("discovered" if ids else "none")
 
 
+def _discover_pi_models(request: Request) -> tuple[list[str], str]:
+    """pi 模型发现（派单：钥匙管理）：对每个有钥匙的服务商各跑一次 probe，
+    汇总为 provider/model 形式；探测失败的服务商跳过。全失败 → none。"""
+    from .. import pi_runtime, providers
+
+    settings = request.app.state.settings
+    pi_cmd = pi_runtime.resolve_pi_command() or []
+    found: list[str] = []
+    for name in providers.known_providers(settings):
+        key = providers.load_keys(settings).get(name)
+        result = providers.probe(pi_cmd, name, key)
+        if result["ok"]:
+            found.extend(f"{name}/{m['id']}" for m in result["models"])
+    return found, ("discovered" if found else "none")
+
+
 @router.get("/api/harness-models")
-def harness_models(harness: str = "") -> dict:
+def harness_models(harness: str = "", request: Request = None) -> dict:
     """harness 可用模型发现（与前端单共用契约）：{"harness", "models", "source"}。
 
     source：discovered（命令实查）/ static（静态兜底）/ none（没有）。
@@ -84,6 +157,8 @@ def harness_models(harness: str = "") -> dict:
     name = (harness or "").strip()
     if name == "opencode":
         models_list, source = _discover_opencode_models()
+    elif name == "pi":
+        models_list, source = _discover_pi_models(request)
     elif name == "mcode":
         models_list, source = list(MCODE_STATIC_MODELS), "static"
     else:

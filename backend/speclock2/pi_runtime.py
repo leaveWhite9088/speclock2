@@ -215,6 +215,15 @@ class PiSession(BaseSession):
         p = os.environ.get("SPECLOCK2_CHIEF_PROVIDER", "")
         return f"{p}/{m}" if p and m else (m or "pi-default")
 
+    def _process_env(self) -> dict[str, str]:
+        """子进程环境：工作台变量 + 已存服务商钥匙（providers.json，pi 环境变量约定）。"""
+        from . import providers
+
+        env = {**os.environ, "SPECLOCK2_SLUG": self.slug,
+               "SPECLOCK2_REPO_ROOT": str(self._repo_root)}
+        env.update(providers.injection_env(self.settings))
+        return env
+
     async def start(self) -> None:
         if self.running:
             return
@@ -225,8 +234,7 @@ class PiSession(BaseSession):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "SPECLOCK2_SLUG": self.slug,
-                 "SPECLOCK2_REPO_ROOT": str(self._repo_root)},
+            env=self._process_env(),
         )
         asyncio.create_task(self._read_stdout())
         asyncio.create_task(self._drain_stderr())

@@ -17,7 +17,7 @@ from sqlalchemy import select
 from . import cli_sessions, harness_map, models
 from .errors import ApiError
 from .pi_runtime import effective_chief, effective_chief_model_str, parse_record, split_records
-from .routers.queue import ReceiptBody, dispatch_service, receipt_service, record_task_output
+from .routers.queue import ReceiptBody, dispatch_service, reap_failed, receipt_service, record_task_output
 
 FILES_LINE_RE = re.compile(r"FILES:\s*(.+)")
 GRACE_SECONDS = 8  # 看门狗后的回执宽限：进程仍未退出则 kill
@@ -199,7 +199,8 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
             stderr=asyncio.subprocess.PIPE,
             cwd=plan["cwd"],
         )
-    except OSError as e:  # 命令不存在/不可执行：如实上报，不回执（看门狗兜底）
+    except OSError as e:  # 命令不存在/不可执行：快速收尸（不等看门狗），原因如实上报
+        reap_failed(app, slug, task_id, reason=f"进程无法启动：{type(e).__name__}: {e}")
         return {"task_id": task_id, "outcome": "spawn_failed", "error": f"{type(e).__name__}: {e}"}
     records: list[dict] = []
     buffer = b""
@@ -256,9 +257,16 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
                            broadcast=False)
     if proc.returncode != 0:
         # mcode 失败时错误行走 stdout（如 "mcode exec failed: ..."），一并带上
+        stderr_text = stderr_tail.decode("utf-8", "replace")
+        stdout_tail = bytes(stdout_raw[-300:]).decode("utf-8", "replace")
+        # 快速收尸（修复单 21 派发执行器侧）：不等看门狗，失败原因进事件并通知 chief
+        reap_failed(app, slug, task_id,
+                    reason=f"被派发进程异常退出（码 {proc.returncode}）",
+                    exit_code=proc.returncode,
+                    stderr=(stderr_text or stdout_tail) or None)
         return {"task_id": task_id, "outcome": "crashed", "exit_code": proc.returncode,
-                "stderr": stderr_tail.decode("utf-8", "replace"),
-                "stdout_tail": bytes(stdout_raw[-300:]).decode("utf-8", "replace")}
+                "stderr": stderr_text,
+                "stdout_tail": stdout_tail}
 
     if plan.get("output") == "text":
         # mcode exec：纯文本 stdout，全部文本即回复；token 不暴露 → 恒估算

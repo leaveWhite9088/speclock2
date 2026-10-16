@@ -166,9 +166,10 @@ def test_approve_notifies_chief_and_dispatches(mock_client, data_dir, tmp_path):
     assert any("已派发" in e["payload"]["message"] for e in chiefs)
 
 
-def test_crashed_process_times_out_via_watchdog(mock_client, data_dir, tmp_path):
-    """主代理进程崩溃（exit 1）不回执 → 看门狗标 timeout + task.timeout 事件。"""
-    _write_map(data_dir, {"backend": "t", "frontend": "t"}, extra_args=["--fail"], watchdog=0.05)
+def test_crashed_process_fast_reap(mock_client, data_dir, tmp_path):
+    """主代理进程崩溃（exit 1）→ 派发执行器立即收尸：timeout + 原因进事件。
+    看门狗 60 分钟都没到——不等看门狗（修复单 21 执行器侧 + 派单快败要求）。"""
+    _write_map(data_dir, {"backend": "t", "frontend": "t"}, extra_args=["--fail"], watchdog=60)
     _setup_project(mock_client)
     _bind(mock_client, tmp_path)
     order = mock_client.post("/api/p/a/tech-orders", json={
@@ -185,16 +186,11 @@ def test_crashed_process_times_out_via_watchdog(mock_client, data_dir, tmp_path)
     assert result["outcome"] == "crashed"
     assert result["exit_code"] == 1
 
-    # 看门狗 ~3 秒后触发（0.05 分钟）
-    deadline = time.time() + 15
-    status = None
-    while time.time() < deadline:
-        tasks = [t for p in mock_client.get("/api/p/a/packages").json()["items"] for t in p["tasks"]]
-        status = [t for t in tasks if t["task_id"] == task["task_id"]][0]["status"]
-        if status == "timeout":
-            break
-        time.sleep(0.5)
+    # 崩溃即收尸：不等看门狗（60 分钟时限远未到）
+    tasks = [t for p in mock_client.get("/api/p/a/packages").json()["items"] for t in p["tasks"]]
+    status = [t for t in tasks if t["task_id"] == task["task_id"]][0]["status"]
     assert status == "timeout"
     timeouts = mock_client.get("/api/p/a/events", params={"type": "task.timeout"}).json()["items"]
     assert timeouts and timeouts[0]["ref"]["task"] == task["task_id"]
+    assert "码 1" in timeouts[0]["payload"]["reason"]
     assert order["order_id"].startswith("O-")

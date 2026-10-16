@@ -305,8 +305,49 @@ class TaskFailBody(BaseModel):
     stderr: str | None = None
 
 
+def reap_failed(app, slug: str, task_id: int, reason: str, exit_code: int | None = None,
+                stderr: str | None = None) -> bool:
+    """快速失败收尸（修复单 21/派单共享）：仅看门狗管辖内任务可收。
+    取消看门狗定时器 → timeout + 事件（reason/exit_code/stderr 尾部）→ 通知 chief。
+    非 dispatched/running 返回 False（调用方自行决定要不要当错误）。"""
+    if not reason.strip():
+        return False
+    _cancel_watchdog(app.state.timers, slug, task_id)
+    with app.state.db.ledger_session(slug) as session:
+        task = session.get(models.Task, task_id)
+        if task is None or task.status not in ZOMBIE_STATUSES:
+            return False
+        task.status = "timeout"
+        task.updated_at = now_iso()
+        details: dict = {"reason": reason}
+        if exit_code is not None:
+            details["exit_code"] = exit_code
+        if stderr:
+            details["stderr_tail"] = stderr[-500:]
+        round_ = flow.get_open_round(session)
+        flow.add_event(session, round_.n if round_ else 0, "system", "task.timeout",
+                       {"task": fmt_id("T", task_id)}, details)
+        session.commit()
+        session.refresh(task)
+        master = task.master
+    from .. import chief_notify
+    chief_notify.enqueue(
+        app, slug,
+        f"系统通知：任务 {fmt_id('T', task_id)}（{master or '未指派'}）进程失败退出：{reason}。"
+        + (f"stderr 尾部：{details['stderr_tail']}" if "stderr_tail" in details else "")
+        + "请向用户转述失败原因，不要臆测。",
+    )
+    return True
+
+
 @router.post("/tasks/{task_id}/fail")
 def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> dict:
+    """派发快速失败收尸（修复单 21）：被派发进程非零退出时由 chief 扩展立即调用。
+
+    timeout 状态语义涵盖两种未回执终局：看门狗超时与进程崩溃——两者都是
+    「已派发、没回执、不会再有回执」。仅 dispatched/running 可调（409 否则）。
+    收尸 guts 在 reap_failed（dispatcher.run_task 的崩溃路径共用）。
+    """
     """派发快速失败收尸（修复单 21）：被派发进程非零退出时由 chief 扩展立即调用。
 
     timeout 状态语义涵盖两种未回执终局：看门狗超时与进程崩溃——两者都是
@@ -319,7 +360,6 @@ def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> 
     if not reason:
         raise ApiError(422, "validation_error", "reason 不能为空（崩溃原因）")
     tid = parse_prefixed_id(task_id, "T") or -1
-    _cancel_watchdog(request.app.state.timers, slug, tid)
     with request.app.state.db.ledger_session(slug) as session:
         task = session.get(models.Task, tid)
         if task is None:
@@ -327,27 +367,11 @@ def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> 
         if task.status not in ZOMBIE_STATUSES:
             raise ApiError(409, "conflict",
                            f"任务 {task_id} 状态为 {task.status}，不在看门狗管辖（只有已派发未回执的任务可 fail）")
-        task.status = "timeout"
-        task.updated_at = now_iso()
-        details: dict = {"reason": reason}
-        if body.exit_code is not None:
-            details["exit_code"] = body.exit_code
-        if body.stderr:
-            details["stderr_tail"] = body.stderr[-500:]
-        round_ = flow.get_open_round(session)
-        flow.add_event(session, round_.n if round_ else 0, "system", "task.timeout",
-                       {"task": fmt_id("T", tid)}, details)
-        session.commit()
-        session.refresh(task)
+    if not reap_failed(request.app, slug, tid, reason, body.exit_code, body.stderr):
+        raise ApiError(409, "conflict", f"任务 {task_id} 已被处理（回执或收尸）")
+    with request.app.state.db.ledger_session(slug) as session:
+        task = session.get(models.Task, tid)
         data = serialize.task_out(task)
-    # 落定即通知（慢工单）：崩溃收尸同样要回到 chief 的对话流
-    from .. import chief_notify
-    chief_notify.enqueue(
-        request.app, slug,
-        f"系统通知：任务 {fmt_id('T', tid)}（{task.master or '未指派'}）进程失败退出：{reason}。"
-        + (f"stderr 尾部：{details['stderr_tail']}" if "stderr_tail" in details else "")
-        + "请向用户转述失败原因，不要臆测。",
-    )
     return data
 
 

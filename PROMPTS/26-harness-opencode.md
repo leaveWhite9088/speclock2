@@ -20,7 +20,7 @@
 - opencode 的命令行形态自己研究。用 `opencode --help`、官方文档、实测确认。
 - 输出形态自己定：纯文本还是事件流。参考 mcode 的 `"output": "text"`。
 - 会话接续做不做、怎么做，自己判断。
-- 模型方言自己定：opencode 要求的模型写法，登记进「模型」。
+- 模型登记的写法自己定：把 DeepSeek V4.1 Flash 登记进「模型」，harness 为 opencode。
 - 已装实例的升级路径自己定：改完代码，现有 harness-map.json 不用手改。
 
 ## 背景（已查明的事实）
@@ -35,8 +35,10 @@
   - web/src/components/ModelPanel.vue 第 19 行：HARNESS_OPTIONS 列表含 kimicode。
   - web/src/components/Sidebar.vue 第 440 行：可派发徽标只认 harness 等于 mcode。opencode 也要有徽标。
 - opencode 1.19.1 装在 npm 全局。命令名是 opencode。
+- opencode 用 DeepSeek V4.1 Flash。确切型号 id 是 `opencode/deepseek-v4.1-flash-free`，用 `opencode models` 查得。用户已在 opencode 里用 /model 选好它。
+- opencode 的全局配置文件（~/.config/opencode/opencode.jsonc）是空的。默认模型没有落盘。派发参数里要显式传模型。
 - npm 全局命令在 Windows 上是 .cmd 垫片。直接 spawn 会失败。dispatcher 已有 cmd /c 包装，mcode 条目也有先例。
-- MiniMax Token Plan 配额今天耗尽（429，错误码 2056）。opencode 若配同一账号会同样失败。验收前先确认 opencode 配的模型能真回话。
+- MiniMax Token Plan 配额今天耗尽（429，错误码 2056）。DeepSeek 不吃这个配额。金路径验收用 opencode 走。
 - 派发的任务提示词里不得出现工作台绝对路径。
 - 自测不碰真实项目账本。用临时项目，或把 SPECLOCK2_DATA_DIR 指向临时目录。
 

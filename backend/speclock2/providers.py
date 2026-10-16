@@ -113,11 +113,14 @@ def parse_model_table(stdout: str) -> list[dict]:
 
 
 def probe(pi_cmd: list[str], provider: str, api_key: str | None) -> dict:
-    """探测：带钥匙跑 `pi --list-models`（10 秒超时）。失败 ok=false，绝不抛。"""
+    """探测：带钥匙跑 `pi --list-models`（10 秒超时）。失败 ok=false，绝不抛。
+    探测环境只留目标服务商的钥匙——清掉其他服务商的环境变量，清单才是「它的」。"""
     var = env_var_for(provider)
     if not api_key and not os.environ.get(var):
         return {"ok": False, "models": [], "error": f"{provider} 未存钥匙"}
-    env = {**os.environ, var: api_key or os.environ.get(var, "")}
+    other_vars = {v for p, v in PROVIDER_ENV.items() if p != provider}
+    env = {k: v for k, v in os.environ.items() if k not in other_vars}
+    env[var] = api_key or os.environ.get(var, "")
     if not pi_cmd:
         return {"ok": False, "models": [], "error": "未找到 pi 可执行文件"}
     try:

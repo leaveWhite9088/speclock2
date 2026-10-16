@@ -38,6 +38,7 @@ const props = defineProps<{
 }>()
 
 const entries: Array<{ key: DrawerKey; label: string; primary?: boolean }> = [
+  { key: 'models', label: '模型' },
   { key: 'convention', label: '约定' },
   { key: 'queue', label: '队列', primary: true },
 ]

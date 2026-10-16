@@ -819,6 +819,8 @@ async function startQueue(): Promise<void> {
 
 function onToggleDrawer(key: DrawerKey): void {
   drawer.value = drawer.value === key ? null : key
+  // 打开模型管理：登记清单即时重拉（服务商数据由 ModelPanel 挂载时自取）
+  if (drawer.value === 'models') void loadRegistry()
 }
 
 function onSelectSession(target: SessionTarget): void {

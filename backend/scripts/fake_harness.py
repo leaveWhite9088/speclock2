@@ -19,6 +19,10 @@ from pathlib import Path
 REPO_ROOT = Path.cwd()  # 派发器保证 cwd=仓库根；以 cwd 为基准写文件
 
 
+for _stream in (sys.stdout, sys.stderr):
+    _stream.reconfigure(encoding="utf-8")  # Windows 管道默认按系统代码页输出，会让派发器解码出乱码
+
+
 def send(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()

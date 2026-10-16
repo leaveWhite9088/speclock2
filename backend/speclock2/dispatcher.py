@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from . import cli_sessions, harness_map, models
 from .errors import ApiError
+from .protocol import report as report_mod
 from .pi_runtime import effective_chief, effective_chief_model_str, parse_record, split_records
 from .routers.queue import ReceiptBody, dispatch_service, reap_failed, receipt_service, record_task_output
 
@@ -274,7 +275,8 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
         usage = None
     else:
         text, usage = _assistant_text_and_usage(records)
-    files = parse_files_changed(text)
+    report = report_mod.parse_output(text, proc.returncode)
+    files = report["files_changed"]
     telemetry = {
         "duration_ms": duration_ms,
         "tokens": {k: usage.get(k) for k in ("input", "output", "cacheRead", "cacheWrite")} if usage else None,
@@ -283,12 +285,12 @@ async def run_task(app, slug: str, task_id: int, prompt: str, watchdog_minutes: 
     ok_word = "0" if proc.returncode == 0 else str(proc.returncode)
     detail = (f"输出 {len(records)} 条事件" if usage
               else f"输出 {len(text)} 字符（纯文本 harness）")
-    receipt = receipt_service(db, slug, task_id, ReceiptBody(
+    receipt = receipt_service(app, slug, task_id, ReceiptBody(
         files_changed=files,
         self_check=f"主代理进程退出码 {ok_word}；{detail}",
-        summary=text[:200],
+        summary=report["summary"],
         telemetry=telemetry,
-    ))
+    ), report=report)
     return {"task_id": task_id, "outcome": "reported", "exit_code": 0,
             "files_changed": files, "receipt_id": receipt.id}
 

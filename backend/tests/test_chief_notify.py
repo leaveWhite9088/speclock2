@@ -53,7 +53,7 @@ def test_receipt_enqueues_settle_notice(client):
     assert q.qsize() == 1
     slug, text = q.get_nowait()
     assert slug == "nt1"
-    assert "已完成并回执" in text and "hello.txt" in text and "backend" in text
+    assert "已回执" in text and "hello.txt" in text and "backend" in text
 
 
 def test_fail_enqueues_crash_notice(client):

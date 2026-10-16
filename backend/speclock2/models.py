@@ -252,6 +252,7 @@ class Receipt(LedgerBase):
     self_check: Mapped[str] = mapped_column(sa.Text)
     summary: Mapped[str] = mapped_column(sa.Text)
     telemetry: Mapped[dict | None] = mapped_column(sa.JSON)
+    report: Mapped[dict | None] = mapped_column(sa.JSON)  # 契约 v0.6 Report 对象；老回执为空
     created_at: Mapped[str] = mapped_column(sa.Text)
 
 

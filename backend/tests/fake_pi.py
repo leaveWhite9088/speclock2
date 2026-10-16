@@ -4,6 +4,9 @@ import json
 import sys
 
 
+sys.stdout.reconfigure(encoding="utf-8")  # Windows 管道默认按系统代码页输出
+
+
 def send(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()

@@ -10,7 +10,8 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from .. import flow, models, serialize
+from .. import chief_notify, flow, models, serialize
+from ..protocol import notices, report as report_mod
 from ..errors import ApiError
 from ..utils import fmt_id, now_iso, parse_prefixed_id
 
@@ -102,6 +103,54 @@ def _cancel_watchdog(timers: set, slug: str, task_id: int) -> bool:
 ZOMBIE_STATUSES = ("dispatched", "running")  # 已派发未回执的状态（看门狗管辖范围）
 
 
+def _duration_since(iso: str | None) -> int | None:
+    """从 dispatched_at 到现在的毫秒数；缺值返回 None。"""
+    try:
+        return round((datetime.now().astimezone() - datetime.fromisoformat(iso)).total_seconds() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def add_report_event(session, task: models.Task, report: dict, telemetry: dict | None = None,
+                     duration_ms: int | None = None) -> dict:
+    """写 task.report 事件（契约 v0.6 §3.3），返回 payload。调用方负责 commit 与推送。"""
+    telemetry = telemetry or {}
+    payload = {
+        "task_id": fmt_id("T", task.id),
+        "master": task.master,
+        "status": report["status"],
+        "summary": report["summary"],
+        "files_changed": report["files_changed"],
+        "issues": report["issues"],
+        "parse_quality": report["parse_quality"],
+        "duration_ms": telemetry.get("duration_ms", duration_ms),
+        "token_source": telemetry.get("token_source") or "estimated",
+    }
+    round_ = flow.get_open_round(session)
+    flow.add_event(session, round_.n if round_ else 0, "system", "task.report",
+                   {"task": payload["task_id"]}, payload)
+    return payload
+
+
+def publish_task_report(app, slug: str, payload: dict) -> None:
+    """把 task.report 推给 SSE（事件名 task_report）。看门狗线程与端点线程都会调用，
+    所以经事件循环的线程安全入口广播；核心代理会话没在跑（无订阅者）则放弃。"""
+    import asyncio
+
+    session = app.state.pi.get(slug)
+    loop = getattr(app.state, "loop", None)
+    if session is None or loop is None:
+        return
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        session.broadcast("task_report", payload)
+    else:
+        loop.call_soon_threadsafe(session.broadcast, "task_report", payload)
+
+
 def _mark_task_timeout(app, db, slug: str, task_id: int) -> bool:
     """僵尸任务收尸：仍处 dispatched/running → timeout + task.timeout 事件；返回是否标记。
     收尸即通知（慢工单）：chief 没在跟单时，由通知回合把超时事实送回对话流。"""
@@ -116,16 +165,14 @@ def _mark_task_timeout(app, db, slug: str, task_id: int) -> bool:
             session, round_.n if round_ else 0, "system", "task.timeout",
             {"task": fmt_id("T", task_id)}, {"deadline": task.watchdog_deadline},
         )
+        report = report_mod.failure_report(f"看门狗超时（期限 {task.watchdog_deadline}），未收到回执")
+        payload = add_report_event(session, task, report, duration_ms=_duration_since(task.dispatched_at))
         session.commit()
         session.refresh(task)
         master = task.master
-    from .. import chief_notify
-    chief_notify.enqueue(
-        app, slug,
-        f"系统通知：任务 {fmt_id('T', task_id)}（{master or '未指派'}）看门狗超时"
-        f"（期限 {task.watchdog_deadline}），未收到回执。"
-        "请向用户转述：任务未完成；过程输出里可能有线索，不要臆测原因。",
-    )
+    publish_task_report(app, slug, payload)
+    chief_notify.enqueue(app, slug, notices.task_timeout(
+        fmt_id("T", task_id), master, report, task.watchdog_deadline))
     return True
 
 
@@ -198,19 +245,26 @@ def dispatch_service(app, slug: str, task_id: int, watchdog_minutes: float) -> t
     return snapshot, False
 
 
-def receipt_service(db, slug: str, task_id: int, body: ReceiptBody) -> models.Receipt:
-    """dispatched→reported + 回执落库 + 事件（端点与派发执行器共用）。"""
+def receipt_service(app, slug: str, task_id: int, body: ReceiptBody,
+                    report: dict | None = None) -> models.Receipt:
+    """dispatched→reported + 回执落库 + task.report 事件（端点与派发执行器共用）。
+
+    report 为空表示人工回执：parse_quality 记为 manual。"""
+    db = app.state.db
     with db.ledger_session(slug) as session:
         task = session.get(models.Task, task_id)
         if task is None:
             raise ApiError(404, "not_found", f"任务不存在：{task_id}")
         _transition(task, "reported")
+        if report is None:
+            report = report_mod.manual_report(body.summary, body.files_changed)
         receipt = models.Receipt(
             task_id=task.id,
             files_changed=body.files_changed,
             self_check=body.self_check,
             summary=body.summary,
             telemetry=body.telemetry,
+            report=report,
             created_at=now_iso(),
         )
         session.add(receipt)
@@ -223,9 +277,11 @@ def receipt_service(db, slug: str, task_id: int, body: ReceiptBody) -> models.Re
             {"files_changed": body.files_changed, "self_check": body.self_check,
              "summary": body.summary, "telemetry": body.telemetry},
         )
+        payload = add_report_event(session, task, report, body.telemetry)
         session.commit()
         session.refresh(receipt)
-        return receipt
+    publish_task_report(app, slug, payload)
+    return receipt
 
 
 @router.get("/packages")
@@ -327,16 +383,14 @@ def reap_failed(app, slug: str, task_id: int, reason: str, exit_code: int | None
         round_ = flow.get_open_round(session)
         flow.add_event(session, round_.n if round_ else 0, "system", "task.timeout",
                        {"task": fmt_id("T", task_id)}, details)
+        report = report_mod.failure_report(reason)
+        payload = add_report_event(session, task, report, duration_ms=_duration_since(task.dispatched_at))
         session.commit()
         session.refresh(task)
         master = task.master
-    from .. import chief_notify
-    chief_notify.enqueue(
-        app, slug,
-        f"系统通知：任务 {fmt_id('T', task_id)}（{master or '未指派'}）进程失败退出：{reason}。"
-        + (f"stderr 尾部：{details['stderr_tail']}" if "stderr_tail" in details else "")
-        + "请向用户转述失败原因，不要臆测。",
-    )
+    publish_task_report(app, slug, payload)
+    chief_notify.enqueue(app, slug, notices.task_failed(
+        fmt_id("T", task_id), master, report, details.get("stderr_tail")))
     return True
 
 
@@ -426,20 +480,15 @@ def launch_plan(slug: str, task_id: str, body: LaunchPlanBody, request: Request)
 @router.post("/tasks/{task_id}/receipt")
 def submit_receipt(slug: str, task_id: str, body: ReceiptBody, request: Request) -> dict:
     _project_or_404(request, slug)
-    receipt = receipt_service(request.app.state.db, slug, parse_prefixed_id(task_id, "T") or -1, body)
+    receipt = receipt_service(request.app, slug, parse_prefixed_id(task_id, "T") or -1, body)
     with request.app.state.db.ledger_session(slug) as session:
         task = session.get(models.Task, receipt.task_id)
         data = serialize.task_out(task, receipt)
         master = task.master
+        report = receipt.report
     # 落定即通知（慢工单）：后台派发时 chief 没在跟单，由通知回合把结果送回对话流
-    files = "、".join(receipt.files_changed or []) or "（回执未声明文件）"
-    from .. import chief_notify
-    chief_notify.enqueue(
-        request.app, slug,
-        f"系统通知：任务 {fmt_id('T', receipt.task_id)}（{master or '未指派'}）已完成并回执。"
-        f"回执文件：{files}；摘要：{(receipt.summary or '')[:280]}。"
-        "请向用户简报结果：文件名与数量以本回执为准，不要另编路径。",
-    )
+    chief_notify.enqueue(request.app, slug,
+                         notices.task_completed(fmt_id("T", receipt.task_id), master, report))
     return data
 
 

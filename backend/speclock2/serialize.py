@@ -97,6 +97,7 @@ def receipt_out(r: models.Receipt) -> dict:
         "self_check": r.self_check,
         "summary": r.summary,
         "telemetry": r.telemetry,  # 过程遥测（时长/token，§13.5）
+        "report": r.report,  # 契约 v0.6 Report 对象；老账本回执为 null
         "created_at": r.created_at,
     }
 

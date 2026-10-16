@@ -23,6 +23,7 @@ _REGISTRY_COLUMNS: dict[str, list[tuple[str, str]]] = {
 _LEDGER_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "tasks": [("dispatched_at", "TEXT"), ("watchdog_minutes", "REAL"), ("output_tail", "TEXT")],
     "masters": [("provider", "TEXT")],
+    "receipts": [("report", "JSON")],
 }
 
 

@@ -61,9 +61,9 @@ def make_dispatch_fn(app) -> object:
     """mock 核心代理的 dispatch 工具效果：真实派发链（spawn harness → 遥测/回执）。"""
 
     async def _dispatch(slug: str, package_id: int):
-        from .. import dispatcher
+        from .. import executor
 
-        return await dispatcher.run_package(app, slug, package_id)
+        return await executor.run_package(app, slug, package_id)
 
     return _dispatch
 
@@ -80,6 +80,9 @@ async def lifespan(app):
     # 重启重建看门狗（追加项 9）：定时器是内存态，按落库 deadline 重武装/收尸
     rearm_watchdogs(app, app.state.settings.ledgers_dir)
     yield
+    from .. import executor
+
+    await executor.terminate_all(app)  # 先杀在跑的主代理进程，任务状态留给下次启动收尸
     worker.cancel()
     await app.state.pi.stop_all()  # 有序关闭全部核心代理会话（会话 JSONL 已持久化）
 

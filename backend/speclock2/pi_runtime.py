@@ -239,7 +239,9 @@ class PiSession(BaseSession):
             return
         if not self._cmd:
             raise RuntimeError("未找到 pi 可执行文件（npm i -g @earendil-works/pi-coding-agent）")
-        self.proc = await asyncio.create_subprocess_exec(
+        from .executor import spawn_process  # 延迟导入：executor 反向依赖本模块
+
+        self.proc = await spawn_process(
             *self._full_command(),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

@@ -108,10 +108,10 @@ def test_dispatch_full_flow_with_real_process(mock_client, data_dir, tmp_path):
     task = mock_client.get("/api/p/a/packages").json()["items"][-1]["tasks"][0]
 
     app = mock_client.app
-    from speclock2 import dispatcher
+    from speclock2 import executor
 
     async def run():
-        return await dispatcher.run_task(
+        return await executor.run_task(
             app, "a", int(task["task_id"].split("-")[1]),
             prompt="在 backend/ 下写 hello 文件。FILE: backend/hello-agent.txt",
         )
@@ -177,10 +177,10 @@ def test_crashed_process_fast_reap(mock_client, data_dir, tmp_path):
     task = mock_client.get("/api/p/a/packages").json()["items"][-1]["tasks"][0]
 
     app = mock_client.app
-    from speclock2 import dispatcher
+    from speclock2 import executor
 
     async def run():
-        return await dispatcher.run_task(app, "a", 1, prompt="干一件会崩的事")
+        return await executor.run_task(app, "a", 1, prompt="干一件会崩的事")
 
     result = asyncio.run(run())
     assert result["outcome"] == "crashed"

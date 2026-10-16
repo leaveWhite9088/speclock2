@@ -400,7 +400,7 @@ def fail_task(slug: str, task_id: str, body: TaskFailBody, request: Request) -> 
 
     timeout 状态语义涵盖两种未回执终局：看门狗超时与进程崩溃——两者都是
     「已派发、没回执、不会再有回执」。仅 dispatched/running 可调（409 否则）。
-    收尸 guts 在 reap_failed（dispatcher.run_task 的崩溃路径共用）。
+    收尸 guts 在 reap_failed（executor.run_task 的崩溃路径共用）。
     """
     """派发快速失败收尸（修复单 21）：被派发进程非零退出时由 chief 扩展立即调用。
 
@@ -472,7 +472,7 @@ def launch_plan(slug: str, task_id: str, body: LaunchPlanBody, request: Request)
     被 spawn 的一方（TS 扩展 / mock 执行器）不再各自解析映射。
     """
     _project_or_404(request, slug)
-    from ..dispatcher import plan_task_launch
+    from ..executor import plan_task_launch
 
     return plan_task_launch(request.app, slug, parse_prefixed_id(task_id, "T") or -1, body.prompt)
 

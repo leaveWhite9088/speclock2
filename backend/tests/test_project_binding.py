@@ -13,12 +13,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from speclock2 import dispatcher, models, pi_runtime
+from speclock2 import executor, models, pi_runtime
 from speclock2.utils import now_iso
 from tests.test_s2 import _setup_project
 
 FAKE = Path(__file__).parent.parent / "scripts" / "fake_harness.py"
-WORKBENCH_ROOT = Path(dispatcher.__file__).resolve().parent.parent.parent
+WORKBENCH_ROOT = Path(executor.__file__).resolve().parent.parent.parent
 
 
 def _mk_repo(tmp_path: Path, name: str = "target-repo") -> Path:
@@ -260,7 +260,7 @@ def test_run_task_writes_into_bound_repo_never_workbench(client, data_dir, tmp_p
 
     from speclock2.utils import parse_prefixed_id
 
-    result = asyncio_run(dispatcher.run_task(
+    result = asyncio_run(executor.run_task(
         client.app, "a", parse_prefixed_id(task_id, "T"), "FILE: hello-e2e.txt"))
     assert result["outcome"] == "reported"
     assert (repo / "hello-e2e.txt").exists()

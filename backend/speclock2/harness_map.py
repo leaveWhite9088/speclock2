@@ -58,7 +58,7 @@ def resolve_mcode_command() -> list[str] | None:
 
 
 def resolve_opencode_command() -> str | None:
-    """opencode（npm 全局）启动命令：Windows 是 .cmd 垫片，dispatcher 按扩展名包 cmd /c。
+    """opencode（npm 全局）启动命令：Windows 是 .cmd 垫片，executor 按扩展名包 cmd /c。
 
     只用 shutil.which（毫秒级）——load_or_create 的升级路径会调它，
     不得走 npm 子进程（resolve_pi_command 那种秒级探测会阻塞事件循环）。

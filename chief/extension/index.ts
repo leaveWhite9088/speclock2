@@ -10,16 +10,20 @@
 
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { spawn } from "node:child_process";
 
 const API = process.env.SPECLOCK2_API_BASE || "http://127.0.0.1:8000";
 const SLUG = process.env.SPECLOCK2_SLUG || "";
-const REPO_ROOT = process.env.SPECLOCK2_REPO_ROOT || process.cwd();
 
-/** 调工作台 REST；非 2xx 抛 ApiError（带状态码，工具按码给纠偏回路）。 */
+/** 调工作台 REST；非 2xx 抛 ApiError（带状态码和错误体，工具按码给纠偏回路）。 */
 class ApiError extends Error {
-	constructor(method: string, path: string, readonly status: number, body: unknown) {
+	constructor(method: string, path: string, readonly status: number, readonly body: any) {
 		super(`${method} ${path} -> ${status}: ${JSON.stringify(body)}`);
+	}
+	get code(): string | undefined {
+		return this.body?.error?.code ?? this.body?.code;
+	}
+	get details(): any {
+		return this.body?.error?.details ?? this.body?.details;
 	}
 }
 
@@ -36,142 +40,46 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
 	return data;
 }
 
-/** 路径纪律（修复单 19）：任务说明出现宿主/工作台仓库绝对路径 → 拒绝执行。
- *  主代理的领地由工作台按名册解析（--cwd），说明里写绝对路径会把产物写进工作台仓库。 */
-function promptHasHostPath(prompt: string): boolean {
-	const root = REPO_ROOT.replace(/[\\/]+$/, "");
-	return root.length > 3 && prompt.toLowerCase().includes(root.toLowerCase());
-}
-
-function hostPathRejection(prompt: string) {
-	return {
-		content: [{
-			type: "text",
-			text: `任务说明里出现了工作台仓库的绝对路径（${REPO_ROOT}）。` +
-				`主代理只能写自己的工作目录。请把路径改写成「在你的工作目录下创建 …」的说法后重新提交；本次未执行。`,
-		}],
-		details: { outcome: "prompt_rejected", reason: "host_path_in_prompt" },
-	};
-}
-
-/** 派发（慢工单异步化）：同步段只做 状态机→唤醒计划→spawn，随即返回；
- *  跟单（输出上报/回执/收尸）在后台继续——mcode 一跑十几分钟，同步等待会
- *  撑爆 chief 的回合超时（testproj T-0001 实证 981 秒）。落定后由工作台
- *  通知回合把结果送回对话流，chief 再向用户转述。 */
-async function startDispatch(taskId: string, prompt: string, watchdogMinutes: number) {
-	// 1. 状态机推进 + 看门狗；非 queued 任务返回 skipped：不 spawn、无副作用
-	const dispatchRes = await api("POST", `/tasks/${taskId}/dispatch`, { watchdog_minutes: watchdogMinutes });
-	if (dispatchRes.skipped) {
-		const st = dispatchRes.task?.status ?? "unknown";
+/** 把派发接口的业务错误翻成给模型的纠偏文字；认不出的错误原样抛出。
+ *  路径纪律、名册校验、项目绑定校验都在后端，这里只做转述。 */
+function dispatchErrorResult(err: unknown) {
+	if (!(err instanceof ApiError)) throw err;
+	if (err.status === 422 && err.code === "master_unknown") {
+		const available: string[] = err.details?.available ?? [];
 		return {
-			content: [{ type: "text", text: `任务 ${taskId} 状态为 ${st}，不可派发（只有 queued 能派发）。请新建任务（create_task）后用新任务号重试；这是状态机跳过，不是通道故障，不要上报「通道不可用」。` }],
-			details: { outcome: "skipped", state: st },
+			content: [{ type: "text", text: `主代理名字不在名册。可用名单：${available.join("、") || "（空）"}。请改用名册里的名字重新调用；本次未执行。` }],
+			details: { outcome: "master_unknown", available },
 		};
 	}
+	if (err.status === 422 && err.code === "host_path_in_instructions") {
+		return {
+			content: [{ type: "text", text: `任务说明里出现了工作台仓库的绝对路径。主代理只能写自己的工作目录。请把路径改写成「在你的工作目录下创建 …」的说法后重新提交；本次未执行。` }],
+			details: { outcome: "prompt_rejected", reason: "host_path_in_prompt" },
+		};
+	}
+	if (err.status === 422 && err.code === "project_unbound") {
+		return {
+			content: [{ type: "text", text: `项目还没有绑定目标仓库目录，后端拒绝派发。请告诉用户先在工作台绑定目录；本次未执行。` }],
+			details: { outcome: "project_unbound" },
+		};
+	}
+	throw err;
+}
 
-	// 2. 唤醒计划由工作台统一计算（名册 harness×harness-map×会话接续）
-	const plan = await api("POST", `/tasks/${taskId}/launch-plan`, { prompt });
-	const argv: string[] = plan.argv ?? [];
-	const isCmd = !!plan.wrap_cmd;
-	const finalArgv = isCmd ? ["cmd", "/c", plan.command, ...argv] : argv;
-	const command = isCmd ? "cmd" : plan.command;
-
-	// 3. spawn + 后台跟单（不等待进程结束）
-	const proc = spawn(command, finalArgv, { cwd: plan.cwd ?? REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
-	monitorDispatch(taskId, plan, proc);
+/** 派发 N 个任务：一次调用后端 dispatch-package。后端建单、并行启动进程并后台监控，立即返回。 */
+async function dispatchPackage(intent: string, tasks: any[], watchdogMinutes?: number) {
+	const res = await api("POST", "/dispatch-package", {
+		intent,
+		tasks,
+		watchdog_minutes: watchdogMinutes,
+	});
+	const ids = (res.tasks ?? []).map((t: any) => `${t.task_id}（${t.master}）`).join("、");
 	return {
-		content: [{ type: "text", text: `任务 ${taskId} 已派发（工作目录：${plan.cwd}）。后台执行中：完成或失败都会由系统通知你，届时向用户转述——文件与结论以回执为准，不要现在声称完成。` }],
-		details: { outcome: "dispatched", cwd: plan.cwd },
+		content: [{ type: "text", text: `已建包 ${res.package_id}（单 ${res.order_id}），已派发 ${(res.tasks ?? []).length} 个任务：${ids}。后台执行中：完成或失败都会由系统通知你，届时向用户转述——文件与结论以回执为准，不要现在声称完成。` }],
+		details: res,
 	};
 }
 
-/** 后台跟单：逐行聚合 stdout（message_end 取全文）、stderr 留尾；
- *  过程输出每 2s 节流上报；进程结束按退出码回执或快速收尸。失败静默。 */
-function monitorDispatch(taskId: string, plan: any, proc: any): void {
-	const started = Date.now();
-	let buffer = "";
-	let text = "";
-	let usage: any = null;
-	let stderrTail = "";
-	let allOutput = "";
-	let reportedLen = 0;
-	let lastOutputPost = 0;
-	const postOutput = (force: boolean) => {
-		if (allOutput.length <= reportedLen) return;
-		const now = Date.now();
-		if (!force && now - lastOutputPost < 2000) return;
-		const increment = allOutput.slice(reportedLen);
-		reportedLen = allOutput.length;
-		lastOutputPost = now;
-		api("POST", `/tasks/${taskId}/output`, { text: increment }).catch(() => {});
-	};
-	const processLine = (line: string) => {
-		if (!line.trim()) return;
-		let event: any;
-		try {
-			event = JSON.parse(line);
-		} catch {
-			return;
-		}
-		if (event.type === "message_end" && event.message?.role === "assistant") {
-			text = (event.message.content ?? [])
-				.filter((b: any) => b.type === "text")
-				.map((b: any) => b.text)
-				.join("");
-			usage = event.message.usage ?? usage;
-		}
-	};
-	proc.stdout.on("data", (data: Buffer) => {
-		const chunk = data.toString("utf-8");
-		allOutput += chunk;
-		buffer += chunk;
-		const lines = buffer.split("\n");
-		buffer = lines.pop() ?? "";
-		for (const line of lines) processLine(line);
-		postOutput(false);
-	});
-	proc.stderr.on("data", (data: Buffer) => {
-		stderrTail = (stderrTail + data.toString("utf-8")).slice(-500);
-	});
-	proc.on("error", (err: Error) => {
-		// spawn 失败（命令不存在等）：快速收尸，失败原因回流
-		api("POST", `/tasks/${taskId}/fail`, {
-			reason: `进程无法启动：${String(err)}`,
-			stderr: stderrTail || undefined,
-		}).catch(() => {});
-	});
-	proc.on("close", (code: number | null) => {
-		if (buffer.trim()) processLine(buffer);
-		postOutput(true); // 收尾补一发增量，之后停播
-		const exitCode = code ?? 1;
-		if (exitCode !== 0) {
-			// 快速失败收尸（修复单 21）：立即标 timeout，不干等看门狗。
-			// mcode 类 harness 的报错在 stdout（模型路由拒绝等），一并带上
-			const stdoutTail = allOutput.slice(-500);
-			api("POST", `/tasks/${taskId}/fail`, {
-				reason: `被派发进程异常退出（码 ${exitCode}）`,
-				exit_code: exitCode,
-				stderr: (stderrTail || stdoutTail || "").slice(-500) || undefined,
-			}).catch(() => {});
-			return;
-		}
-		// 回执 + 遥测；任务若已被看门狗收尸（409）则静默放弃——账本为准。
-		// FILES 解析源：NDJSON 的 assistant 全文；text 模式（mcode）没有事件流，
-		// 约定行在纯文本 stdout 里——两个源都找（E2E 实证：mcode 回执曾丢文件清单）
-		const source = text || allOutput;
-		const files = (source.match(/FILES:\s*(.+)/)?.[1] ?? "").split(/\s+/).filter(Boolean);
-		api("POST", `/tasks/${taskId}/receipt`, {
-			files_changed: files,
-			self_check: `主代理进程退出码 0`,
-			summary: source.slice(0, 200),
-			telemetry: {
-				duration_ms: Date.now() - started,
-				tokens: usage ? { input: usage.input, output: usage.output } : null,
-				token_source: usage ? "exact" : "estimated",
-			},
-		}).catch(() => {});
-	});
-}
 
 export default function (pi: ExtensionAPI) {
 	/** 起草审批卡片：结构化变更的唯一合法通道（卡片必须经工具产出）。 */
@@ -272,37 +180,75 @@ export default function (pi: ExtensionAPI) {
 				})),
 			}),
 			async execute(_toolCallId, p) {
-				if (p.prompt && promptHasHostPath(p.prompt)) return hostPathRejection(p.prompt);
-				const order = await api("POST", "/tech-orders", {
-					intent: p.intent,
-					scope: p.scope ?? [],
-					acceptance: p.acceptance ?? [],
-					master: p.master,
-				});
-				const created = `已建任务 ${order.task_id}（单 ${order.order_id}，包 ${order.package_id}）`;
-				if (!p.prompt || !p.prompt.trim()) {
-					return {
-						content: [{ type: "text", text: `${created}，状态 queued。下一步用 dispatch 派发任务号 ${order.task_id}。` }],
-						details: order,
-					};
+				try {
+					if (!p.prompt || !p.prompt.trim()) {
+						// 只建单：走技术单端点，任务停在 queued，之后用 dispatch 派发
+						const order = await api("POST", "/tech-orders", {
+							intent: p.intent,
+							scope: p.scope ?? [],
+							acceptance: p.acceptance ?? [],
+							master: p.master,
+						});
+						return {
+							content: [{ type: "text", text: `已建任务 ${order.task_id}（单 ${order.order_id}，包 ${order.package_id}），状态 queued。下一步用 dispatch 派发任务号 ${order.task_id}。` }],
+							details: order,
+						};
+					}
+					// 建单加派发一步完成：等同于只含一个任务的 create_package
+					return await dispatchPackage(p.intent, [{
+						master: p.master,
+						instructions: p.prompt,
+						scope: p.scope ?? [],
+						acceptance: p.acceptance ?? [],
+					}]);
+				} catch (err) {
+					return dispatchErrorResult(err);
 				}
-				// 一步派发（异步）：无任务号交接；结果由系统通知回合送达
-				const result = await startDispatch(order.task_id, p.prompt, 60);
-				return {
-					content: [{ type: "text", text: `${created}。${(result.content as any[])[0].text}` }],
-					details: { order, dispatch: result.details },
-				};
 			},
 		}),
 	);
 
-	/** 派发：spawn 被派发 harness 真实进程（NDJSON 解析，骨架参考官方 subagent 示例）。 */
+	/** 建包并行派发：一次调用给多个主代理派任务，包内并行。 */
+	pi.registerTool(
+		defineTool({
+			name: "create_package",
+			label: "新建任务包",
+			description:
+				"一次给多个主代理派任务：登记意图，为每个任务生成 queued 任务并立即并行启动。" +
+				"派发是异步的：工具立即返回，完成或失败由系统通知回合送达。",
+			promptGuidelines: [
+				"同一件事要几个主代理一起做时，用一次 create_package，不要连续调多次 create_task。",
+				"每个任务的 master 必须用主代理名册里的名字；名字不对会报错并列出可用名单。",
+				"instructions 里禁止出现工作台仓库的绝对路径，只写「在你的工作目录下创建 …」。",
+				"派发是异步的：工具返回「已派发」不等于完成。不要向用户声称任务完成或失败；结果以系统通知为准。",
+			],
+			parameters: Type.Object({
+				intent: Type.String({ description: "为什么动（一句话，动词开头）" }),
+				tasks: Type.Array(Type.Object({
+					master: Type.String({ description: "执行的主代理名（名册里的名字）" }),
+					instructions: Type.String({ description: "给主代理的任务说明（实现范围与完成标准）" }),
+					scope: Type.Array(Type.String(), { default: [], description: "范围声明，如 [\"backend/\"]" }),
+					acceptance: Type.Array(Type.String(), { default: [], description: "验收标准列表" }),
+				}), { description: "任务列表，包内任务并行执行" }),
+				watchdog_minutes: Type.Optional(Type.Number({ description: "看门狗超时（分钟），默认 60" })),
+			}),
+			async execute(_toolCallId, p) {
+				try {
+					return await dispatchPackage(p.intent, p.tasks, p.watchdog_minutes);
+				} catch (err) {
+					return dispatchErrorResult(err);
+				}
+			},
+		}),
+	);
+
+	/** 派发：让后端启动已有 queued 任务的 harness 进程（进程由后端持有）。 */
 	pi.registerTool(
 		defineTool({
 			name: "dispatch",
 			label: "派发任务",
 			description:
-				"把任务派发给主代理：启动其 harness 真实进程执行任务说明，后台跟单。" +
+				"把任务派发给主代理：后端启动其 harness 真实进程执行任务说明，后台跟单。" +
 				"派发是异步的：工具立即返回「已派发」，完成/失败由系统通知回合送达，届时再向用户转述。" +
 				"只用于已有真实任务号的任务（批准卡片后的派发通知、create_task 不带 prompt 时返回的 task_id）。" +
 				"用户直达请求不要走本工具——直接用 create_task 带 prompt 一步完成。",
@@ -321,12 +267,25 @@ export default function (pi: ExtensionAPI) {
 				watchdog_minutes: Type.Number({ default: 60, description: "看门狗超时（分钟）" }),
 			}),
 			async execute(_toolCallId, p) {
-				if (promptHasHostPath(p.prompt)) return hostPathRejection(p.prompt);
 				// 修复单 19：失败必须给纠偏回路，不许裸抛——404 说明任务号是编的，
 				// 同一回合内引导 create_task 重试，而不是让模型去写故障报告
 				try {
 					const watchdogMinutes = p.watchdog_minutes && p.watchdog_minutes > 0 ? p.watchdog_minutes : 60;
-					return await startDispatch(p.task_id, p.prompt, watchdogMinutes);
+					const dispatchRes = await api("POST", `/tasks/${p.task_id}/run`, {
+						instructions: p.prompt,
+						watchdog_minutes: watchdogMinutes,
+					});
+					if (dispatchRes.skipped) {
+						const st = dispatchRes.task?.status ?? "unknown";
+						return {
+							content: [{ type: "text", text: `任务 ${p.task_id} 状态为 ${st}，不可派发（只有 queued 能派发）。请新建任务（create_task）后用新任务号重试；这是状态机跳过，不是通道故障，不要上报「通道不可用」。` }],
+							details: { outcome: "skipped", state: st },
+						};
+					}
+					return {
+						content: [{ type: "text", text: `任务 ${p.task_id} 已派发。后台执行中：完成或失败都会由系统通知你，届时向用户转述——文件与结论以回执为准，不要现在声称完成。` }],
+						details: { outcome: "dispatched" },
+					};
 				} catch (err) {
 					if (err instanceof ApiError && err.status === 404) {
 						return {
@@ -334,7 +293,7 @@ export default function (pi: ExtensionAPI) {
 							details: { outcome: "not_found" },
 						};
 					}
-					throw err;
+					return dispatchErrorResult(err);
 				}
 			},
 		}),

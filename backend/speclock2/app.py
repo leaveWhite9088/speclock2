@@ -20,6 +20,7 @@ from .routers import (
     project,
     projects,
     protocol,
+    dispatch,
     queue,
     roles,
     stats,
@@ -46,6 +47,8 @@ def create_app() -> FastAPI:
 
     harness_map.load_or_create(settings.data_dir)
     app.state.timers = set()  # 看门狗定时器（防 GC）
+    app.state.procs = {}  # (slug, task_id) -> (进程, 监控任务)：后端持有的主代理进程
+    app.state.shutting_down = False
     app.state.pi = PiManager(settings, db=app.state.db)  # 核心代理会话管理（mock 工具效果按需注入）
     app.state.pi.create_card_fn = chat.make_create_card_fn(app)
     app.state.pi.dispatch_fn = chat.make_dispatch_fn(app)
@@ -61,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(timeline.router)
     app.include_router(queue.router)
+    app.include_router(dispatch.router)
     app.include_router(masters.router)
     app.include_router(conventions.router)
     app.include_router(roles.router)

@@ -233,17 +233,17 @@ def test_output_tail_streams_during_dispatch(client, data_dir, tmp_path):
         "intent": "hello", "scope": ["./"], "acceptance": [], "master": "backend"}).json()
     task_id = client.get("/api/p/ot/packages").json()["items"][-1]["tasks"][-1]["task_id"]
 
-    from speclock2 import dispatcher
+    from speclock2 import executor
 
     async def run():
-        task = asyncio.create_task(dispatcher.run_task(
+        task = asyncio.create_task(executor.run_task(
             client.app, "ot", parse_prefixed_id(task_id, "T"), "只回复一个词：hello"))
         # 替身首行立即可见、其余在 2.5s 后：中途应只有第一阶段行（增量）
         await asyncio.sleep(1.0)
         with client.app.state.db.ledger_session("ot") as s:
             row = s.get(models.Task, parse_prefixed_id(task_id, "T"))
             mid_tail = row.output_tail or ""
-        assert "已收到任务" in mid_tail and "FILES:" not in mid_tail  # 运行中：尾部在长
+        assert "已收到任务" in mid_tail and "SL2-REPORT" not in mid_tail  # 运行中：尾部在长
         return await task
 
     result = asyncio_run(run())
@@ -251,7 +251,7 @@ def test_output_tail_streams_during_dispatch(client, data_dir, tmp_path):
     detail = [t for p in client.get("/api/p/ot/packages").json()["items"]
               for t in p["tasks"] if t["task_id"] == task_id][0]
     tail = detail["output_tail"]
-    assert "已收到任务" in tail and "FILES:" in tail  # 阶段行 + 收尾行都进了尾部
+    assert "已收到任务" in tail and "SL2-REPORT>>>" in tail  # 阶段行 + 收尾行都进了尾部
     assert len(tail) <= 4096
 
 

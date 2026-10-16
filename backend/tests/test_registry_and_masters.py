@@ -261,13 +261,13 @@ def test_run_task_spawns_with_resume_args(seeded, data_dir, monkeypatch, tmp_pat
     record = tmp_path / "argv.json"
     monkeypatch.setenv("SPECLOCK2_FAKE_RECORD_ARGV", str(record))
 
-    from speclock2 import dispatcher
+    from speclock2 import executor
     from speclock2.utils import parse_prefixed_id
 
     numeric = parse_prefixed_id(task_id, "T")
 
     async def run():
-        return await dispatcher.run_task(seeded.app, "a", numeric, "FILE: hello.txt")
+        return await executor.run_task(seeded.app, "a", numeric, "FILE: hello.txt")
 
     result = asyncio_run(run())
     assert result["outcome"] == "reported"

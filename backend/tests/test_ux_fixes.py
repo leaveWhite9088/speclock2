@@ -154,9 +154,9 @@ def test_dispatch_idempotent_on_reported(client, data_dir, tmp_path):
         "intent": "hello", "scope": ["./"], "acceptance": [], "master": "backend"})
     task_id = client.get("/api/p/idem/packages").json()["items"][-1]["tasks"][-1]["task_id"]
     # 先正常派发到 reported
-    from speclock2 import dispatcher
+    from speclock2 import executor
 
-    r1 = asyncio.run(dispatcher.run_task(client.app, "idem", parse_prefixed_id(task_id, "T"),
+    r1 = asyncio.run(executor.run_task(client.app, "idem", parse_prefixed_id(task_id, "T"),
                                          "只回复一个词：hello"))
     assert r1["outcome"] == "reported"
     # 再 dispatch（endpoint 与执行器两条路都应跳过、无副作用）
@@ -164,16 +164,16 @@ def test_dispatch_idempotent_on_reported(client, data_dir, tmp_path):
     assert r2.status_code == 200
     body = r2.json()
     assert body["skipped"] is True and "reported" in body["reason"]
-    r3 = asyncio.run(dispatcher.run_task(client.app, "idem", parse_prefixed_id(task_id, "T"),
+    r3 = asyncio.run(executor.run_task(client.app, "idem", parse_prefixed_id(task_id, "T"),
                                          "只回复一个词：hello"))
     assert r3["outcome"] == "skipped" and "reported" in r3["reason"]
 
 
 def test_chief_dispatch_tool_reports_skipped():
-    """TS 工具收到 skipped 响应时不 spawn——源码级检查（工具早退分支）。"""
+    """TS 工具收到 skipped 响应时提前返回——源码级检查（工具早退分支）。"""
     src = (Path(__file__).parent.parent.parent / "chief" / "extension" / "index.ts").read_text(
         encoding="utf-8")
-    assert "dispatchRes.skipped" in src
+    assert "dispatchRes.skipped" in src and "/run`" in src
     # 修复单 17：跳过要引导新建任务，不许当通道故障上报
     assert "create_task" in src
     assert "不可派发" in src

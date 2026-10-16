@@ -159,10 +159,10 @@ def test_dispatch_text_harness_parses_stdout(client, data_dir, tmp_path):
     """mcode 形态替身：回执来自全部 stdout 文本，token 恒 estimated，无 NDJSON 事件。"""
     repo = _setup_mcode_project(client, data_dir, tmp_path, session_id=None)
     task_id = _tech_order_task(client, "hello 级任务")
-    from speclock2 import dispatcher
+    from speclock2 import executor
     from speclock2.utils import parse_prefixed_id
 
-    result = asyncio_run(dispatcher.run_task(
+    result = asyncio_run(executor.run_task(
         client.app, "mc", parse_prefixed_id(task_id, "T"),
         "FILE: hello-mcode.txt 只回复一个词：hello"))
     assert result["outcome"] == "reported"
@@ -170,7 +170,8 @@ def test_dispatch_text_harness_parses_stdout(client, data_dir, tmp_path):
 
     detail = client.get("/api/p/mc/packages").json()["items"][-1]["tasks"][-1]
     receipt = detail["receipt"]
-    assert "FILES: hello-mcode.txt" in receipt["summary"]
+    assert receipt["report"]["files_changed"] == ["hello-mcode.txt"]
+    assert receipt["report"]["parse_quality"] == "structured"
     assert receipt["telemetry"]["token_source"] == "estimated"
     assert receipt["telemetry"]["tokens"] is None  # mcode 不暴露 token
     assert receipt["telemetry"]["duration_ms"] >= 0
@@ -194,16 +195,16 @@ def test_dispatch_mcode_resume_session(client, data_dir, tmp_path, monkeypatch):
     record = tmp_path / "argv.json"
     monkeypatch.setenv("SPECLOCK2_FAKE_RECORD_ARGV", str(record))
 
-    from speclock2 import dispatcher
+    from speclock2 import executor
     from speclock2.utils import parse_prefixed_id
 
-    plan = dispatcher.plan_task_launch(
+    plan = executor.plan_task_launch(
         client.app, "mc", parse_prefixed_id(task_id, "T"), "只回复一个词：hello")
     argv = plan["argv"]
     assert argv[argv.index("--session") + 1] == "mvs_bbbb00000000000000000000000000"
     assert plan["output"] == "text" and plan["model"] == "minimax/MiniMax-M3"
 
-    result = asyncio_run(dispatcher.run_task(
+    result = asyncio_run(executor.run_task(
         client.app, "mc", parse_prefixed_id(task_id, "T"), "只回复一个词：hello"))
     assert result["outcome"] == "reported"
     recorded = json.loads(record.read_text(encoding="utf-8"))
@@ -215,10 +216,10 @@ def test_dispatch_mcode_session_missing_degrades(client, data_dir, tmp_path):
     _setup_mcode_project(client, data_dir, tmp_path,
                          session_id="mvs_gone00000000000000000000000000")
     task_id = _tech_order_task(client, "hello 级任务")
-    from speclock2 import dispatcher
+    from speclock2 import executor
     from speclock2.utils import parse_prefixed_id
 
-    plan = dispatcher.plan_task_launch(
+    plan = executor.plan_task_launch(
         client.app, "mc", parse_prefixed_id(task_id, "T"), "只回复一个词：hello")
     assert "--session" not in plan["argv"]  # 目录已不存在 → 放弃接续
     assert plan["output"] == "text"

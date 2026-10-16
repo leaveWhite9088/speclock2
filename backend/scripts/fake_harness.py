@@ -1,10 +1,11 @@
 """被派发 harness 替身（B 阶段自测）：模拟 pi --mode json 的 NDJSON 输出。
 
-用法：python fake_harness.py [--sleep 秒] [--fail] <prompt>
+用法：python fake_harness.py [--sleep 秒] [--fail] [--plain] [--echo-prompt] [--legacy] <prompt>
 - prompt 中以「FILE: <相对仓库根的路径>」开头的行指定要写的文件；
   未指定时默认写 backend/hello-from-agent.txt（对应 R-M2 自指派小任务）；
 - --sleep：模拟长任务（上限 15s，防测试进程泄漏）；--fail：模拟崩溃（exit 1）；
-- 输出 assistant message_end（含 usage 与「FILES: ...」清单行），供派发执行器解析。
+- 输出 assistant message_end（含 usage 与 SL2-REPORT 报告块），供派发执行器解析；
+- --echo-prompt：把收到的提示词原文写进输出；--legacy：只输出旧的「FILES: ...」行，不带报告块。
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def main() -> None:
         Path(record).write_text(json.dumps(sys.argv), encoding="utf-8")
 
     args = sys.argv[1:]
-    sleep_s, fail, plain, positional = 0.0, False, False, []
+    sleep_s, fail, plain, echo, legacy, positional = 0.0, False, False, False, False, []
     i = 0
     while i < len(args):
         if args[i] == "--sleep":
@@ -46,6 +47,12 @@ def main() -> None:
             i += 1
         elif args[i] == "--plain":
             plain = True  # 模拟 mcode：只输出纯文本，不发 NDJSON
+            i += 1
+        elif args[i] == "--echo-prompt":
+            echo = True
+            i += 1
+        elif args[i] == "--legacy":
+            legacy = True
             i += 1
         else:
             positional.append(args[i])
@@ -72,7 +79,15 @@ def main() -> None:
         files = ["backend/hello-from-agent.txt"]
 
     duration_ms = round((time.time() - started) * 1000)
-    text = f"任务完成：写入 {len(files)} 个文件。FILES: {' '.join(files)}"
+    summary = f"任务完成：写入 {len(files)} 个文件。"
+    if legacy:
+        text = f"{summary}FILES: {' '.join(files)}"
+    else:
+        block = json.dumps({"status": "done", "summary": summary, "files": files, "issues": []},
+                           ensure_ascii=False)
+        text = f"{summary}\n<<<SL2-REPORT\n{block}\nSL2-REPORT>>>"
+    if echo:
+        text = f"收到的提示词：\n{prompt}\n{text}"
     if plain:
         # 模拟 mcode：纯文本 + 分阶段增量输出（过程输出通道 / output_tail 的验收探针）
         sys.stdout.write("fake-harness: 已收到任务，开始处理\n")
@@ -86,7 +101,7 @@ def main() -> None:
     send({"type": "message_end", "message": {
         "role": "assistant",
         "content": [{"type": "text",
-                     "text": f"任务完成：写入 {len(files)} 个文件。FILES: {' '.join(files)}"}],
+                     "text": text}],
         "usage": {"input": 1200, "output": 80, "cacheRead": 0, "cacheWrite": 0,
                   "totalTokens": 1280, "cost": {"total": 0.001}},
         "durationMs": duration_ms,

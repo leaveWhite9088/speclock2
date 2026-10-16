@@ -68,15 +68,14 @@ def test_chief_ts_404_guidance_and_one_step():
     assert "err.status === 404" in src
     assert "你不能编造任务号" in src
     assert "不是通道故障" in src
-    # 2. 派发异步化：共享入口被两个工具复用；跟单在后台（不阻塞 chief 回合）
-    assert src.count("startDispatch(") >= 3  # 定义 + dispatch + create_task
-    assert "monitorDispatch(" in src
+    # 2. 派发异步化：工具只调后端接口，进程由后端持有（契约 v0.6）
+    assert "/dispatch-package" in src and "/run`" in src
+    assert "create_package" in src
     assert "系统通知你" in src  # 工具结果告知模型：结果由通知回合送达
-    # 3. 路径纪律：宿主仓库绝对路径 → 拒绝并要求改写（不自动放行）
-    assert "promptHasHostPath" in src and "REPO_ROOT" in src
+    # 3. 路径纪律移到后端：扩展只转述 422 host_path_in_instructions
+    assert "host_path_in_instructions" in src
     assert "改写成「在你的工作目录下创建" in src
-    # 4. 工具结果带解析出的工作目录（launch-plan cwd）
-    assert "工作目录：${plan.cwd}" in src
+    assert "master_unknown" in src and "project_unbound" in src
     # 5. 宪法：异步语义 + 回执为准 + FILES 约定 + 404 应对
     # 工具用法规则已从角色文档移到 TypeScript 扩展的 promptGuidelines（契约 v0.6）
     assert "派发是异步的" in src
@@ -141,7 +140,10 @@ def test_create_task_dispatch_full_flow(client, tmp_path):
     assert (repo / "hello-chief-flow.txt").exists()
 
     # 4. receipt：dispatched → reported
-    files = proc.stdout.split("FILES:", 1)[1].split()
+    from speclock2.protocol import report as report_mod
+    text = [json.loads(l)["message"]["content"][0]["text"] for l in proc.stdout.splitlines()
+            if '"message_end"' in l][-1]
+    files = report_mod.parse_output(text)["files_changed"]
     r = client.post(f"/api/p/cf/tasks/{task_id}/receipt", json={
         "files_changed": files, "self_check": "主代理进程退出码 0",
         "summary": proc.stdout[:200]})
@@ -281,11 +283,11 @@ def test_fail_endpoint_fast_reap(client):
                        json={"reason": "  "}).status_code == 422
 
 
-def test_chief_ts_fails_fast_on_crash():
-    """源码级（修复单 21）：被派发进程非零退出 → 调 /fail 快速收尸，不等看门狗。"""
+def test_chief_ts_has_no_spawn():
+    """源码级（契约 v0.6）：扩展里不再有 spawn 和后台跟单，派发只有后端一份实现。"""
     src = CHIEF_TS.read_text(encoding="utf-8")
-    assert "/tasks/${taskId}/fail" in src
-    assert "exit_code" in src and "快速收尸" in src
+    for word in ("spawn", "monitorDispatch", "startDispatch", "promptHasHostPath"):
+        assert word not in src, word
 
 
 def test_launch_plan_drops_resume_on_workspace_mismatch(client, tmp_path, monkeypatch):

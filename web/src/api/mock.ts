@@ -1156,6 +1156,17 @@ export function createMockApiClient(): ApiClient {
       if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `登记 ${id} 不存在（mock）` })
       modelRegistry.splice(idx, 1)
     },
+    // 模型发现（mock）：三种 source 都演到——pi 实查、opencode 静态、未知 harness 没有
+    listHarnessModels: async (harness) => {
+      const known: Record<string, { models: string[]; source: 'discovered' | 'static' }> = {
+        pi: { models: ['minimax-cn/MiniMax-M3', 'zai/glm-4.7'], source: 'discovered' },
+        opencode: { models: ['deepseek/deepseek-flash'], source: 'static' },
+      }
+      const hit = known[harness]
+      return hit
+        ? { harness, models: hit.models, source: hit.source }
+        : { harness, models: [], source: 'none' }
+    },
     listCliSessions: async (cwd) => {
       const dir = cwd ? normalizeFsPath(cwd) : null
       const items = dir

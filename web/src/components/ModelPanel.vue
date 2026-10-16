@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { ApiClient, ModelEntry } from '../api/client'
 
 /**
  * Harness×模型登记：工作台只负责唤醒 Harness，不替它配置模型——
  * 这里是纯信息记录（Harness 有啥模型就登记啥，两项一起填），
  * 添加主代理时 Harness 与模型只能从这里选。
+ * 模型输入带自动发现（GET /api/harness-models）：datalist 给可选建议，
+ * 仍可手填；清单为空、请求失败/超时、端点未上线（404）都静默退回手填。
  */
 const props = defineProps<{
   client: ApiClient | null
@@ -23,6 +25,37 @@ const formModel = ref('')
 const error = ref('')
 const registering = ref(false)
 const removingId = ref('')
+
+/* ---------- 模型自动发现（读，不是配） ---------- */
+
+/** datalist 建议：非空时输入框出现可选列表；任何失败保持空 = 纯手填 */
+const suggestions = ref<string[]>([])
+const discoBusy = ref(false)
+/** 按 harness 缓存，切回来不再发请求 */
+const discoCache = new Map<string, string[]>()
+
+async function discover(harness: string): Promise<void> {
+  if (!props.client) return
+  const hit = discoCache.get(harness)
+  if (hit) {
+    suggestions.value = hit
+    return
+  }
+  discoBusy.value = true
+  try {
+    const res = await props.client.listHarnessModels(harness)
+    const models = Array.isArray(res.models) ? res.models.filter((m) => typeof m === 'string' && m.trim()) : []
+    discoCache.set(harness, models)
+    if (formHarness.value === harness) suggestions.value = models
+  } catch {
+    // 404 / 失败 / 超时：不缓存、不报错，datalist 保持空即手填
+    if (formHarness.value === harness) suggestions.value = []
+  } finally {
+    discoBusy.value = false
+  }
+}
+
+watch(formHarness, (h) => void discover(h), { immediate: true })
 
 /** 登记表按 Harness 分组（保持登记顺序） */
 const grouped = computed<Array<{ harness: string; models: ModelEntry[] }>>(() => {
@@ -88,14 +121,18 @@ async function remove(id: string): Promise<void> {
         </select>
       </label>
       <label class="models__field models__field--grow">
-        模型
+        模型<template v-if="discoBusy">（读取模型清单…）</template>
         <input
           v-model="formModel"
           class="models__input"
           type="text"
-          placeholder="如 glm-4.7 / claude-sonnet-4.5"
+          list="models-discovered"
+          :placeholder="suggestions.length ? '从清单选或直接填写' : '如 glm-4.7 / claude-sonnet-4.5'"
           :disabled="registering"
         />
+        <datalist id="models-discovered">
+          <option v-for="m in suggestions" :key="m" :value="m"></option>
+        </datalist>
       </label>
       <button type="submit" class="btn btn--sm btn--primary models__add" :disabled="registering">
         {{ registering ? '登记中…' : '登记' }}

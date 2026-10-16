@@ -349,6 +349,13 @@ export interface RegisterModelBody {
   model: string
 }
 
+/** Harness 可用模型发现（契约与后端单共用）：models 为空或请求失败都退回手填 */
+export interface HarnessModels {
+  harness: string
+  models: string[]
+  source: 'discovered' | 'static' | 'none'
+}
+
 /** CLI 会话（读取 CLI 内部的会话列表，主代理创建时选定一个绑定） */
 export interface CliSession {
   id: string
@@ -571,6 +578,9 @@ export interface ApiClient {
   listModels(): Promise<{ items: ModelEntry[] }>
   registerModel(body: RegisterModelBody): Promise<ModelEntry>
   removeModel(id: string): Promise<void>
+  /** Harness 可用模型发现（修复单 fx21）：source=discovered 实查/static 兜底/none 没有；
+   *  404（端点未上线）、失败、超时一律由调用方按空清单处理退回手填 */
+  listHarnessModels(harness: string): Promise<HarnessModels>
   /** CLI 会话列表；cwd 过滤到指定目录（主代理绑定只看当前项目目录下的） */
   listCliSessions(cwd?: string): Promise<{ items: CliSession[] }>
   /** 批量把 reported 任务标记为已验收（audit pass；后端未上线时 UI 行内报错） */
@@ -670,6 +680,9 @@ export function createApiClient(): ApiClient {
     registerModel: (body) =>
       request<ModelEntry>('/api/models', { method: 'POST', body: JSON.stringify(body) }),
     removeModel: (id) => request<void>(`/api/models/${id}`, { method: 'DELETE' }),
+    // 发现可能要实查命令，给 8s；失败/超时由调用方退回手填
+    listHarnessModels: (harness) =>
+      request<HarnessModels>(`/api/harness-models?harness=${encodeURIComponent(harness)}`, undefined, 8_000),
     listCliSessions: (cwd) =>
       request<{ items: CliSession[] }>(
         cwd ? `/api/cli-sessions?cwd=${encodeURIComponent(cwd)}` : '/api/cli-sessions',

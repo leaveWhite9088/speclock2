@@ -69,9 +69,9 @@ def test_fail_enqueues_crash_notice(client):
 def test_timeout_enqueues_notice(client):
     """看门狗收尸 → 通知入队：不带臆测原因，指向过程输出。"""
     tid = _queued_task(client, slug="nt3")
-    from speclock2.routers.queue import _mark_task_timeout
+    from speclock2.tasks.service import mark_task_timeout
 
-    assert _mark_task_timeout(client.app, client.app.state.db, "nt3", tid) is True
+    assert mark_task_timeout(client.app, client.app.state.db, "nt3", tid) is True
     _, text = client.app.state.chief_notify.get_nowait()
     assert "看门狗超时" in text and "T-0001" in text
 

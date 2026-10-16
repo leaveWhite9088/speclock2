@@ -71,7 +71,7 @@ def make_dispatch_fn(app) -> object:
 @asynccontextmanager
 async def lifespan(app):
     from .. import chief_notify
-    from .queue import rearm_watchdogs
+    from ..tasks.service import rearm_watchdogs
 
     app.state.loop = asyncio.get_running_loop()  # 看门狗线程经它向 SSE 线程安全广播
     # 通知腿先就位（慢工单）：看门狗启动收尸可能立刻入队

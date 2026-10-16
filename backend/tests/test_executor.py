@@ -160,10 +160,10 @@ def test_watchdog_timeout_gives_failed_report(mock_client, data_dir, tmp_path):
         "intent": "x", "scope": ["./"], "master": "后端"}).json()
     tid = int(order["task_id"].split("-")[1])
     app = mock_client.app
-    from speclock2.routers.queue import _mark_task_timeout, dispatch_service
+    from speclock2.tasks.service import mark_task_timeout, dispatch_service
 
     dispatch_service(app, "ex", tid, 60)
-    assert _mark_task_timeout(app, app.state.db, "ex", tid) is True
+    assert mark_task_timeout(app, app.state.db, "ex", tid) is True
     items = _wait_reports(mock_client, "ex", 1)
     assert len(items) == 1 and items[0]["payload"]["status"] == "failed"
     assert mock_client.get("/api/p/ex/events", params={"type": "task.timeout"}).json()["items"]

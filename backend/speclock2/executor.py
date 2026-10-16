@@ -22,7 +22,7 @@ from .protocol import notices
 from .protocol import report as report_mod
 from .roles import compose
 from .utils import fmt_id
-from .routers.queue import ReceiptBody, dispatch_service, reap_failed, receipt_service, record_task_output
+from .tasks.service import ReceiptBody, dispatch_service, reap_failed, receipt_service, record_task_output
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # 工作台仓库根
 GRACE_SECONDS = 8  # 看门狗后的回执宽限：进程仍未退出则 kill

@@ -92,7 +92,7 @@ def test_rearm_arms_future_watchdog_after_restart(client):
 def test_rearm_clean_directory_is_noop(client):
     """无僵尸任务时启动扫描为空操作（不报错、不动数据）。"""
     _setup_project(client)
-    from speclock2.routers.queue import rearm_watchdogs
+    from speclock2.tasks.service import rearm_watchdogs
 
     stats = rearm_watchdogs(client.app, client.app.state.settings.ledgers_dir)
     assert stats == {"zombies": 0, "rearmed": 0, "timed_out": 0}

@@ -39,6 +39,10 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.db = Database(settings)
     app.state.db.init_registry()  # 启动时建表
+    # harness 映射启动即升级（派单：收敛）——剔除退役条目、补齐支持集，存量 JSON 不用手改
+    from . import harness_map
+
+    harness_map.load_or_create(settings.data_dir)
     app.state.timers = set()  # 看门狗定时器（防 GC）
     app.state.pi = PiManager(settings, db=app.state.db)  # 核心代理会话管理（mock 工具效果按需注入）
     app.state.pi.create_card_fn = chat.make_create_card_fn(app)

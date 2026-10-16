@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -39,6 +41,54 @@ class RegisterModelBody(BaseModel):
     # LLM 供应商名，按 harness 各用各方言：pi 用 minimax-cn，mcode 用 minimax。
     # 词表校验仅对 pi 条目生效；非 pi 条目只要求非空、不含 "/"。
     provider: str | None = None
+
+
+# 模型发现（派单）：opencode 实查命令；mcode 无列模型命令，静态兜底
+# （安装包路由表，2026-10-15 实测）；pi 走登记手工维护（catalog 查询太慢，不发现）
+MCODE_STATIC_MODELS = ("MiniMax-M3", "MiniMax-M2.7-highspeed", "MiniMax-M2.7")
+DISCOVERY_TIMEOUT_SECONDS = 5
+
+
+def _discover_opencode_models() -> tuple[list[str], str]:
+    """`opencode models` 实查：每行一个模型 id（含 "/"）。失败/超时 → 空 + none。"""
+    from ..harness_map import resolve_opencode_command
+
+    base = resolve_opencode_command()
+    if not base:
+        return [], "none"
+    if isinstance(base, list):  # 测试注入的可执行列表
+        argv = [*base, "models"]
+    elif base.lower().endswith((".cmd", ".bat")):  # npm 垫片：spawn 须经 cmd
+        argv = ["cmd", "/c", base, "models"]
+    else:
+        argv = [base, "models"]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=DISCOVERY_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        return [], "none"
+    if proc.returncode != 0:
+        return [], "none"
+    ids = [line.strip() for line in (proc.stdout or "").splitlines()
+           if "/" in line and not line.startswith((" ", "	"))]
+    return ids, ("discovered" if ids else "none")
+
+
+@router.get("/api/harness-models")
+def harness_models(harness: str = "") -> dict:
+    """harness 可用模型发现（与前端单共用契约）：{"harness", "models", "source"}。
+
+    source：discovered（命令实查）/ static（静态兜底）/ none（没有）。
+    发现失败、超时（5 秒）、未知 harness 一律 200 + 空清单 + none，绝不 5xx。
+    """
+    name = (harness or "").strip()
+    if name == "opencode":
+        models_list, source = _discover_opencode_models()
+    elif name == "mcode":
+        models_list, source = list(MCODE_STATIC_MODELS), "static"
+    else:
+        models_list, source = [], "none"
+    return {"harness": name, "models": models_list, "source": source}
 
 
 def _entry_out(row: models.ModelEntry) -> dict:

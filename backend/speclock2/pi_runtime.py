@@ -18,6 +18,8 @@ import subprocess
 from pathlib import Path
 
 from .config import Settings
+from .roles.compose import chief_hash, compose_chief_prompt
+from .roles.store import composed_chief_path
 
 PROMPT_TIMEOUT = 600  # 单回合兜底超时（秒）：真模型多轮工具调用（含派发等待）耗时较长
 STATS_WARN_PERCENT = 80
@@ -128,6 +130,7 @@ class BaseSession:
 
     def __init__(self) -> None:
         self._subscribers: list[asyncio.Queue] = []
+        self.role_hash: str | None = None  # 会话启动时的角色文档哈希（needs_restart 比对用）
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
@@ -191,6 +194,9 @@ class PiSession(BaseSession):
         self._model_args = model_args if model_args is not None else chief_model_args()
 
     def _full_command(self) -> list[str]:
+        # 会话启动时重新组装角色文档（可编辑段 + 协议段），并记下哈希供 needs_restart 比对
+        compose_chief_prompt(self.settings, self.slug)
+        self.role_hash = chief_hash(self.settings, self.slug)
         session_dir = self.settings.data_dir / "pi-sessions"
         session_dir.mkdir(parents=True, exist_ok=True)
         return self._cmd + [
@@ -198,9 +204,13 @@ class PiSession(BaseSession):
             "--session-id", self.session_id,
             "--session-dir", str(session_dir),
             "-e", str(self._repo_root / "chief" / "extension" / "index.ts"),
-            "--append-system-prompt", str(self._repo_root / "chief" / "constitution.md"),
+            "--append-system-prompt", str(self.composed_path),
             *self._model_args,
         ]
+
+    @property
+    def composed_path(self) -> Path:
+        return composed_chief_path(self.settings, self.slug)
 
     @property
     def running(self) -> bool:
@@ -444,6 +454,7 @@ class PiManager:
             return session
         if mock_enabled():
             session = MockSession(slug, self.create_card_fn, self.dispatch_fn)
+            session.role_hash = chief_hash(self.settings, slug)
         else:
             session = PiSession(slug, self.settings)
             # 显式 model 参数（/agent/start 手动指定）> 项目绑定 > 全局 env（PiSession 默认）

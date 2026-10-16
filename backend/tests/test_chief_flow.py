@@ -17,7 +17,7 @@ from speclock2.utils import now_iso
 from tests.test_s2 import _setup_project
 
 CHIEF_TS = Path(__file__).parent.parent.parent / "chief" / "extension" / "index.ts"
-CHIEF_CONSTITUTION = Path(__file__).parent.parent.parent / "chief" / "constitution.md"
+CHIEF_ROLE = Path(__file__).parent.parent / "speclock2" / "roles" / "templates" / "chief.md"
 FAKE = Path(__file__).parent.parent / "scripts" / "fake_harness.py"
 
 
@@ -78,11 +78,12 @@ def test_chief_ts_404_guidance_and_one_step():
     # 4. 工具结果带解析出的工作目录（launch-plan cwd）
     assert "工作目录：${plan.cwd}" in src
     # 5. 宪法：异步语义 + 回执为准 + FILES 约定 + 404 应对
-    c = CHIEF_CONSTITUTION.read_text(encoding="utf-8")
-    assert "派发是异步的" in c
-    assert "以回执为准" in c
-    assert "FILES: <改动的文件清单>" in c
-    assert "回合内重试" in c
+    # 工具用法规则已从角色文档移到 TypeScript 扩展的 promptGuidelines（契约 v0.6）
+    assert "派发是异步的" in src
+    assert "以通知为准" in src
+    assert "回合内重试" in src
+    c = CHIEF_ROLE.read_text(encoding="utf-8")
+    assert "FILES:" not in c and "dispatch" not in c  # 角色文档不含工具用法
 
 
 def test_tech_order_returns_task_id_and_validates_master(client, tmp_path):

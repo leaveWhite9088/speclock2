@@ -258,6 +258,9 @@ export default function (pi: ExtensionAPI) {
 				"直达请求一律 create_task(intent, master, prompt) 一步完成，不要先建单再拿任务号调 dispatch。",
 				"master 必须用主代理名册里的名字；名字不对会报错并列出可用名单。",
 				"prompt 里禁止出现工作台仓库的绝对路径，只写「在你的工作目录下创建 …」。",
+				"用户说「叫某主代理做 X」时，一次 create_task（带 intent、master、prompt）完成建单与派发；禁止自己编任务号。",
+				"派发是异步的：工具返回「已派发」不等于完成。不要等待，不要向用户声称任务完成或失败；结果由系统通知回合送达，届时按通知原文转述。",
+				"任务说明只写要做什么；报告块格式由系统补全，不需要你在说明里要求文件清单。",
 			],
 			parameters: Type.Object({
 				intent: Type.String({ description: "为什么动（一句话，动词开头）" }),
@@ -265,7 +268,7 @@ export default function (pi: ExtensionAPI) {
 				acceptance: Type.Array(Type.String(), { default: [], description: "验收标准列表" }),
 				master: Type.String({ description: "执行的主代理名（名册里的名字）" }),
 				prompt: Type.Optional(Type.String({
-					description: "给主代理的任务说明（实现范围与完成标准，结尾要求主代理输出 FILES: 文件清单）；提供即一步完成建单+派发（异步，结果由系统通知回合送达）",
+					description: "给主代理的任务说明（实现范围与完成标准）；提供即一步完成建单+派发（异步，结果由系统通知回合送达）",
 				})),
 			}),
 			async execute(_toolCallId, p) {
@@ -306,7 +309,11 @@ export default function (pi: ExtensionAPI) {
 			promptGuidelines: [
 				"派发任务必须使用 dispatch 工具，不要在回复里描述派发细节代替执行。",
 				"task_id 必须来自 create_task 返回值或系统通知，禁止编造；404 就改用 create_task 建真任务。",
-				"prompt 参数写清任务说明：实现范围（版本参照）+ 完成标准 + 回执要求；禁止出现工作台仓库绝对路径。",
+				"prompt 参数写清任务说明：实现范围（版本参照）+ 完成标准；禁止出现工作台仓库绝对路径。",
+				"只对 queued 任务调用 dispatch；其余状态跳过派发，并向用户说明原因（如「该任务已在执行/已完成」），不要重试硬撞状态机。",
+				"dispatch 返回「跳过」是状态机的正常反应，不是通道故障：如实转述状态与原因，引导新建任务；禁止宣告「通道不可用」。",
+				"dispatch 报「任务不存在」说明任务号是编的：立即改用 create_task 建真任务并在同一回合继续；这是回合内重试，不是通道故障，禁止写故障报告。",
+				"派发是异步的：工具返回「已派发」不等于完成；完成/失败由系统通知送达，文件名、数量、结论以通知为准，禁止另编路径。",
 			],
 			parameters: Type.Object({
 				task_id: Type.String({ description: "任务 id，如 T-0001" }),

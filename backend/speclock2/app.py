@@ -19,7 +19,9 @@ from .routers import (
     model_registry,
     project,
     projects,
+    protocol,
     queue,
+    roles,
     stats,
     timeline,
 )
@@ -61,5 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(queue.router)
     app.include_router(masters.router)
     app.include_router(conventions.router)
+    app.include_router(roles.router)
+    app.include_router(protocol.router)
     app.include_router(stats.router)
     return app

@@ -17,6 +17,12 @@ from ..utils import now_iso
 
 router = APIRouter()
 
+# 登记允许的 harness（派单：收敛为三件套）；sl2-fake 是内部替身，自测链用。
+# masters 绑定经登记校验，这里守住入口即可。
+from ..harness_map import ALLOWED_HARNESSES  # noqa: E402
+
+REGISTERABLE_HARNESSES = (*ALLOWED_HARNESSES, "sl2-fake")
+
 # pi 供应商词表（来源：pi docs/providers.md；chief 切模型消费的就是 pi 条目）。
 # 只约束 harness=="pi" 的登记（修复单 21 按 harness 分治）：其他 harness 有
 # 自己的供应商方言（如 mcode 用 minimax），工作台只登记不翻译，原样接受。
@@ -57,6 +63,9 @@ def register_model(body: RegisterModelBody, request: Request) -> dict:
     provider = (body.provider or "").strip()
     if not harness or not model:
         raise ApiError(422, "validation_error", "Harness 与模型都要填（Harness 有什么模型就登记什么）")
+    if harness not in REGISTERABLE_HARNESSES:
+        raise ApiError(422, "validation_error",
+                       f"harness {harness!r} 不在支持列表（{'、'.join(ALLOWED_HARNESSES)}；claude-code/codex/kimicode 已收敛删除）")
     # provider 校验按 harness 分治（修复单 21）：词表只管 pi 条目；
     # 非 pi 条目是各自 harness 的方言（如 mcode 的 minimax），原样接受
     if provider and harness == "pi" and provider not in KNOWN_PROVIDERS:

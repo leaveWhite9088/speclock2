@@ -49,16 +49,16 @@ def _resolve_dispatch_cwd(master_dir: str, project_dir: str) -> str:
 
 
 def _session_matches_cwd(session_id: str, cwd: str | None, harness: str) -> bool:
-    """接续前核对会话工作区（慢工单接缝）：mcode 会校验被接续会话的 workspace
-    与 --cwd 一致，硬接会秒败（exit 4「Session workspace does not match --cwd」，
-    testproj/E2E 实证）——因此 mcode 绑定会话只有证实同目录才接续，查不到 cwd
-    也放弃（新会话）。其余 harness 不做工作区校验，维持原行为。"""
-    if not cwd or harness != "mcode":
+    """接续前核对会话工作区（慢工单接缝）：mcode/opencode 会校验被接续会话的
+    workspace 与运行目录的关系，硬接可能秒败（mcode exit 4「Session workspace
+    does not match --cwd」，E2E 实证）——因此这类 harness 只接证实同目录的会话，
+    查不到 cwd 也放弃（新会话）。其余 harness 不做工作区校验，维持原行为。"""
+    if not cwd or harness not in ("mcode", "opencode"):
         return True
     try:
         hits = cli_sessions.scan(cwd=cwd)
     except Exception:
-        return False  # 探测失败宁可不接续（mcode 硬接会秒败）
+        return False  # 探测失败宁可不接续（硬接有秒败风险）
     return any(s["id"] == session_id for s in hits)
 
 

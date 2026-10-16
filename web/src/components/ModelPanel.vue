@@ -16,7 +16,7 @@ const emit = defineEmits<{
   (e: 'changed'): void
 }>()
 
-const HARNESS_OPTIONS = ['pi', 'mcode', 'claude-code', 'codex', 'kimicode']
+const HARNESS_OPTIONS = ['pi', 'mcode', 'opencode']
 
 const formHarness = ref(HARNESS_OPTIONS[0])
 const formModel = ref('')

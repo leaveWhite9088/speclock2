@@ -80,19 +80,24 @@ def test_model_registry_crud(client):
     entry = _register(client, "pi", "glm-4.7")
     assert entry == {"id": "mdl-1", "harness": "pi", "model": "glm-4.7", "provider": ""}
     _register(client, "pi", "kimi-k2.5")
-    _register(client, "claude-code", "claude-sonnet-4.5")
+    _register(client, "mcode", "MiniMax-M3")
 
     # 重复登记（同 harness×model）→ 409；不同 harness 同名模型可以
     dup = client.post("/api/models", json={"harness": "pi", "model": "glm-4.7"})
     assert dup.status_code == 409 and dup.json()["code"] == "conflict"
-    _register(client, "codex", "glm-4.7")
+    _register(client, "opencode", "glm-4.7")
 
     # 空字段 → 422
     for bad in ({"harness": "", "model": "x"}, {"harness": "pi", "model": " "}):
         assert client.post("/api/models", json=bad).status_code == 422
 
+    # 已退役 harness（派单：收敛为 pi/mcode/opencode）→ 422
+    for retired in ("claude-code", "codex", "kimicode"):
+        r = client.post("/api/models", json={"harness": retired, "model": "x"})
+        assert r.status_code == 422 and "opencode" in r.json()["message"]
+
     items = client.get("/api/models").json()["items"]
-    assert [i["harness"] for i in items] == ["pi", "pi", "claude-code", "codex"]
+    assert [i["harness"] for i in items] == ["pi", "pi", "mcode", "opencode"]
 
     # 删除：存在的 200，再删 404；非法 id 404
     assert client.delete("/api/models/mdl-2").status_code == 200

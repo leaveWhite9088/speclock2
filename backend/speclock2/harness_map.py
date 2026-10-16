@@ -26,6 +26,9 @@ from pathlib import Path
 from .pi_runtime import resolve_pi_command
 
 DEFAULT_MASTER_HARNESS = "sl2-fake"
+# 工作台支持的 harness 全集（派单：收敛为三件套 + 内部替身）
+ALLOWED_HARNESSES = ("pi", "mcode", "opencode")
+RETIRED_HARNESSES = ("claude-code", "codex", "kimicode")  # 已收敛删除的旧条目
 
 
 def resolve_mcode_command() -> list[str] | None:
@@ -52,6 +55,29 @@ def resolve_mcode_command() -> list[str] | None:
     if which.lower().endswith((".cmd", ".bat")):
         return ["cmd", "/c", which]
     return None  # POSIX shell shim：工作台 spawn 不了，宁可如实缺席
+
+
+def resolve_opencode_command() -> str | None:
+    """opencode（npm 全局）启动命令：Windows 是 .cmd 垫片，dispatcher 按扩展名包 cmd /c。
+
+    只用 shutil.which（毫秒级）——load_or_create 的升级路径会调它，
+    不得走 npm 子进程（resolve_pi_command 那种秒级探测会阻塞事件循环）。
+    """
+    return shutil.which("opencode")
+
+
+def _opencode_entry(cmd: str) -> dict:
+    return {
+        # opencode run（1.19.1 实测）：默认格式即纯文本 stdout（无事件流）；
+        # -m provider/model 显式指定模型（全局配置可能为空，不能依赖默认模型）；
+        # --auto 免权限确认（无人值守写文件）。会话接续用 -s <id>，仅证同目录才接。
+        "command": cmd,
+        "args": ["run", "--auto", "-m", "{model}", "{prompt}"],
+        "prompt_mode": "inline",
+        "resume_args": ["-s", "{session_id}"],
+        "output": "text",
+        "note": "DeepSeek 等 provider 经登记组合注入 -m；不要依赖全局默认模型",
+    }
 
 
 def _chief_configured() -> bool:
@@ -84,17 +110,6 @@ def default_map() -> dict:
             # 接续会话：按文件头 id 定位（--session-dir 传会话文件所在目录）
             "resume_args": ["--session-id", "{session_id}", "--session-dir", "{session_dir}"],
         }
-    harnesses["claude-code"] = {
-        "command": "claude",
-        "args": ["-p", "{prompt}", "--output-format", "stream-json", "--verbose"],
-        "prompt_mode": "inline",
-        "resume_args": ["--resume", "{session_id}"],
-    }
-    harnesses["codex"] = {
-        "command": "codex",
-        "args": ["exec", "--json", "{prompt}"],
-        "prompt_mode": "inline",
-    }
     mcode_cmd = resolve_mcode_command()
     if mcode_cmd:
         harnesses["mcode"] = {
@@ -107,6 +122,9 @@ def default_map() -> dict:
             "resume_args": ["--session", "{session_id}"],
             "output": "text",
         }
+    oc_cmd = resolve_opencode_command()
+    if oc_cmd:
+        harnesses["opencode"] = _opencode_entry(oc_cmd)
     # 核心代理已配真模型 → 主代理默认真 CLI；否则替身（保证无 key 环境开箱可测）
     default_master = "pi" if (_chief_configured() and "pi" in harnesses) else DEFAULT_MASTER_HARNESS
     return {
@@ -117,9 +135,27 @@ def default_map() -> dict:
 
 
 def load_or_create(data_dir: Path) -> dict:
+    """加载实例映射；缺失即生成默认。升级路径（派单：harness 收敛）：
+    旧文件里残留已退役条目（claude-code/codex/kimicode）自动剔除；
+    支持集（opencode 等）缺失且本机可解析时自动补齐——存量 JSON 不用手改。"""
     path = data_dir / "harness-map.json"
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        changed = False
+        harnesses = cfg.get("harnesses") or {}
+        for retired in RETIRED_HARNESSES:
+            if retired in harnesses:
+                harnesses.pop(retired)
+                changed = True
+        if "opencode" not in harnesses:
+            oc = resolve_opencode_command()  # 毫秒级 which，不得走 npm 子进程（会阻塞事件循环）
+            if oc:
+                harnesses["opencode"] = _opencode_entry(oc)
+                changed = True
+        if changed:
+            cfg["harnesses"] = harnesses
+            path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        return cfg
     path.parent.mkdir(parents=True, exist_ok=True)
     cfg = default_map()
     path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

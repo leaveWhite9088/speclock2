@@ -437,10 +437,10 @@ const chiefHarnessName = computed(() => findChiefEntry(props.agent?.model ?? nul
               <span class="sidebar__meta">
                 <code class="sidebar__harness" :title="`Harness：${m.harness} · 模型：${m.model}`">{{ m.harness }} · {{ m.model }}</code>
                 <span
-                  v-if="m.harness === 'mcode'"
+                  v-if="['mcode', 'opencode'].includes(m.harness)"
                   class="sidebar__mcode"
-                  title="绑定 mcode（可派发 harness）"
-                >M</span>
+                  :title="`绑定 ${m.harness}（可派发 harness）`"
+                >{{ m.harness === 'mcode' ? 'M' : 'O' }}</span>
                 <template v-if="masterTelemetry[m.id]">
                   · ⏱ {{ formatDuration(masterTelemetry[m.id]!.ms) }} · {{ formatTokens(masterTelemetry[m.id]!.tokens) }} tokens(估)
                 </template>

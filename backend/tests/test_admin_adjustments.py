@@ -144,8 +144,8 @@ def test_model_registry_provider_and_migration(client):
         "harness": "pi", "model": "MiniMax-M3", "provider": "minimax-cn"})
     assert r.status_code == 201
     assert r.json()["provider"] == "minimax-cn"
-    # 无 provider 登记（旧形态）
-    r = client.post("/api/models", json={"harness": "codex", "model": "gpt-5.2"})
+    # 无 provider 登记（旧形态；harness 用支持列表内的 mcode）
+    r = client.post("/api/models", json={"harness": "mcode", "model": "gpt-5.2"})
     assert r.json()["provider"] == ""
     items = {i["model"]: i for i in client.get("/api/models").json()["items"]}
     assert items["MiniMax-M3"]["provider"] == "minimax-cn"

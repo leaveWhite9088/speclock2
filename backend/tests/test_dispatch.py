@@ -61,6 +61,42 @@ def test_harness_map_build_argv(data_dir):
     assert resolve_harness(default, None)["command"]
 
 
+def test_default_map_only_supported_harnesses():
+    """派单：harness 收敛为 pi/mcode/opencode（+ 内部替身）——默认映射不含旧条目。"""
+    from speclock2.harness_map import RETIRED_HARNESSES
+
+    keys = set(default_map()["harnesses"].keys())
+    assert not (keys & set(RETIRED_HARNESSES))
+    assert keys <= {"pi", "mcode", "opencode", "sl2-fake"}
+
+
+def test_harness_map_upgrade_prunes_retired_and_adds_opencode(data_dir):
+    """升级路径：旧实例 JSON 不用手改——load_or_create 剔除已退役条目，
+    opencode 缺失且本机可解析时自动补齐，并落盘持久化。"""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    legacy = {"watchdog_minutes_default": 60, "masters": {}, "harnesses": {
+        "sl2-fake": {"command": "x", "args": [], "prompt_mode": "arg"},
+        "pi": {"command": "x", "args": [], "prompt_mode": "arg"},
+        "claude-code": {"command": "claude", "args": [], "prompt_mode": "inline"},
+        "codex": {"command": "codex", "args": [], "prompt_mode": "inline"},
+        "mcode": {"command": "mcode", "args": [], "prompt_mode": "inline"},
+    }}
+    (data_dir / "harness-map.json").write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+
+    from speclock2.harness_map import RETIRED_HARNESSES, load_or_create
+
+    cfg = load_or_create(data_dir)
+    keys = set(cfg["harnesses"].keys())
+    assert not (keys & set(RETIRED_HARNESSES))
+    assert {"sl2-fake", "pi", "mcode"} <= keys
+    oc = cfg["harnesses"].get("opencode")  # 本机已装 opencode → 自动补齐
+    assert oc is not None and "--auto" in oc["args"] and "{model}" in oc["args"]
+    assert oc["output"] == "text"
+    # 剔除/补齐落盘持久化
+    again = json.loads((data_dir / "harness-map.json").read_text(encoding="utf-8"))
+    assert "claude-code" not in again["harnesses"] and "opencode" in again["harnesses"]
+
+
 def test_dispatch_full_flow_with_real_process(mock_client, data_dir, tmp_path):
     """技术单 → 派发执行器：真实 fake_harness 进程跑完 → 回执（files/telemetry）→ audit → done。"""
     _write_map(data_dir, {"backend": "t", "frontend": "t"})

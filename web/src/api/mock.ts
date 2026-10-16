@@ -27,6 +27,7 @@ import type {
   Package,
   Project,
   ProjectTree,
+  ProviderProbe,
   RoundInfo,
   Rule,
   Stats,
@@ -523,6 +524,11 @@ export function createMockApiClient(): ApiClient {
   let masterSeq = 0
   const modelRegistry: ModelEntry[] = clone(FALLBACK_MODEL_ENTRIES)
   let modelSeq = modelRegistry.length
+  /** 服务商登记（fx22 mock）：钥匙只存布尔，不存内容 */
+  const providers: Array<{ name: string; has_key: boolean }> = [
+    { name: 'minimax-cn', has_key: true },
+    { name: 'deepseek', has_key: false },
+  ]
   /** 版本快照：key = `${blockId}@${version}` → 当时整份草稿（查看版本用） */
   const versionSnaps: Record<string, BlockDraft> = {
     '1@1.2.0': clone(exportBlockDraft),
@@ -1147,7 +1153,7 @@ export function createMockApiClient(): ApiClient {
       if (modelRegistry.some((x) => x.harness === harness && x.model === model)) {
         throw new ApiError(409, { code: 'conflict', message: `${harness} 已登记过模型 ${model}` })
       }
-      const entry: ModelEntry = { id: `mdl-${++modelSeq}`, harness, model }
+      const entry: ModelEntry = { id: `mdl-${++modelSeq}`, harness, model, ...(body.provider ? { provider: body.provider } : {}) }
       modelRegistry.push(entry)
       return { ...entry }
     },
@@ -1166,6 +1172,37 @@ export function createMockApiClient(): ApiClient {
       return hit
         ? { harness, models: hit.models, source: hit.source }
         : { harness, models: [], source: 'none' }
+    },
+    listProviders: async () => ({ items: providers.map((p) => ({ ...p })) }),
+    putProvider: async (name, apiKey) => {
+      if (!/^[a-z0-9-]+$/.test(name)) {
+        throw new ApiError(422, { code: 'validation_error', message: '服务商名只允许小写字母、数字、连字符' })
+      }
+      if (!apiKey.trim()) {
+        throw new ApiError(422, { code: 'validation_error', message: 'API key 必填' })
+      }
+      const hit = providers.find((p) => p.name === name)
+      if (hit) hit.has_key = true
+      else providers.push({ name, has_key: true })
+      return { name, has_key: true }
+    },
+    deleteProvider: async (name) => {
+      const idx = providers.findIndex((p) => p.name === name)
+      if (idx < 0) throw new ApiError(404, { code: 'not_found', message: `服务商 ${name} 不存在（mock）` })
+      providers.splice(idx, 1)
+    },
+    probeProvider: async (name): Promise<ProviderProbe> => {
+      const hit = providers.find((p) => p.name === name)
+      if (!hit) return { name, ok: false, models: [], error: `服务商 ${name} 不存在（mock）` }
+      if (!hit.has_key) return { name, ok: false, models: [], error: '未配置 API key（mock）' }
+      const known: Record<string, Array<{ id: string; thinking?: boolean }>> = {
+        'minimax-cn': [{ id: 'MiniMax-M3', thinking: false }],
+        deepseek: [
+          { id: 'deepseek-chat', thinking: false },
+          { id: 'deepseek-reasoner', thinking: true },
+        ],
+      }
+      return { name, ok: true, models: known[name] ?? [{ id: `${name}-chat`, thinking: false }], error: null }
     },
     listCliSessions: async (cwd) => {
       const dir = cwd ? normalizeFsPath(cwd) : null

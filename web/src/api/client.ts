@@ -347,6 +347,26 @@ export interface ModelEntry {
 export interface RegisterModelBody {
   harness: string
   model: string
+  /** 服务商（fx22 探测登记走 pi+provider+model；普通登记可省） */
+  provider?: string | null
+}
+
+/** 模型服务商（fx22）：钥匙只存状态（has_key），内容永不出后端 */
+export interface ProviderInfo {
+  name: string
+  has_key: boolean
+}
+
+export interface ProviderProbeModel {
+  id: string
+  thinking?: boolean
+}
+
+export interface ProviderProbe {
+  name: string
+  ok: boolean
+  models: ProviderProbeModel[]
+  error: string | null
 }
 
 /** Harness 可用模型发现（契约与后端单共用）：models 为空或请求失败都退回手填 */
@@ -581,6 +601,11 @@ export interface ApiClient {
   /** Harness 可用模型发现（修复单 fx21）：source=discovered 实查/static 兜底/none 没有；
    *  404（端点未上线）、失败、超时一律由调用方按空清单处理退回手填 */
   listHarnessModels(harness: string): Promise<HarnessModels>
+  /** 模型服务商管理（fx22）：后端未上线（404）时由调用方降级隐藏该区 */
+  listProviders(): Promise<{ items: ProviderInfo[] }>
+  putProvider(name: string, apiKey: string): Promise<ProviderInfo>
+  deleteProvider(name: string): Promise<void>
+  probeProvider(name: string): Promise<ProviderProbe>
   /** CLI 会话列表；cwd 过滤到指定目录（主代理绑定只看当前项目目录下的） */
   listCliSessions(cwd?: string): Promise<{ items: CliSession[] }>
   /** 批量把 reported 任务标记为已验收（audit pass；后端未上线时 UI 行内报错） */
@@ -683,6 +708,16 @@ export function createApiClient(): ApiClient {
     // 发现可能要实查命令，给 8s；失败/超时由调用方退回手填
     listHarnessModels: (harness) =>
       request<HarnessModels>(`/api/harness-models?harness=${encodeURIComponent(harness)}`, undefined, 8_000),
+    listProviders: () => request<{ items: ProviderInfo[] }>('/api/providers'),
+    putProvider: (name, apiKey) =>
+      request<ProviderInfo>(`/api/providers/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ api_key: apiKey }),
+      }),
+    deleteProvider: (name) => request<void>(`/api/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+    // 探测要带钥匙实调服务商，给 30s
+    probeProvider: (name) =>
+      request<ProviderProbe>(`/api/providers/${encodeURIComponent(name)}/probe`, { method: 'POST' }, 30_000),
     listCliSessions: (cwd) =>
       request<{ items: CliSession[] }>(
         cwd ? `/api/cli-sessions?cwd=${encodeURIComponent(cwd)}` : '/api/cli-sessions',

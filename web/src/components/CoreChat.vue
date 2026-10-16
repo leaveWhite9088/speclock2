@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import type { ModelEntry } from '../api/client'
-import type { ChatBubble, FeedRound, ModelPick } from '../types'
+import type { ApiClient, ModelEntry } from '../api/client'
+import type { ChatBubble, FeedRound, ModelPick, ReportItem } from '../types'
 import { formatDuration, formatTokens, masterLabel } from '../types'
 import RoundDivider from './RoundDivider.vue'
 import ApprovalCard from './ApprovalCard.vue'
 import ModelMenu from './ModelMenu.vue'
+import TaskReportCard from './TaskReportCard.vue'
+import RoleDocEditor from './RoleDocEditor.vue'
+import { confirmLeave } from '../composables/useDirtyGuard'
 
 /**
  * 核心代理会话：平时只看这里——对话（chat.* 事件投影，按轮次内嵌）、流式打字机、
@@ -25,6 +28,14 @@ const props = defineProps<{
   emptyNote?: string
   cardBusy: Record<string, boolean>
   cardError: Record<string, string>
+  /** 任务报告（task.report）：与对话气泡按事件时间交错渲染 */
+  reports: ReportItem[]
+  /** 角色文档编辑所需 */
+  client: ApiClient | null
+  slug: string
+  resetBusy: boolean
+  resetUnsupported: boolean
+  resetDoneTick: number
 }>()
 
 const emit = defineEmits<{
@@ -37,6 +48,7 @@ const emit = defineEmits<{
   (e: 'start-retry', bubble: ChatBubble): void
   (e: 'approve', cardId: string): void
   (e: 'reject', cardId: string): void
+  (e: 'reset-agent'): void
 }>()
 
 const el = ref<HTMLElement | null>(null)
@@ -47,17 +59,53 @@ let lastMsgCount = 0
 /** 程序化滚动保护窗：平滑滚底途中产生的 scroll 事件不当作用户上翻 */
 let programmaticUntil = 0
 
-const hasChat = computed(() => Object.keys(props.chatByRound).length > 0)
+const hasChat = computed(() => Object.keys(props.chatByRound).length > 0 || props.reports.length > 0)
 
-/** 轮次分组之外的消息（轮次尚未入列等边界情况），跟在最后渲染 */
-const tailChat = computed(() => {
-  const rounds = new Set(props.feed.map((fr) => fr.info.n))
-  return Object.entries(props.chatByRound)
-    .filter(([n]) => !rounds.has(Number(n)))
-    .flatMap(([, list]) => list)
+/** 一轮内的时间线条目：对话气泡或任务报告卡片 */
+type TimelineEntry = { kind: 'chat'; ts: number; msg: ChatBubble } | { kind: 'report'; ts: number; report: ReportItem }
+
+/** 对话气泡与报告卡片按事件时间合并（稳定排序：同刻对话在前） */
+function mergeTimeline(msgs: ChatBubble[], reports: ReportItem[]): TimelineEntry[] {
+  const all: TimelineEntry[] = [
+    ...msgs.map((msg): TimelineEntry => ({ kind: 'chat', ts: msg.ts, msg })),
+    ...reports.map((report): TimelineEntry => ({ kind: 'report', ts: report.ts, report })),
+  ]
+  return all.sort((a, b) => a.ts - b.ts)
+}
+
+const timeline = computed<Record<number, TimelineEntry[]>>(() => {
+  const out: Record<number, TimelineEntry[]> = {}
+  for (const fr of props.feed) {
+    out[fr.info.n] = mergeTimeline(
+      props.chatByRound[fr.info.n] ?? [],
+      props.reports.filter((r) => r.round === fr.info.n),
+    )
+  }
+  return out
 })
 
-const msgCount = computed(() => Object.values(props.chatByRound).reduce((n, list) => n + list.length, 0))
+/** 轮次分组之外的消息与报告（轮次尚未入列等边界情况），跟在最后渲染 */
+const tailTimeline = computed(() => {
+  const rounds = new Set(props.feed.map((fr) => fr.info.n))
+  return mergeTimeline(
+    Object.entries(props.chatByRound).filter(([n]) => !rounds.has(Number(n))).flatMap(([, list]) => list),
+    props.reports.filter((r) => !rounds.has(r.round)),
+  )
+})
+
+const msgCount = computed(
+  () => Object.values(props.chatByRound).reduce((n, list) => n + list.length, 0) + props.reports.length,
+)
+
+/** 对话 / 角色文档 两个面板；离开有未保存修改的角色文档前要确认 */
+const panel = ref<'chat' | 'roles'>('chat')
+
+function switchPanel(next: 'chat' | 'roles'): void {
+  if (next === panel.value) return
+  if (panel.value === 'roles' && !confirmLeave()) return
+  panel.value = next
+  if (next === 'chat') scrollToEnd()
+}
 
 function onScroll(): void {
   const node = el.value
@@ -177,7 +225,24 @@ function verdictLines(fr: FeedRound): string[] {
 
 <template>
   <div class="core">
-    <div ref="el" class="core__feed" @scroll.passive="onScroll">
+    <nav class="core__tabs" aria-label="核心代理面板">
+      <button type="button" class="core__tab" :class="{ 'core__tab--on': panel === 'chat' }" @click="switchPanel('chat')">对话</button>
+      <button type="button" class="core__tab" :class="{ 'core__tab--on': panel === 'roles' }" @click="switchPanel('roles')">角色文档</button>
+    </nav>
+
+    <div v-if="panel === 'roles'" class="core__roles">
+      <RoleDocEditor
+        :client="client"
+        :slug="slug"
+        :target="{ kind: 'chief' }"
+        :reset-busy="resetBusy"
+        :reset-unsupported="resetUnsupported"
+        :reset-done-tick="resetDoneTick"
+        @reset-agent="emit('reset-agent')"
+      />
+    </div>
+
+    <div v-show="panel === 'chat'" ref="el" class="core__feed" @scroll.passive="onScroll">
       <div class="core__inner">
         <p v-if="feed.length === 0 && !hasChat" class="core__empty">{{ emptyNote ?? '和核心代理的对话在这里进行。' }}</p>
 
@@ -212,7 +277,9 @@ function verdictLines(fr: FeedRound): string[] {
           </div>
 
           <!-- ……对话沉底：新消息始终出现在底部（时间正序） -->
-          <template v-for="(msg, i) in chatByRound[fr.info.n] ?? []" :key="`c-${fr.info.n}-${i}`">
+          <template v-for="(entry, i) in timeline[fr.info.n] ?? []" :key="entry.kind === 'report' ? `r-${entry.report.payload.task_id}` : `c-${fr.info.n}-${i}`">
+            <TaskReportCard v-if="entry.kind === 'report'" :report="entry.report.payload" />
+            <template v-else><template v-for="msg in [entry.msg]" :key="0">
             <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
             <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
               <span class="core__avatar" aria-hidden="true">核</span>
@@ -231,11 +298,15 @@ function verdictLines(fr: FeedRound): string[] {
               <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
               <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
             </div>
+            </template>
+            </template>
           </template>
         </template>
 
         <!-- 轮次未入列时的兜底渲染（如轮次列表尚未刷新） -->
-        <template v-for="(msg, i) in tailChat" :key="`t-${i}`">
+        <template v-for="(entry, i) in tailTimeline" :key="entry.kind === 'report' ? `r-${entry.report.payload.task_id}` : `t-${i}`">
+          <TaskReportCard v-if="entry.kind === 'report'" :report="entry.report.payload" />
+          <template v-else><template v-for="msg in [entry.msg]" :key="0">
           <div v-if="msg.who === 'system'" class="core__sys">{{ msg.text }}</div>
           <div v-else-if="msg.who === 'error'" class="core__msg core__msg--core">
             <span class="core__avatar" aria-hidden="true">核</span>
@@ -254,6 +325,8 @@ function verdictLines(fr: FeedRound): string[] {
             <span v-if="msg.who === 'core'" class="core__avatar" aria-hidden="true">核</span>
             <div class="core__bubble" :class="`core__bubble--${msg.who}`">{{ msg.text }}</div>
           </div>
+          </template>
+          </template>
         </template>
 
         <!-- 流式生成中（message_delta 打字机） -->
@@ -269,7 +342,7 @@ function verdictLines(fr: FeedRound): string[] {
       <button v-if="!pinned" type="button" class="core__jump" @click="jumpToLatest">↓ 回到最新</button>
     </div>
 
-    <footer class="core__composer">
+    <footer v-show="panel === 'chat'" class="core__composer">
       <!-- /model 命令的选择弹层（命令本身不进对话正文） -->
       <div v-if="modelMenu" class="core__mmask" @click="emit('close-model-menu')"></div>
       <div v-if="modelMenu" class="core__mpanel">
@@ -328,6 +401,43 @@ function verdictLines(fr: FeedRound): string[] {
   color: var(--c-ink-3);
   padding: var(--sp-5);
   text-align: center;
+}
+
+/* 面板切换：对话 / 角色文档 */
+.core__tabs {
+  flex: none;
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-4) 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.core__tab {
+  font-size: var(--fs-13);
+  color: var(--c-ink-3);
+  padding: 4px 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.core__tab:hover {
+  color: var(--c-ink);
+}
+
+.core__tab--on {
+  color: var(--c-ink);
+  border-bottom-color: var(--c-accent);
+  font-weight: 600;
+}
+
+.core__roles {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-4);
+  max-width: 812px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 /* 上翻后悬浮的「回到最新」 */

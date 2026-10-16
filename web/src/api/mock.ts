@@ -36,6 +36,7 @@ import type {
   TechOrder,
 } from './client'
 import type { ActivityItem } from '../types'
+import { buildReportPayload, createMockRoles, MOCK_PROTOCOL, seedReportEvents } from './mockComm'
 
 /* ---------- 基础工具 ---------- */
 
@@ -359,7 +360,50 @@ function dailyReportLedger(): MockLedger {
             files_changed: ['backend/export.py'],
             self_check: 'pytest 全绿（12 passed）',
             summary: '新增批量导出端点与日期区间校验',
+            report: {
+              status: 'done',
+              summary: '新增批量导出端点与日期区间校验',
+              files_changed: ['backend/export.py'],
+              issues: [],
+              parse_quality: 'structured',
+            },
           },
+        },
+      ],
+    },
+    // 一个包内两个并行任务（后端 + 前端），用于核对任务包显示
+    {
+      package_id: 'P-0012',
+      origin: 'approval',
+      round: 12,
+      version_refs: { '1': '1.2.0' },
+      tasks: [
+        {
+          task_id: 'T-0045',
+          master: 'backend',
+          status: 'reported',
+          watchdog_deadline: null,
+          duration_ms: 12 * 60_000,
+          tokens: 96_000,
+          receipt: {
+            files_changed: ['backend/api/export.py', 'backend/services/export.py'],
+            self_check: 'pytest 全绿',
+            summary: '导出接口新增 format 参数',
+            report: {
+              status: 'partial',
+              summary: '导出接口新增 format 参数，xlsx 分支未实现。',
+              files_changed: ['backend/api/export.py', 'backend/services/export.py'],
+              issues: ['xlsx 分支未实现'],
+              parse_quality: 'legacy',
+            },
+          },
+        },
+        {
+          task_id: 'T-0046',
+          master: 'frontend',
+          status: 'running',
+          watchdog_deadline: new Date(Date.now() + 60 * 60_000).toISOString(),
+          receipt: null,
         },
       ],
     },
@@ -377,6 +421,7 @@ function dailyReportLedger(): MockLedger {
     { id: 'E-0010', ts: '2026-10-14T09:08:00+08:00', round: 12, actor: 'chief', type: 'chat.chief', ref: {}, payload: { message: '可以。我核对了现有的规则和契约，整理成了下面这张卡片——有一处破坏性变更，建议你重点看那一条。' } },
     { id: 'E-0008', ts: '2026-10-14T09:12:00+08:00', round: 12, actor: 'chief', type: 'draft.proposed', ref: { card: 'C-0031' }, payload: {} },
   ]
+  events.push(...seedReportEvents())
   const ledger = buildLedger(blocks, rounds, [approvedCard, clone(pendingCardFixture)], packages, events)
   ledger.versionsByRound[11] = [
     {
@@ -560,6 +605,7 @@ export function createMockApiClient(): ApiClient {
   // ---- 对话与核心代理状态（R-M2 同构降级：mock 客户端扮演后端） ----
   let agentRunning = true
   let agentModel = 'mock/chief'
+  const roles = createMockRoles(() => agentRunning)
 
   /** mock 核心代理回复（对应后端 SPECLOCK2_CHIEF_MOCK=1 的模拟行为） */
   function mockChiefReply(message: string): string {
@@ -592,6 +638,21 @@ export function createMockApiClient(): ApiClient {
     }
     ledger.events.push(e)
     return e
+  }
+
+  /** 任务结束：把回执折成 report，并写 task.report 事件（契约 v0.6） */
+  function emitReport(ledger: MockLedger, round: number, task: Task, quality: 'structured' | 'manual'): void {
+    if (!task.receipt) return
+    task.receipt.report = {
+      status: 'done',
+      summary: task.receipt.summary,
+      files_changed: task.receipt.files_changed,
+      issues: [],
+      parse_quality: quality,
+    }
+    const master = task.master ?? 'frontend'
+    pushEvent(ledger, round, `master:${master}` as EventActor, 'task.report', { task: task.task_id },
+      { ...buildReportPayload(task.task_id, master, task.receipt.report, task.duration_ms ?? null) })
   }
 
   function pushActivity(master: string, kind: ActivityItem['kind'], text: string, meta?: string): void {
@@ -638,6 +699,7 @@ export function createMockApiClient(): ApiClient {
       }
       recordTelemetry(task)
       pushEvent(ledger, pkg.round, `master:${master}` as EventActor, 'task.receipt', { task: task.task_id }, {})
+      emitReport(ledger, pkg.round, task, 'structured')
       pushActivity(master, 'message', `已完成：${summary}（改动 ${files.length} 个文件）`)
     }, 4400)
     setTimeout(() => {
@@ -995,6 +1057,7 @@ export function createMockApiClient(): ApiClient {
       task.receipt = clone(body)
       recordTelemetry(task)
       pushEvent(ledger, taskRound(ledger, taskId), 'master:backend', 'task.receipt', { task: taskId }, {})
+      emitReport(ledger, taskRound(ledger, taskId), task, 'manual')
       return clone(task)
     },
     auditTask: async (slug, taskId, body) => {
@@ -1232,13 +1295,17 @@ export function createMockApiClient(): ApiClient {
     }),
     startAgent: async (slug) => {
       agentRunning = true
+      roles.onSessionRestart(slug)
       return { running: true, model: agentModel, session_id: `speclock2-${slug}` }
     },
     stopAgent: async (slug) => {
       agentRunning = false
       return { running: false, model: null, session_id: `speclock2-${slug}` }
     },
-    resetAgent: async (_slug) => ({ ok: true }),
+    resetAgent: async (slug) => {
+      roles.onSessionRestart(slug)
+      return { ok: true }
+    },
     setAgentModel: async (_slug, body) => {
       if (!agentRunning) {
         throw new ApiError(409, { code: 'conflict', message: '核心代理会话未运行' })
@@ -1305,6 +1372,12 @@ export function createMockApiClient(): ApiClient {
       master.session_title = sessionTitle(session)
       return { ...master }
     },
+    listRoles: (slug) => roles.listRoles(slug, (mastersBySlug[slug] ?? []).map((m) => m.name)),
+    getRole: (slug, target) => roles.getRole(slug, target),
+    putRole: (slug, target, content) => roles.putRole(slug, target, content),
+    resetRole: (slug, target) => roles.resetRole(slug, target),
+    previewRole: (slug, target) => roles.previewRole(slug, target),
+    getProtocol: async () => ({ ...MOCK_PROTOCOL }),
     deleteMaster: async (slug, id) => {
       const masters = mastersBySlug[slug] ?? []
       const idx = masters.findIndex((m) => m.id === id)

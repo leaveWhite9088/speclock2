@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Package } from '../api/client'
+import { masterLabel } from '../types'
 import TaskRow from './TaskRow.vue'
 
 const props = defineProps<{
@@ -42,6 +43,9 @@ const sorted = computed(() => {
         <span class="pkglist__id">{{ pkg.package_id }}</span>
         <span class="badge" :class="pkg.origin === 'tech' ? 'badge--reported' : 'badge--ongoing'">
           {{ pkg.origin === 'tech' ? '技术单' : '业务' }}
+        </span>
+        <span v-if="pkg.tasks.length > 1" class="pkglist__par">
+          并行 {{ pkg.tasks.length }} 个任务：{{ pkg.tasks.map((t) => masterLabel(t.master)).join('、') }}
         </span>
         <span class="pkglist__round">轮次 #{{ pkg.round }}</span>
       </header>
@@ -95,6 +99,11 @@ const sorted = computed(() => {
 .pkglist__id {
   font-family: var(--font-mono);
   font-weight: 700;
+}
+
+.pkglist__par {
+  color: var(--c-ink-2);
+  font-size: var(--fs-12);
 }
 
 .pkglist__round {

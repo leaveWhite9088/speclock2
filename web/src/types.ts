@@ -1,7 +1,7 @@
 /**
  * 前端展示层共享类型与常量（非契约）。
  */
-import type { Card, Event, FeedVersion, Package, RoundInfo, TaskStatus } from './api/client'
+import type { Card, Event, FeedVersion, Package, ParseQuality, ReportStatus, RoundInfo, TaskReportEvent, TaskStatus } from './api/client'
 
 /** 顶栏右侧抽屉入口（文档是主区视图，不占抽屉） */
 export type DrawerKey = 'queue' | 'convention' | 'models'
@@ -13,6 +13,8 @@ export type SessionTarget = { kind: 'core' } | { kind: 'master'; masterId: strin
  *  不入事件日志（/model 是命令不是消息，切模型的确认也只在本会话展示） */
 export interface ChatBubble {
   round: number
+  /** 毫秒时间戳：与任务报告卡片按事件时间交错排序 */
+  ts: number
   who: 'human' | 'core' | 'system' | 'error'
   text: string
   /** 错误气泡的快捷动作：启动核心代理后重试模型切换 */
@@ -101,4 +103,35 @@ export function formatDuration(ms: number): string {
 export function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
   return `${Math.round(tokens / 1000)}k`
+}
+
+/** 任务报告（task.report）在对话流里的一项：round/ts 决定它在时间线上的位置 */
+export interface ReportItem {
+  round: number
+  ts: number
+  payload: TaskReportEvent
+}
+
+/** 报告状态标签与徽标样式（颜色沿用 base.css 的语义色） */
+export const REPORT_STATUS_LABELS: Record<ReportStatus, string> = {
+  done: '完成',
+  partial: '部分完成',
+  blocked: '受阻',
+  failed: '失败',
+}
+
+export const REPORT_STATUS_BADGE: Record<ReportStatus, string> = {
+  done: 'badge--done',
+  partial: 'badge--reported',
+  blocked: 'badge--rejected',
+  failed: 'badge--timeout',
+}
+
+/** parse_quality 各取值的含义（悬停说明用） */
+export const PARSE_QUALITY_HINTS: Record<ParseQuality, string> = {
+  structured: '主代理按规定格式输出了报告，可信度最高。',
+  legacy: '只找到旧的 FILES 行。文件清单可用，状态是推断的。',
+  invalid: '报告块的 JSON 非法，内容不可信。',
+  none: '没有找到任何报告，摘要是输出尾部或失败原因。',
+  manual: '人工回执。',
 }

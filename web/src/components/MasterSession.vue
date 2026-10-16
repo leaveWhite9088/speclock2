@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import type { MasterInfo, Package } from '../api/client'
+import type { ApiClient, MasterInfo, Package } from '../api/client'
 import type { ActivityItem } from '../types'
-import { TASK_STATUS_LABELS, formatDuration, formatTokens } from '../types'
+import { PARSE_QUALITY_HINTS, REPORT_STATUS_BADGE, REPORT_STATUS_LABELS, TASK_STATUS_LABELS, formatDuration, formatTokens } from '../types'
+import RoleDocEditor from './RoleDocEditor.vue'
 
 /**
  * 主代理工作流：盯进程时才看——工具调用、文件编辑、思考耗时等技术过程；
@@ -16,6 +17,9 @@ const props = defineProps<{
   liveOutputs: Record<string, string[]>
   /** 核心代理正在流式回复（跨视图可见的占用状态） */
   chiefStreaming: boolean
+  /** 角色文档编辑所需 */
+  client: ApiClient | null
+  slug: string
 }>()
 
 const emit = defineEmits<{
@@ -49,6 +53,9 @@ const liveTasks = computed(() =>
 const lastReceiptTask = computed(() =>
   myTasks.value.find(({ task }) => task.receipt && ['done', 'reported', 'auditing', 'rejected'].includes(task.status))?.task ?? null,
 )
+
+/** 最近回执的结构化报告（契约 v0.6）；老回执为 null，走原有文字显示 */
+const lastReport = computed(() => lastReceiptTask.value?.receipt?.report ?? null)
 
 const lastReceiptText = computed(() => {
   const t = lastReceiptTask.value
@@ -168,7 +175,28 @@ watch(
               <code>{{ lastReceiptTask.task_id }}</code>
               <span class="mterm__pkg">最近回执</span>
             </p>
-            <pre class="mterm__body">{{ lastReceiptText }}</pre>
+            <div v-if="lastReport" class="mrep">
+              <p class="mrep__line">
+                <span class="badge" :class="REPORT_STATUS_BADGE[lastReport.status]">{{ REPORT_STATUS_LABELS[lastReport.status] }}</span>
+                <span
+                  v-if="lastReport.parse_quality !== 'structured' && lastReport.parse_quality !== 'manual'"
+                  class="mrep__warn"
+                  :title="PARSE_QUALITY_HINTS[lastReport.parse_quality]"
+                >⚠ 主代理没有按规定格式报告</span>
+              </p>
+              <p class="mrep__summary">{{ lastReport.summary }}</p>
+              <p class="mrep__label">改动文件 {{ lastReport.files_changed.length }} 个</p>
+              <ul v-if="lastReport.files_changed.length > 0" class="mrep__list">
+                <li v-for="f in lastReport.files_changed" :key="f"><code>{{ f }}</code></li>
+              </ul>
+              <template v-if="lastReport.issues.length > 0">
+                <p class="mrep__label">问题</p>
+                <ul class="mrep__list mrep__list--issue">
+                  <li v-for="(it, i) in lastReport.issues" :key="i">{{ it }}</li>
+                </ul>
+              </template>
+            </div>
+            <pre v-else class="mterm__body">{{ lastReceiptText }}</pre>
           </div>
         </section>
 
@@ -194,6 +222,8 @@ watch(
             </li>
           </ul>
         </section>
+
+        <RoleDocEditor :client="client" :slug="slug" :target="{ kind: 'master', name: master.name }" />
       </div>
     </div>
   </div>
@@ -373,6 +403,56 @@ watch(
   color: var(--c-ink-2);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 最近回执：结构化报告 */
+.mrep {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  font-size: var(--fs-12);
+}
+
+.mrep__line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mrep__warn {
+  color: var(--c-ink-2);
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-s);
+  padding: 0 6px;
+  cursor: help;
+}
+
+.mrep__summary {
+  color: var(--c-ink);
+  line-height: 1.6;
+}
+
+.mrep__label {
+  color: var(--c-ink-3);
+  font-weight: 600;
+}
+
+.mrep__list {
+  display: grid;
+  gap: 2px;
+}
+
+.mrep__list code {
+  font-family: var(--font-mono);
+  color: var(--c-ink-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mrep__list--issue {
+  padding-left: var(--sp-4);
+  list-style: disc;
+  color: var(--c-danger);
 }
 
 .msession__tasks {

@@ -31,6 +31,8 @@ import RightDrawer from './components/RightDrawer.vue'
 import QueuePanel from './components/QueuePanel.vue'
 import ConventionPanel from './components/ConventionPanel.vue'
 import ModelPanel from './components/ModelPanel.vue'
+import { useTaskReports } from './composables/useTaskReports'
+import { confirmLeave } from './composables/useDirtyGuard'
 
 type Mode = 'probing' | 'live' | 'mock'
 
@@ -46,6 +48,8 @@ const feed = ref<FeedRound[]>([])
 const feedError = ref('')
 const packages = ref<Package[]>([])
 const masters = ref<MasterInfo[]>([])
+/** 任务报告卡片（task.report：历史 + SSE，按 task_id 去重） */
+const { reports, pushSse: pushReportSse, load: loadReports, reset: resetReports } = useTaskReports()
 
 // Harness×模型登记 + CLI 会话列表（「模型」抽屉与添加主代理共用）
 const modelEntries = ref<ModelEntry[]>([])
@@ -89,7 +93,7 @@ const chatByRound = computed<Record<number, ChatBubble[]>>(() => {
 })
 
 function pushChat(who: ChatBubble['who'], text: string, round = openRoundN.value, action?: ChatBubble['action']): void {
-  chatMessages.value = [...chatMessages.value, { round, who, text, action }]
+  chatMessages.value = [...chatMessages.value, { round, ts: Date.now(), who, text, action }]
 }
 
 /** 页面加载/切换项目：从事件日志恢复对话历史（chat.human / chat.chief，按 id 序） */
@@ -108,6 +112,7 @@ async function loadChatHistory(): Promise<void> {
         const message = (e.payload as { message?: unknown }).message
         return {
           round: e.round,
+          ts: Date.parse(e.ts),
           who: e.actor === 'human' ? 'human' : 'core',
           text: typeof message === 'string' ? message : '',
         }
@@ -158,6 +163,10 @@ function openStream(retry = 0): void {
     settleStream(typeof data.message === 'string' ? data.message : '')
     // 回合结束时可能有同回合起草的卡片（card_proposed 漏收时在这里补）
     void refreshAll()
+  })
+  es.addEventListener('task_report', (ev) => {
+    pushReportSse((ev as MessageEvent<string>).data, openRoundN.value)
+    void refreshAll() // 任务状态与回执随之变化
   })
   es.addEventListener('card_proposed', () => {
     void refreshAll()
@@ -594,6 +603,8 @@ async function bootstrap(): Promise<void> {
   } catch {
     mode.value = 'mock'
     client.value = createMockApiClient()
+    // mock 无 SSE：控制台调 __sl2PushTaskReport({...}) 走与真实推送相同的入口
+    ;(window as unknown as Record<string, unknown>).__sl2PushTaskReport = (d: unknown) => pushReportSse(JSON.stringify(d), openRoundN.value)
     projects.value = (await client.value.listProjects()).items
   }
   await loadRegistry()
@@ -602,8 +613,9 @@ async function bootstrap(): Promise<void> {
 
 /** 切换项目 = 换工作区（DESIGN.md §14.3）：会话回核心代理，全部状态重置刷新 */
 async function selectProject(slug: string): Promise<void> {
-  if (!client.value) return
+  if (!client.value || !confirmLeave()) return
   currentSlug.value = slug
+  resetReports()
   session.value = { kind: 'core' }
   drawer.value = null
   docsView.value = false
@@ -662,6 +674,7 @@ async function refreshAll(): Promise<void> {
     feedError.value = err instanceof Error ? err.message : String(err)
   }
   void refreshProjectStats()
+  void loadReports(client.value, slug, () => currentSlug.value === slug)
   try {
     masters.value = (await client.value.listMasters(slug)).items
   } catch {
@@ -824,8 +837,14 @@ function onToggleDrawer(key: DrawerKey): void {
 }
 
 function onSelectSession(target: SessionTarget): void {
+  if (!confirmLeave()) return
   session.value = target
   docsView.value = false
+}
+
+/** 切到/离开文档视图前，确认未保存的角色文档修改 */
+function onToggleDocs(): void {
+  if (confirmLeave()) docsView.value = !docsView.value
 }
 
 /** 顶栏在主代理视图点「编辑绑定」：让侧栏打开该主代理的编辑弹窗 */
@@ -904,7 +923,7 @@ onMounted(() => {
         :reset-unsupported="resetUnsupported"
         :reset-done-tick="resetDoneTick"
         @toggle-drawer="onToggleDrawer"
-        @toggle-docs="docsView = !docsView"
+        @toggle-docs="onToggleDocs"
         @pick-model="onModelPick"
         @manage-models="drawer = 'models'"
         @edit-binding="onEditBinding"
@@ -930,6 +949,8 @@ onMounted(() => {
             :key="`${currentSlug}-${activeMaster.id}`"
             :master="activeMaster"
             :activity="masterActivity"
+            :client="client"
+            :slug="currentSlug"
             :packages="packages"
             :live-outputs="masterLive"
             :chief-streaming="streaming"
@@ -948,6 +969,13 @@ onMounted(() => {
             :empty-note="feedError ? `账本数据不可用：${feedError}` : undefined"
             :card-busy="cardBusy"
             :card-error="cardError"
+            :reports="reports"
+            :client="client"
+            :slug="currentSlug"
+            :reset-busy="resetBusy"
+            :reset-unsupported="resetUnsupported"
+            :reset-done-tick="resetDoneTick"
+            @reset-agent="onResetAgent"
             @send="sendToCore"
             @stop="stopCore"
             @retry="retryLast"

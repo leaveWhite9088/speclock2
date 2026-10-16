@@ -244,6 +244,67 @@ export interface TaskReceipt {
   files_changed: string[]
   self_check: string
   summary: string
+  /** 契约 v0.6：结构化报告；老回执为 null / 缺省 */
+  report?: Report | null
+}
+
+/* ---------- 任务报告（契约 v0.6 §3.1/§3.2） ---------- */
+
+export type ReportStatus = 'done' | 'partial' | 'blocked' | 'failed'
+
+/** structured 按规定格式；legacy 只找到旧 FILES 行；invalid 报告块 JSON 非法；none 无报告；manual 人工回执 */
+export type ParseQuality = 'structured' | 'legacy' | 'invalid' | 'none' | 'manual'
+
+export interface Report {
+  status: ReportStatus
+  summary: string
+  files_changed: string[]
+  issues: string[]
+  parse_quality: ParseQuality
+}
+
+/** task.report 事件的 payload（历史：events?type=task.report；实时：SSE task_report） */
+export interface TaskReportEvent {
+  task_id: string
+  master: string
+  status: ReportStatus
+  summary: string
+  files_changed: string[]
+  issues: string[]
+  parse_quality: ParseQuality
+  duration_ms: number | null
+  token_source: 'exact' | 'estimated' | null
+}
+
+/* ---------- 角色文档（契约 v0.6 §3.3） ---------- */
+
+/** 角色文档的寻址：核心代理，或按名称的主代理 */
+export type RoleTarget = { kind: 'chief' } | { kind: 'master'; name: string }
+
+export interface RoleDoc {
+  name: string
+  content: string
+  is_default: boolean
+  /** 只对核心代理有意义：会话在运行，且角色文档在会话启动后被改过 */
+  needs_restart: boolean
+}
+
+export interface RolesOverview {
+  chief: { content: string; is_default: boolean; needs_restart: boolean }
+  masters: Array<{ name: string; content: string; is_default: boolean }>
+}
+
+/** composed = 实际注入给代理的完整文本 */
+export interface RolePreview {
+  composed: string
+  editable_chars: number
+  protocol_chars: number
+}
+
+/** GET /api/protocol：系统规定的报告格式（只读文本） */
+export interface ProtocolText {
+  report_format: string
+  human_report_format: string
 }
 
 export interface Task {
@@ -547,6 +608,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs?: number):
     }
     throw new ApiError(res.status, envelope)
   }
+  if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
 
@@ -626,6 +688,19 @@ export interface ApiClient {
   /** 主代理编辑/删除（提议端点：后端未上线时 UI 行内报错；删除时在跑任务 409） */
   updateMaster(slug: string, id: string, body: CreateMasterBody): Promise<MasterInfo>
   deleteMaster(slug: string, id: string): Promise<void>
+  /** 角色文档（契约 v0.6）：PUT 空白内容 422；DELETE 恢复默认模板 */
+  listRoles(slug: string): Promise<RolesOverview>
+  getRole(slug: string, target: RoleTarget): Promise<RoleDoc>
+  putRole(slug: string, target: RoleTarget, content: string): Promise<RoleDoc>
+  resetRole(slug: string, target: RoleTarget): Promise<void>
+  previewRole(slug: string, target: RoleTarget): Promise<RolePreview>
+  getProtocol(): Promise<ProtocolText>
+}
+
+/** 角色文档端点路径：chief 与 masters/{name} */
+function rolePath(slug: string, target: RoleTarget): string {
+  const base = `/api/p/${slug}/roles`
+  return target.kind === 'chief' ? `${base}/chief` : `${base}/masters/${encodeURIComponent(target.name)}`
 }
 
 /** live 客户端：同源 fetch（dev 由 Vite 代理 /api → http://127.0.0.1:8000） */
@@ -740,5 +815,14 @@ export function createApiClient(): ApiClient {
     updateMaster: (slug, id, body) =>
       request<MasterInfo>(`${p(slug)}/masters/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     deleteMaster: (slug, id) => request<void>(`${p(slug)}/masters/${id}`, { method: 'DELETE' }),
+    listRoles: (slug) => request<RolesOverview>(`${p(slug)}/roles`),
+    getRole: (slug, target) => request<RoleDoc>(rolePath(slug, target)),
+    putRole: (slug, target, content) =>
+      request<RoleDoc>(rolePath(slug, target), { method: 'PUT', body: JSON.stringify({ content }) }),
+    resetRole: async (slug, target) => {
+      await request<unknown>(rolePath(slug, target), { method: 'DELETE' })
+    },
+    previewRole: (slug, target) => request<RolePreview>(`${rolePath(slug, target)}/preview`),
+    getProtocol: () => request<ProtocolText>('/api/protocol'),
   }
 }

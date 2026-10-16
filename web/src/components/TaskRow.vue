@@ -153,16 +153,19 @@ function submitAudit(result: 'pass' | 'fail'): void {
 .taskrow__main {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
   font-size: var(--fs-12);
 }
 
 .taskrow__id {
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .taskrow__master {
   color: var(--c-ink-2);
+  white-space: nowrap;
 }
 
 .taskrow__tele {
@@ -175,7 +178,9 @@ function submitAudit(result: 'pass' | 'fail'): void {
 .taskrow__actions {
   margin-left: auto;
   display: flex;
+  flex: none;
   gap: var(--sp-1);
+  white-space: nowrap;
 }
 
 .taskrow__form {

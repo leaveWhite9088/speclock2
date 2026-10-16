@@ -201,6 +201,8 @@ async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> 
     """切换核心代理当前会话模型（契约 v0.5）：pi RPC set_model，会话内持久。
 
     会话未运行 → 409（先 /agent/start）；模型名非法由 pi 报错透传 502。
+    切换成功即回写项目 chief_provider/chief_model（用请求原值，不从复合串反拆），
+    并落 chief.model_changed 事件——/agent 两处一致，重建会话不回退旧模型。
     """
     _project_or_404(request, slug)
     model = (body.model or "").strip()
@@ -214,6 +216,7 @@ async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> 
     session = request.app.state.pi.get(slug)
     if session is None or not session.running:
         raise ApiError(409, "conflict", "核心代理会话未运行，无法切换模型（先 POST /agent/start）")
+    previous = pi_runtime.effective_chief(request.app.state.db, slug)
     try:
         result = await session.set_model(target)
     except NotImplementedError:
@@ -221,6 +224,36 @@ async def agent_set_model(slug: str, body: AgentModelBody, request: Request) -> 
     except Exception as exc:
         raise ApiError(502, "agent_error",
                        f"切换模型失败：{exc}（请检查模型登记的 provider 是否为 pi 供应商名）")
+    # 回写项目配置（本单）：先切后写；写失败则回滚会话，保证两处一致
+    try:
+        with request.app.state.db.registry_session() as s:
+            project = s.get(models.Project, slug)
+            if project is not None:
+                project.chief_provider = provider or None
+                project.chief_model = model or None
+                s.commit()
+    except Exception as exc:
+        rolled_back = False
+        if previous.get("model"):
+            old_target = (f"{previous['provider']}/{previous['model']}"
+                          if previous.get("provider") else previous["model"])
+            try:
+                await session.set_model(old_target)
+                rolled_back = True
+            except Exception:
+                pass
+        raise ApiError(502, "agent_error",
+                       f"模型已切换但项目配置回写失败：{exc}"
+                       + ("（已回滚会话模型）" if rolled_back else "（会话保持新模型，请检查数据库后重切）"))
+    with request.app.state.db.ledger_session(slug) as s:
+        round_ = flow.get_open_round(s)
+        flow.add_event(
+            s, round_.n if round_ else 0, "chief", "chief.model_changed",
+            {"session": session.session_id},
+            {"provider": provider or None, "model": model or None,
+             "previous": f"{previous.get('provider') or ''}/{previous.get('model') or ''}".strip("/")},
+        )
+        s.commit()
     return {"ok": True, "model": result.get("model", target)}
 
 

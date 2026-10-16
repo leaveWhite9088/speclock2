@@ -50,19 +50,27 @@ class Database:
         provider 一律不动。幂等。"""
         with self.registry_engine.connect() as conn:
             rows = conn.exec_driver_sql(
-                "SELECT id, model FROM model_entries WHERE provider IS NULL OR provider = ''"
+                "SELECT id, harness, model FROM model_entries WHERE provider IS NULL OR provider = ''"
             ).fetchall()
-            for row_id, model in rows:
+            for row_id, harness, model in rows:
                 provider, _, bare = str(model).partition("/")
-                if bare:  # 有前缀：拆出；无前缀：provider 保持空
-                    conn.exec_driver_sql(
-                        "UPDATE model_entries SET provider = ?, model = ? WHERE id = ?",
-                        (provider, bare, row_id),
-                    )
-                else:
+                if not bare:  # 无前缀：provider 保持空
                     conn.exec_driver_sql(
                         "UPDATE model_entries SET provider = '' WHERE id = ?", (row_id,)
                     )
+                    continue
+                # 拆分目标 (harness, bare) 已存在 → 不拆（唯一约束）；整串条目原样保留，
+                # masters 的组合匹配仍能命中（修复：拆分撞库曾让应用启动即崩）
+                exists = conn.exec_driver_sql(
+                    "SELECT 1 FROM model_entries WHERE harness = ? AND model = ? AND id != ?",
+                    (harness, bare, row_id),
+                ).fetchone()
+                if exists:
+                    continue
+                conn.exec_driver_sql(
+                    "UPDATE model_entries SET provider = ?, model = ? WHERE id = ?",
+                    (provider, bare, row_id),
+                )
             conn.exec_driver_sql(
                 "UPDATE model_entries SET provider = 'minimax-cn' "
                 "WHERE provider = 'minimax' AND harness = 'pi'"

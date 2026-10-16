@@ -86,6 +86,57 @@ def test_agent_model_strips_source_prefix(mock_client):
     assert mock_client.get("/api/p/pf/agent").json()["model"] == "minimax-cn/MiniMax-M3"
 
 
+def test_agent_model_writeback_to_project(mock_client):
+    """/model 切换回写项目配置（派单）：/agent 两处一致、重建用新模型、落事件。"""
+    from speclock2 import pi_runtime
+
+    _setup_project(mock_client, slug="wb")
+    mock_client.post("/api/p/wb/agent/start", json={})
+    r = mock_client.post("/api/p/wb/agent/model",
+                         json={"provider": "deepseek", "model": "deepseek-flash"})
+    assert r.status_code == 200, r.text
+    # 项目配置回写（请求原值）
+    with mock_client.app.state.db.registry_session() as s:
+        proj = s.get(models.Project, "wb")
+        assert proj.chief_provider == "deepseek"
+        assert proj.chief_model == "deepseek-flash"
+    # /agent 两处一致：model（会话实时）与 chief（项目配置）
+    agent = mock_client.get("/api/p/wb/agent").json()
+    assert agent["model"] == "deepseek/deepseek-flash"
+    assert agent["chief"]["provider"] == "deepseek"
+    assert agent["chief"]["model"] == "deepseek-flash"
+    assert agent["chief"]["source"] == "project"
+    # 重建会话用新模型：生效模型串来自项目配置
+    assert pi_runtime.effective_chief_model_str(mock_client.app.state.db, "wb") == "deepseek/deepseek-flash"
+    # 模型变更事件
+    events = mock_client.get("/api/p/wb/events",
+                             params={"type": "chief.model_changed"}).json()["items"]
+    assert events and events[0]["payload"]["model"] == "deepseek-flash"
+
+
+def test_agent_model_failure_keeps_config(mock_client, monkeypatch):
+    """切换失败（pi 拒绝）→ 502 且项目配置不变；会话未运行 → 409 保持。"""
+    _setup_project(mock_client, slug="wf")
+    mock_client.post("/api/p/wf/agent/start", json={})
+    session = mock_client.app.state.pi.get("wf")
+
+    async def boom(model: str) -> dict:
+        raise RuntimeError("pi 拒绝")
+
+    monkeypatch.setattr(session, "set_model", boom)
+    r = mock_client.post("/api/p/wf/agent/model",
+                         json={"provider": "deepseek", "model": "deepseek-flash"})
+    assert r.status_code == 502
+    with mock_client.app.state.db.registry_session() as s:
+        proj = s.get(models.Project, "wf")
+        assert proj.chief_provider is None and proj.chief_model is None
+    # 409 行为保持：会话不在 → 409
+    mock_client.app.state.pi.sessions.pop("wf")
+    r = mock_client.post("/api/p/wf/agent/model",
+                         json={"provider": "deepseek", "model": "deepseek-flash"})
+    assert r.status_code == 409
+
+
 # ---------- 2. 派发幂等 ----------
 
 

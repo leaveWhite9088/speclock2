@@ -96,31 +96,70 @@ function pushChat(who: ChatBubble['who'], text: string, round = openRoundN.value
   chatMessages.value = [...chatMessages.value, { round, ts: Date.now(), who, text, action }]
 }
 
+/** 从事件日志重建已确认对话（chat.human / chat.chief，按事件 id 序，轮次是账本真值） */
+async function fetchLedgerChat(slug: string): Promise<ChatBubble[]> {
+  const [human, chief] = await Promise.all([
+    client.value!.listEvents(slug, { type: 'chat.human' }),
+    client.value!.listEvents(slug, { type: 'chat.chief' }),
+  ])
+  return [...human.items, ...chief.items]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((e): ChatBubble => {
+      const message = (e.payload as { message?: unknown }).message
+      return {
+        round: e.round,
+        ts: Date.parse(e.ts),
+        who: e.actor === 'human' ? 'human' : 'core',
+        text: typeof message === 'string' ? message : '',
+      }
+    })
+    .filter((m) => m.text !== '')
+}
+
 /** 页面加载/切换项目：从事件日志恢复对话历史（chat.human / chat.chief，按 id 序） */
 async function loadChatHistory(): Promise<void> {
   if (!client.value || !currentSlug.value) return
   const slug = currentSlug.value
+  let confirmed: ChatBubble[]
   try {
-    const [human, chief] = await Promise.all([
-      client.value.listEvents(slug, { type: 'chat.human' }),
-      client.value.listEvents(slug, { type: 'chat.chief' }),
-    ])
-    if (currentSlug.value !== slug) return
-    const merged = [...human.items, ...chief.items].sort((a, b) => a.id.localeCompare(b.id))
-    chatMessages.value = merged
-      .map((e): ChatBubble => {
-        const message = (e.payload as { message?: unknown }).message
-        return {
-          round: e.round,
-          ts: Date.parse(e.ts),
-          who: e.actor === 'human' ? 'human' : 'core',
-          text: typeof message === 'string' ? message : '',
-        }
-      })
-      .filter((m) => m.text !== '')
+    confirmed = await fetchLedgerChat(slug)
   } catch {
-    chatMessages.value = []
+    confirmed = []
   }
+  if (currentSlug.value !== slug) return
+  chatMessages.value = confirmed
+}
+
+/** 乐观气泡与账本对账（fx24）：发送时冻结的轮次只是猜测，账本才是真值。
+ *  每次刷新后按序消费掉已落账的本地 human/core 副本，换成账本版（轮次正确）；
+ *  系统/错误条挂在未知轮次（如新项目发消息前的 0）时改锚到最新轮。
+ *  CoreChat 内部按 ts 排序，回填后各气泡自然落进正确分区与时序位。 */
+async function reconcileChat(): Promise<void> {
+  if (!client.value || !currentSlug.value) return
+  const slug = currentSlug.value
+  let confirmed: ChatBubble[]
+  try {
+    confirmed = await fetchLedgerChat(slug)
+  } catch {
+    return // 账本读不到：保留乐观气泡原样，下次刷新再对
+  }
+  if (currentSlug.value !== slug) return
+  const knownRounds = new Set(feed.value.map((fr) => fr.info.n))
+  const latestRound = feed.value.at(-1)?.info.n ?? 0
+  const locals: ChatBubble[] = []
+  let i = 0
+  for (const b of chatMessages.value) {
+    if (i < confirmed.length && (b.who === 'human' || b.who === 'core') && b.who === confirmed[i].who && b.text === confirmed[i].text) {
+      i++ // 已落账：丢弃本地副本，下面统一用账本版
+      continue
+    }
+    locals.push(
+      (b.who === 'system' || b.who === 'error') && !knownRounds.has(b.round) && latestRound > 0
+        ? { ...b, round: latestRound }
+        : b,
+    )
+  }
+  chatMessages.value = [...confirmed, ...locals]
 }
 
 /** 一条核心代理回复定稿：入列并结束流式态（POST 返回与 SSE final 双路到达时去重） */
@@ -675,6 +714,7 @@ async function refreshAll(): Promise<void> {
   }
   void refreshProjectStats()
   void loadReports(client.value, slug, () => currentSlug.value === slug)
+  void reconcileChat() // 乐观气泡与账本对账回填轮次（fx24），气泡归位到正确轮次分区
   try {
     masters.value = (await client.value.listMasters(slug)).items
   } catch {

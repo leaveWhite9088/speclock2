@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendEntry, readTranscript } from './transcripts.mjs';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -76,6 +77,9 @@ const DEFAULT_AGENT = process.env.AGENTD_DEFAULT_AGENT || 'mcode';
 const CONFIG_FILE =
   process.env.AGENTD_CONFIG || join(dirname(dirname(fileURLToPath(import.meta.url))), 'agentd.config.json');
 
+/** Parsed `agentd.config.json`; the dispatcher reads its own section from it. */
+let CONFIG = {};
+
 (function applyConfig() {
   let cfg = {};
   try {
@@ -83,7 +87,9 @@ const CONFIG_FILE =
   } catch (err) {
     log('agentd.config.json unreadable, ignoring:', err.message);
   }
+  CONFIG = cfg;
   for (const [name, spec] of Object.entries(AGENTS)) {
+    spec.type = name;
     const fromEnv = process.env[`AGENTD_CWD_${name.toUpperCase()}`];
     const fromFile = cfg?.agents?.[name]?.cwd;
     spec.defaultCwd = fromEnv || fromFile || spec.defaultCwd || null;
@@ -139,6 +145,14 @@ function noteSession(agent, sessionId, patch) {
 loadStore();
 
 /** Options may be flat or grouped: {group, name, options: [...]}. */
+/** Compare directories regardless of slash style, case and trailing slash. */
+function normPath(p) {
+  return String(p ?? '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
 function flattenOptions(opts = []) {
   return opts.flatMap((o) =>
     Array.isArray(o.options) ? flattenOptions(o.options) : [{ value: o.value, name: o.name, description: o.description }],
@@ -151,8 +165,13 @@ function flattenOptions(opts = []) {
 
 class AcpClient {
   constructor(name, spec) {
+    /** Instance id. For the built-in instances it equals the agent type. */
     this.name = name;
     this.spec = spec;
+    /** Which CLI this instance runs: mcode, dsh or pi. */
+    this.type = spec.type ?? name;
+    /** True for instances created at run time (not mcode / dsh / pi themselves). */
+    this.custom = Boolean(spec.custom);
 
     this.child = null;
     this.buf = '';
@@ -206,9 +225,16 @@ class AcpClient {
     this.spawnCount += 1;
     log(`[${this.name}] spawning (spawn #${this.spawnCount})`);
 
+    // The pi adapter reads its start directory from AGENTD_BASE_CWD, so each pi
+    // instance gets its own. Custom pi instances also get their own session dir,
+    // because the adapter keeps a session map file there.
+    const env = { ...process.env, ...(this.spec.env ?? {}) };
+    if (this.type === 'pi' && this.spec.defaultCwd) env.AGENTD_BASE_CWD = this.spec.defaultCwd;
+
     const child = spawn(this.spec.cmd, this.spec.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      env,
     });
     this.child = child;
     this.buf = '';
@@ -327,6 +353,34 @@ class AcpClient {
 
       if (u.sessionUpdate === 'config_option_update' && Array.isArray(u.configOptions)) {
         this.configOptions = u.configOptions;
+      }
+
+      // Tool activity goes into the transcript. A call is recorded when it starts
+      // and again when it ends, so the transcript shows what the agent did.
+      const run = this.run;
+      if (run?.sessionId) {
+        if (u.sessionUpdate === 'tool_call') {
+          appendEntry(this.name, run.sessionId, {
+            role: 'tool',
+            jobId: run.jobId,
+            toolCallId: u.toolCallId ?? null,
+            title: u.title ?? null,
+            kind: u.kind ?? null,
+            status: u.status ?? 'started',
+          });
+        } else if (
+          u.sessionUpdate === 'tool_call_update' &&
+          (u.status === 'completed' || u.status === 'failed')
+        ) {
+          appendEntry(this.name, run.sessionId, {
+            role: 'tool',
+            jobId: run.jobId,
+            toolCallId: u.toolCallId ?? null,
+            title: u.title ?? null,
+            kind: u.kind ?? null,
+            status: u.status,
+          });
+        }
       }
     }
   }
@@ -633,6 +687,13 @@ class AcpClient {
         // Spawning is expected here; only a restart after this point is abnormal.
         run.spawnsAtStart = this.spawnCount;
 
+        appendEntry(this.name, this.sessionId, {
+          role: 'user',
+          jobId,
+          text,
+          model: run.model,
+        });
+
         const res = await this._request(
           'session/prompt',
           { sessionId: this.sessionId, prompt: [{ type: 'text', text }] },
@@ -641,6 +702,13 @@ class AcpClient {
 
         run.stopReason = res?.stopReason ?? null;
         noteSession(this.name, this.sessionId, { updatedAt: new Date().toISOString() });
+        appendEntry(this.name, this.sessionId, {
+          role: 'assistant',
+          jobId,
+          text: this.streamedText.trim(),
+          stopReason: run.stopReason,
+          model: run.model,
+        });
         return {
           text: this.streamedText.trim(),
           stopReason: res?.stopReason,
@@ -649,6 +717,13 @@ class AcpClient {
         };
       } catch (err) {
         run.error = err.message;
+        // Record the failure and any partial answer, so the transcript has no gap.
+        appendEntry(this.name, run.sessionId, {
+          role: 'error',
+          jobId,
+          text: run.text.trim() || null,
+          error: err.message,
+        });
         // Keep the metrics on the error: a crashed run still produces a receipt
         // with duration, model and inferred attention.
         err.metrics = this._finishRun(run);
@@ -851,6 +926,11 @@ class AcpClient {
     const byId = new Map();
 
     for (const s of remote) {
+      // An agent lists every session of its CLI. A custom instance only owns the
+      // ones in its own directory, so two instances of one CLI do not mix.
+      if (this.custom && s.cwd && normPath(s.cwd) !== normPath(this.spec.defaultCwd)) continue;
+      // The built-in instance leaves out the sessions that belong to a created one.
+      if (!this.custom && s.cwd && ownedByInstance(this, s.cwd)) continue;
       byId.set(s.sessionId, {
         sessionId: s.sessionId,
         cwd: s.cwd ?? local[s.sessionId]?.cwd ?? null,
@@ -916,6 +996,8 @@ class AcpClient {
     const lastAttention = lastRun ? this._metrics(lastRun).attention : [];
     return {
       agent: this.name,
+      type: this.type,
+      custom: this.custom,
       label: this.spec.label,
       alive: Boolean(this.child),
       sessionId: this.sessionId,
@@ -968,7 +1050,115 @@ class AcpClient {
 // ---------------------------------------------------------------------------
 
 const pool = new Map();
+
+/** True when `cwd` is the directory of a created instance of the same CLI type. */
+function ownedByInstance(agent, cwd) {
+  for (const other of pool.values()) {
+    if (other === agent || !other.custom || other.type !== agent.type) continue;
+    if (normPath(other.spec.defaultCwd) === normPath(cwd)) return true;
+  }
+  return false;
+}
 for (const [name, spec] of Object.entries(AGENTS)) pool.set(name, new AcpClient(name, spec));
+
+// ---------------------------------------------------------------------------
+// Instances
+//
+// An instance is one resident process of a CLI type, pinned to one directory.
+// mcode, dsh and pi exist from the start (id equals type). More can be created at
+// run time, for example two `dsh` processes in two different projects. Created
+// instances are saved in data/instances.json and come back after a daemon restart.
+// ---------------------------------------------------------------------------
+
+const DATA_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'data');
+const INSTANCES_FILE = process.env.AGENTD_INSTANCES_FILE || join(DATA_DIR, 'instances.json');
+const INSTANCE_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/** @type {Array<{id: string, type: string, cwd: string, createdAt: string}>} */
+let savedInstances = [];
+
+function saveInstances() {
+  try {
+    mkdirSync(dirname(INSTANCES_FILE), { recursive: true });
+    writeFileSync(INSTANCES_FILE, JSON.stringify({ instances: savedInstances }, null, 2));
+  } catch (err) {
+    log('failed to save instances:', err.message);
+  }
+}
+
+function buildInstance({ id, type, cwd }) {
+  const base = AGENTS[type];
+  const spec = {
+    ...base,
+    type,
+    custom: true,
+    label: `${base.label} (${id})`,
+    defaultCwd: cwd,
+    env: type === 'pi' ? { PI_SESSION_DIR: join(DATA_DIR, 'pi-sessions', id) } : undefined,
+  };
+  return new AcpClient(id, spec);
+}
+
+(function restoreInstances() {
+  try {
+    if (!existsSync(INSTANCES_FILE)) return;
+    const data = JSON.parse(readFileSync(INSTANCES_FILE, 'utf8'));
+    for (const rec of data?.instances ?? []) {
+      if (!rec?.id || pool.has(rec.id) || !AGENTS[rec.type] || !rec.cwd) continue;
+      savedInstances.push(rec);
+      pool.set(rec.id, buildInstance(rec));
+    }
+  } catch (err) {
+    log('instances file unreadable, ignoring:', err.message);
+  }
+})();
+
+/** Create another instance of `type` in `cwd`. Returns the new AcpClient. */
+function createInstance({ id, type, cwd }) {
+  if (!INSTANCE_ID_RE.test(String(id ?? ''))) {
+    throw new Error('instance id must start with a letter and use only a-z, 0-9, "-" or "_" (max 32)');
+  }
+  if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
+  if (pool.has(id)) throw new Error(`instance "${id}" already exists`);
+  if (!cwd || typeof cwd !== 'string') throw new Error('cwd is required');
+
+  mkdirSync(cwd, { recursive: true });
+  const rec = { id, type, cwd, createdAt: new Date().toISOString() };
+  const agent = buildInstance(rec);
+  pool.set(id, agent);
+  savedInstances.push(rec);
+  saveInstances();
+  return agent;
+}
+
+/** Stop and forget a created instance. The built-in ones cannot be removed. */
+async function removeInstance(id) {
+  const agent = pool.get(id);
+  if (!agent) throw new Error(`unknown instance "${id}"`);
+  if (!agent.custom) throw new Error(`"${id}" is a built-in instance and cannot be removed`);
+  if (agent.busy) throw new Error(`instance "${id}" is running a prompt; cancel it first`);
+
+  await agent.shutdown();
+  pool.delete(id);
+  savedInstances = savedInstances.filter((r) => r.id !== id);
+  saveInstances();
+  return { id, removed: true };
+}
+
+/** One row per instance, for dashboards and the `instances` op. */
+function listInstances() {
+  return [...pool.values()].map((a) => ({
+    id: a.name,
+    type: a.type,
+    custom: a.custom,
+    label: a.spec.label,
+    cwd: a.spec.defaultCwd ?? null,
+    alive: Boolean(a.child),
+    busy: a.busy,
+    sessionId: a.sessionId,
+    model: a.currentModel(),
+  }));
+}
 
 function getAgent(name) {
   const key = name || DEFAULT_AGENT;
@@ -1016,9 +1206,14 @@ function formatMetrics(m, agent) {
 export {
   AGENTS,
   BASE_CWD,
+  CONFIG,
   DEFAULT_AGENT,
   pool,
   getAgent,
+  createInstance,
+  removeInstance,
+  listInstances,
+  readTranscript,
   flattenOptions,
   formatMetrics,
 };

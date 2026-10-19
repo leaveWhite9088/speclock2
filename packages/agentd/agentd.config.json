@@ -2,5 +2,14 @@
   "agents": {
     "mcode": { "cwd": "D:/Project2/code-261013-speclock2/sandbox/testpath/mcodetestpath" },
     "dsh":   { "cwd": "D:/Project2/code-261013-speclock2/sandbox/testpath/dshtestpath" }
+  },
+  "roles": {
+    "mcode": "MiniMax Code: general coding agent",
+    "dsh": "DeepSeek Harness: general coding agent, good for long reads and reviews",
+    "pi": "pi worker: general coding agent"
+  },
+  "limits": {
+    "maxProcesses": 12,
+    "idleMinutes": 15
   }
 }

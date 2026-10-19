@@ -141,3 +141,28 @@ export function listProviders(dir = agentDir()) {
   }));
   return { file: fileIn(dir), providers };
 }
+
+/**
+ * Providers that have credentials: logged in through pi (auth.json), defined with
+ * a key in models.json, or with the conventional `<PROVIDER>_API_KEY` variable set.
+ * Only provider names are read; key values are never returned.
+ */
+export function usableProviders(dir = agentDir()) {
+  const out = new Set();
+  try {
+    const auth = JSON.parse(readFileSync(join(dir, 'auth.json'), 'utf8'));
+    for (const name of Object.keys(auth ?? {})) out.add(name);
+  } catch {
+    /* no auth.json */
+  }
+  try {
+    for (const [name, p] of Object.entries(load(dir).providers)) if (p?.apiKey) out.add(name);
+  } catch {
+    /* unreadable models.json */
+  }
+  for (const key of Object.keys(process.env)) {
+    const m = /^([A-Z0-9_]+?)_API_KEY$/.exec(key);
+    if (m && process.env[key]) out.add(m[1].toLowerCase().replace(/_/g, '-'));
+  }
+  return out;
+}

@@ -172,6 +172,16 @@ class AcpClient {
     this.type = spec.type ?? name;
     /** True for instances created at run time (not mcode / dsh / pi themselves). */
     this.custom = Boolean(spec.custom);
+    /** Project this instance belongs to (null for the global instances). */
+    this.project = spec.project ?? null;
+    /** Name inside its project. The pool key is `<project>~<shortId>`. */
+    this.shortId = spec.shortId ?? name;
+    /** What this instance is for. The dispatcher's LLM reads it when choosing. */
+    this.role = spec.role ?? CONFIG?.roles?.[spec.type ?? name] ?? null;
+    /** Last time work was queued or finished, for idle recycling. */
+    this.lastActive = Date.now();
+    /** Set while we stop the process on purpose, so it is not reported as a crash. */
+    this.stopping = false;
 
     this.child = null;
     this.buf = '';
@@ -222,6 +232,11 @@ class AcpClient {
 
   _spawn() {
     if (this.child) return;
+    if (aliveCount() >= MAX_PROCESSES) {
+      throw new Error(
+        `process limit reached (${MAX_PROCESSES} agent processes are running); stop an idle instance or raise limits.maxProcesses`,
+      );
+    }
     this.spawnCount += 1;
     log(`[${this.name}] spawning (spawn #${this.spawnCount})`);
 
@@ -268,6 +283,11 @@ class AcpClient {
 
     child.on('close', (code) => {
       log(`[${this.name}] child closed (code=${code})`);
+      // A replacement process may already be running (stopped, then used again at once).
+      if (this.child && this.child !== child) {
+        this.stopping = false;
+        return;
+      }
       const wasRunning = Boolean(this.run);
       this.child = null;
       this.initPromise = null;
@@ -275,6 +295,10 @@ class AcpClient {
       this.live.clear();
       for (const { reject } of this.pending.values()) reject(new Error(`${this.name} ACP exited`));
       this.pending.clear();
+      if (this.stopping) {
+        this.stopping = false;
+        return;
+      }
       try {
         this.onExit?.({ agent: this.name, code, wasRunning, spawns: this.spawnCount });
       } catch {
@@ -460,10 +484,15 @@ class AcpClient {
   }
 
   _enqueue(task) {
+    this.lastActive = Date.now();
     const run = this.queue.then(task, task);
     this.queue = run.then(
-      () => undefined,
-      () => undefined,
+      () => {
+        this.lastActive = Date.now();
+      },
+      () => {
+        this.lastActive = Date.now();
+      },
     );
     return run;
   }
@@ -1035,6 +1064,7 @@ class AcpClient {
 
   async shutdown() {
     if (!this.child) return;
+    this.stopping = true;
     try {
       this.child.stdin.end();
       this.child.kill();
@@ -1050,6 +1080,15 @@ class AcpClient {
 // ---------------------------------------------------------------------------
 
 const pool = new Map();
+
+/** Upper bound on live agent processes, so many projects cannot exhaust memory. */
+const MAX_PROCESSES = Number(process.env.AGENTD_MAX_PROCESSES) || CONFIG?.limits?.maxProcesses || 12;
+
+function aliveCount() {
+  let n = 0;
+  for (const a of pool.values()) if (a.child) n += 1;
+  return n;
+}
 
 /** True when `cwd` is the directory of a created instance of the same CLI type. */
 function ownedByInstance(agent, cwd) {
@@ -1086,13 +1125,16 @@ function saveInstances() {
   }
 }
 
-function buildInstance({ id, type, cwd }) {
+function buildInstance({ id, type, cwd, project = null, shortId = id, role = null }) {
   const base = AGENTS[type];
   const spec = {
     ...base,
     type,
     custom: true,
-    label: `${base.label} (${id})`,
+    project,
+    shortId,
+    role,
+    label: `${base.label} (${shortId})`,
     defaultCwd: cwd,
     env: type === 'pi' ? { PI_SESSION_DIR: join(DATA_DIR, 'pi-sessions', id) } : undefined,
   };
@@ -1149,6 +1191,10 @@ async function removeInstance(id) {
 function listInstances() {
   return [...pool.values()].map((a) => ({
     id: a.name,
+    project: a.project,
+    shortId: a.shortId,
+    role: a.role,
+    lastActive: a.lastActive,
     type: a.type,
     custom: a.custom,
     label: a.spec.label,
@@ -1212,6 +1258,9 @@ export {
   getAgent,
   createInstance,
   removeInstance,
+  buildInstance,
+  aliveCount,
+  MAX_PROCESSES,
   listInstances,
   readTranscript,
   flattenOptions,

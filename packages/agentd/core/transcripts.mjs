@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIR = process.env.AGENTD_TRANSCRIPTS_DIR || join(ROOT, 'data', 'transcripts');
 
-const safe = (s) => String(s).replace(/[^A-Za-z0-9._-]/g, '_');
+const safe = (s) => String(s).replace(/[^A-Za-z0-9._~-]/g, '_');
 const fileFor = (instance, sessionId) => join(DIR, safe(instance), `${safe(sessionId)}.jsonl`);
 
 /** Append one entry. Best-effort: a failed write never breaks a run. */

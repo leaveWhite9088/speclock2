@@ -44,8 +44,11 @@ import {
   removeInstance,
   listInstances,
   readTranscript,
+  aliveCount,
+  MAX_PROCESSES,
 } from '../core/agent-pool.mjs';
 import { Dispatcher } from '../core/dispatcher.mjs';
+import * as projects from '../core/projects.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -56,7 +59,9 @@ const ENDPOINT_FILE = join(ROOT, 'data', 'agentd.endpoint.json');
 /** Append-only log of finished runs, so receipts survive restarts and idle gaps. */
 const RECEIPTS_FILE = join(ROOT, 'data', 'receipts.jsonl');
 const IDLE_MS = Number(process.env.AGENTD_IDLE_MIN || 30) * 60_000;
-const PROTOCOL = 2;
+const PROTOCOL = 3;
+/** Project instances and dispatchers idle for this long are stopped. */
+const IDLE_INSTANCE_MS = Number(process.env.AGENTD_INSTANCE_IDLE_MIN || CONFIG?.limits?.idleMinutes || 15) * 60_000;
 
 const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 const startedAt = new Date().toISOString();
@@ -187,10 +192,69 @@ for (const agent of pool.values()) wireAgent(agent);
 // Dispatcher: the pi that picks the agent. Started on first use.
 // ---------------------------------------------------------------------------
 
-const dispatcher = new Dispatcher({
-  cwd: process.env.AGENTD_CWD_DISPATCHER || CONFIG?.dispatcher?.cwd || BASE_CWD,
-  onEvent: (ev) => publishLive('dispatcher.event', { data: ev }),
-});
+/** One dispatcher per project, plus the global one under the key ''. */
+const dispatchers = new Map();
+
+function getDispatcher(project = null) {
+  const key = project || '';
+  let d = dispatchers.get(key);
+  if (d) return d;
+  if (project) {
+    d = new Dispatcher({
+      cwd: projects.projectRoot(project),
+      project,
+      sessionDir: join(ROOT, 'data', 'dispatcher-sessions', project),
+      onEvent: (ev) => publishLive('dispatcher.event', { project, data: ev }),
+    });
+  } else {
+    d = new Dispatcher({
+      cwd: process.env.AGENTD_CWD_DISPATCHER || CONFIG?.dispatcher?.cwd || BASE_CWD,
+      onEvent: (ev) => publishLive('dispatcher.event', { project: null, data: ev }),
+    });
+  }
+  dispatchers.set(key, d);
+  return d;
+}
+
+const anyDispatcherBusy = () => [...dispatchers.values()].some((d) => d.busy);
+
+/** Dispatchers that are running now get a restart after models.json changed. */
+async function restartRunningDispatchers() {
+  const out = [];
+  for (const [key, d] of dispatchers) {
+    if (!d.child) continue;
+    out.push({ project: key || null, ...(await d.restart()) });
+  }
+  return out;
+}
+
+/**
+ * Requests from a project's dispatcher carry `project`. Everything it names is
+ * resolved inside that project, and a name that already points elsewhere is refused.
+ */
+const AGENT_ARG_OPS = new Set([
+  'status', 'sessions', 'use', 'new', 'rename', 'models', 'setModel', 'run', 'tail', 'wait', 'cancel', 'transcript',
+]);
+
+function scopeArgs(op, args) {
+  const project = args?.project;
+  if (!project || !AGENT_ARG_OPS.has(op)) return args;
+  if (!projects.hasProject(project)) throw new Error(`unknown project "${project}"`);
+  const agent = args.agent;
+  if (!agent) throw new Error('agent is required inside a project');
+  if (String(agent).includes(projects.SEP)) throw new Error(`agent "${agent}" is outside project "${project}"`);
+  const scoped = { ...args, agent: `${project}${projects.SEP}${agent}` };
+  // A directory the dispatcher names must stay inside the project root.
+  if (args.cwd) scoped.cwd = projects.resolveInside(projects.projectRoot(project), args.cwd);
+  return scoped;
+}
+
+/** Rows of one project, with short names when the caller is that project's dispatcher. */
+function viewRows(rows, project, short) {
+  const mine = rows.filter((r) => (project ? r.project === project : true));
+  if (!short) return mine;
+  return mine.map((r) => ({ ...r, key: r.id ?? r.name, ...(r.id ? { id: r.shortId } : { name: r.shortId }) }));
+}
 
 // ---------------------------------------------------------------------------
 // Receipts: one line per finished run
@@ -243,6 +307,18 @@ function readReceipts(limit = 50) {
 // Operations
 // ---------------------------------------------------------------------------
 
+/** Refuse while something of the project runs (unless forced), then stop its dispatcher. */
+async function stopProjectProcesses(project, force) {
+  const d = dispatchers.get(project);
+  const busy = [
+    ...projects.instancesOf(project).filter((a) => a.busy).map((a) => a.shortId),
+    ...(d?.busy ? ['(dispatcher)'] : []),
+  ];
+  if (busy.length && !force) throw new Error(`still running: ${busy.join(', ')}`);
+  if (d?.busy) await d.abort().catch(() => {});
+  await d?.shutdown();
+}
+
 const OPS = {
   hello: () => ({
     protocol: PROTOCOL,
@@ -255,9 +331,12 @@ const OPS = {
   }),
 
   /** Every instance in the pool, built-in and created. */
-  agents: () => ({
-    agents: [...pool.entries()].map(([name, a]) => ({
+  agents: ({ project, short } = {}) => ({
+    agents: viewRows([...pool.entries()].map(([name, a]) => ({
       name,
+      project: a.project,
+      shortId: a.shortId,
+      role: a.role,
       type: a.type,
       custom: a.custom,
       label: a.spec.label,
@@ -267,12 +346,21 @@ const OPS = {
       spawns: a.spawnCount,
       sessionId: a.sessionId,
       busy: a.busy,
-    })),
+    })), project, short),
   }),
 
-  instances: () => ({ instances: listInstances(), types: Object.keys(AGENTS) }),
+  instances: ({ project, short } = {}) => ({
+    instances: viewRows(listInstances(), project, short),
+    types: Object.keys(AGENTS),
+  }),
 
-  'instance.create': ({ id, type, cwd }) => {
+  'instance.create': ({ id, type, cwd, dir, role, project }) => {
+    // Inside a project the directory is relative to the project root.
+    if (project) {
+      const r = projects.addInstance(project, { id, type, dir: dir ?? cwd ?? '.', role });
+      wireAgent(pool.get(r.key));
+      return { id: r.id, type: r.type, cwd: r.cwd, key: r.key, role: r.role };
+    }
     const agent = createInstance({ id, type, cwd });
     wireAgent(agent);
     return { id: agent.name, type: agent.type, cwd: agent.spec.defaultCwd };
@@ -293,37 +381,72 @@ const OPS = {
 
   // -- dispatcher (the pi that chooses agents) ---------------------------
 
-  'dispatcher.state': () => dispatcher.state(),
-  'dispatcher.models': () => dispatcher.models(),
-  'dispatcher.setModel': ({ value }) => dispatcher.setModel(value),
-  'dispatcher.setThinking': ({ level }) => dispatcher.setThinking(level),
-  'dispatcher.prompt': ({ message }) => dispatcher.prompt(message),
-  'dispatcher.abort': () => dispatcher.abort(),
-  'dispatcher.new': () => dispatcher.newSession(),
-  'dispatcher.sessions': () => dispatcher.sessions(),
-  'dispatcher.use': ({ sessionFile }) => dispatcher.switchSession(sessionFile),
-  'dispatcher.messages': () => dispatcher.messages(),
-  'dispatcher.restart': () => dispatcher.restart(),
+  'dispatcher.state': ({ project } = {}) => getDispatcher(project).state(),
+  'dispatcher.models': ({ project } = {}) => getDispatcher(project).models(),
+  'dispatcher.setModel': ({ project, value }) => getDispatcher(project).setModel(value),
+  'dispatcher.setThinking': ({ project, level }) => getDispatcher(project).setThinking(level),
+  'dispatcher.prompt': ({ project, message }) => getDispatcher(project).prompt(message),
+  'dispatcher.abort': ({ project } = {}) => getDispatcher(project).abort(),
+  'dispatcher.new': ({ project } = {}) => getDispatcher(project).newSession(),
+  'dispatcher.sessions': ({ project } = {}) => getDispatcher(project).sessions(),
+  'dispatcher.use': ({ project, sessionFile }) => getDispatcher(project).switchSession(sessionFile),
+  'dispatcher.messages': ({ project } = {}) => getDispatcher(project).messages(),
+  'dispatcher.restart': ({ project } = {}) => getDispatcher(project).restart(),
 
-  /** Providers and models in pi's models.json (secrets masked). */
+  // -- LLMs of pi (models.json is shared by every dispatcher) ------------
+
   'dispatcher.customModels': () => ({ agentDir: agentDir(), ...listProviders() }),
 
   /**
-   * Add an LLM to the dispatcher: write it to models.json, then restart the
-   * dispatcher so pi reads the new file. Refused while a prompt is running.
+   * Add an LLM: write it to models.json, then restart every dispatcher that is
+   * running so pi reads the new file. Refused while any of them is working.
    */
   'dispatcher.addModel': async (spec) => {
-    if (dispatcher.busy) throw new Error('dispatcher is working on a prompt; abort it first');
+    if (anyDispatcherBusy()) throw new Error('a dispatcher is working on a prompt; abort it first');
     const written = addProvider(spec);
-    const state = dispatcher.child ? await dispatcher.restart() : await dispatcher.state();
-    return { ...written, dispatcher: state };
+    return { ...written, dispatchers: await restartRunningDispatchers() };
   },
 
   'dispatcher.removeModel': async ({ provider, modelIds }) => {
-    if (dispatcher.busy) throw new Error('dispatcher is working on a prompt; abort it first');
+    if (anyDispatcherBusy()) throw new Error('a dispatcher is working on a prompt; abort it first');
     const removed = removeProvider(provider, modelIds);
-    const state = dispatcher.child ? await dispatcher.restart() : await dispatcher.state();
-    return { ...removed, dispatcher: state };
+    return { ...removed, dispatchers: await restartRunningDispatchers() };
+  },
+
+  // -- projects -------------------------------------------------------------
+
+  projects: () => ({
+    projects: projects.listProjects().map((p) => ({
+      ...p,
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy) },
+    })),
+    limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
+  }),
+
+  'project.create': (args) => {
+    const p = projects.createProject(args);
+    for (const a of projects.instancesOf(p.id)) wireAgent(a);
+    return p;
+  },
+
+  'project.addInstance': ({ project, id, type, dir, role }) => {
+    const r = projects.addInstance(project, { id, type, dir, role });
+    wireAgent(pool.get(r.key));
+    return r;
+  },
+
+  'project.removeInstance': ({ project, id, force }) => projects.removeInstance(project, id, { force }),
+
+  /** Close a project: stop its processes. Configuration and sessions stay. */
+  'project.stop': async ({ project, force }) => {
+    await stopProjectProcesses(project, force);
+    return projects.stopInstances(project, { force: true });
+  },
+
+  'project.remove': async ({ project, force }) => {
+    await stopProjectProcesses(project, force);
+    dispatchers.delete(project);
+    return projects.removeProject(project, { force: true });
   },
 
   status: ({ agent }) => getAgent(agent).status(),
@@ -473,7 +596,7 @@ const server = net.createServer((sock) => {
         continue;
       }
       Promise.resolve()
-        .then(() => op(msg.args ?? {}, sock))
+        .then(() => op(scopeArgs(msg.op, msg.args ?? {}), sock))
         .then((result) => sock.write(JSON.stringify({ id: msg.id, ok: true, result }) + '\n'))
         .catch((err) =>
           sock.write(JSON.stringify({ id: msg.id, ok: false, error: err?.message ?? String(err) }) + '\n'),
@@ -533,9 +656,26 @@ server.listen(PORT ?? PIPE_NAME, () => {
   log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
 });
 
+// Idle recycling: project instances and dispatchers that were not used for a while
+// are stopped. Their sessions stay on disk and come back on the next use.
+setInterval(async () => {
+  try {
+    const stopped = await projects.sweepIdle(IDLE_INSTANCE_MS);
+    for (const [key, d] of dispatchers) {
+      if (d.child && !d.busy && Date.now() - d.lastActive > IDLE_INSTANCE_MS) {
+        await d.shutdown();
+        stopped.push(`dispatcher:${key || 'global'}`);
+      }
+    }
+    if (stopped.length) log(`idle, stopped: ${stopped.join(', ')}`);
+  } catch (err) {
+    log('idle sweep failed:', err.message);
+  }
+}, 60_000).unref();
+
 // Idle shutdown: no clients, nothing running.
 setInterval(() => {
-  const busy = [...pool.values()].some((a) => a.busy) || dispatcher.busy;
+  const busy = [...pool.values()].some((a) => a.busy) || anyDispatcherBusy();
   if (connections === 0 && !busy && Date.now() - lastActivity > IDLE_MS) {
     log('idle; shutting down');
     shutdown(0);
@@ -548,7 +688,10 @@ async function shutdown(code) {
   } catch {
     /* ignore */
   }
-  await Promise.all([...[...pool.values()].map((a) => a.shutdown()), dispatcher.shutdown()]);
+  await Promise.all([
+    ...[...pool.values()].map((a) => a.shutdown()),
+    ...[...dispatchers.values()].map((d) => d.shutdown()),
+  ]);
   process.exit(code);
 }
 

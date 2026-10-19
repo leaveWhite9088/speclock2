@@ -17,6 +17,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { usableProviders } from './pi-models.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -37,10 +38,16 @@ const MAX_EVENT_BYTES = 20_000;
 
 export class Dispatcher {
   /**
-   * @param {{ cwd: string, onEvent?: (ev: object) => void }} opts
+   * @param {{ cwd: string, project?: string|null, sessionDir?: string, onEvent?: (ev: object) => void }} opts
+   *
+   * With `project` set, the extension runs scoped: every tool call it makes carries
+   * that project, and agentd refuses anything outside it.
    */
-  constructor({ cwd, onEvent }) {
+  constructor({ cwd, project = null, sessionDir = SESSION_DIR, onEvent }) {
     this.cwd = cwd;
+    this.project = project;
+    this.sessionDir = sessionDir;
+    this.lastActive = Date.now();
     this.onEvent = onEvent ?? (() => {});
     this.child = null;
     this.buf = '';
@@ -63,7 +70,7 @@ export class Dispatcher {
   async ensureStarted() {
     if (this.child) return;
     mkdirSync(this.cwd, { recursive: true });
-    mkdirSync(SESSION_DIR, { recursive: true });
+    mkdirSync(this.sessionDir, { recursive: true });
 
     // --no-extensions plus -e: load exactly one extension, whatever the user
     // installed globally. --no-mcp avoids loading a project's MCP servers.
@@ -76,13 +83,17 @@ export class Dispatcher {
       EXTENSION,
       '--no-mcp',
       '--session-dir',
-      SESSION_DIR,
+      this.sessionDir,
     ];
     this.spawnCount += 1;
     log(`spawning pi rpc (spawn #${this.spawnCount}, cwd=${this.cwd})`);
 
+    const env = { ...process.env };
+    if (this.project) env.AGENTD_PROJECT = this.project;
+    else delete env.AGENTD_PROJECT;
     const child = spawn(NODE_BIN, args, {
       cwd: this.cwd,
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -163,6 +174,7 @@ export class Dispatcher {
 
   async command(type, params = {}, timeoutMs = 60_000) {
     if (!this.child) throw new Error('dispatcher is not running');
+    this.lastActive = Date.now();
     const id = `d-${this.nextId++}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -221,11 +233,17 @@ export class Dispatcher {
       /* optional */
     }
     const cur = st?.model ? `${st.model.provider}/${st.model.id}` : null;
+    // pi lists every model it knows. Only the ones with credentials can answer.
+    const usable = usableProviders();
+    const all = list?.models ?? [];
+    const shown = all.filter((m) => usable.has(m.provider) || `${m.provider}/${m.id}` === cur);
     return {
       current: cur,
       thinkingLevel: st?.thinkingLevel ?? null,
       thinkingLevels: levels,
-      models: (list?.models ?? []).map((m) => ({
+      hiddenWithoutCredentials: all.length - shown.length,
+      usableProviders: [...usable],
+      models: shown.map((m) => ({
         value: `${m.provider}/${m.id}`,
         provider: m.provider,
         id: m.id,
@@ -277,7 +295,7 @@ export class Dispatcher {
 
   async switchSession(sessionFile) {
     await this.ensureStarted();
-    if (!isInside(SESSION_DIR, sessionFile)) throw new Error('session file is outside the dispatcher session directory');
+    if (!isInside(this.sessionDir, sessionFile)) throw new Error('session file is outside the dispatcher session directory');
     await this.command('switch_session', { sessionPath: sessionFile }, 60_000);
     return this.state();
   }
@@ -320,7 +338,7 @@ export class Dispatcher {
         }
       }
     };
-    walk(SESSION_DIR);
+    walk(this.sessionDir);
     rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return { sessions: rows };
   }

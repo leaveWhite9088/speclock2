@@ -102,6 +102,25 @@ export class Scheduler {
   }
 }
 
+/** Stop every running agentd. The next `Scheduler.open()` starts a fresh one. */
+export async function stopDaemon() {
+  const { execFileSync } = await import('node:child_process');
+  try {
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*agentd.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+      ],
+      { stdio: 'ignore', timeout: 20_000 },
+    );
+  } catch {
+    /* nothing running */
+  }
+  await new Promise((r) => setTimeout(r, 800));
+}
+
 /** Shared assertion helpers so failures are readable. */
 export function check(label, ok, detail = '') {
   console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? `  (${detail})` : ''}`);

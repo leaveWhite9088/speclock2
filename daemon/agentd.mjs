@@ -34,7 +34,19 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENTS, BASE_CWD, pool, getAgent } from '../core/agent-pool.mjs';
+import {
+  AGENTS,
+  BASE_CWD,
+  CONFIG,
+  pool,
+  getAgent,
+  createInstance,
+  removeInstance,
+  listInstances,
+  readTranscript,
+} from '../core/agent-pool.mjs';
+import { Dispatcher } from '../core/dispatcher.mjs';
+import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -44,7 +56,7 @@ const ENDPOINT_FILE = join(ROOT, 'data', 'agentd.endpoint.json');
 /** Append-only log of finished runs, so receipts survive restarts and idle gaps. */
 const RECEIPTS_FILE = join(ROOT, 'data', 'receipts.jsonl');
 const IDLE_MS = Number(process.env.AGENTD_IDLE_MIN || 30) * 60_000;
-const PROTOCOL = 1;
+const PROTOCOL = 2;
 
 const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 const startedAt = new Date().toISOString();
@@ -112,6 +124,15 @@ function publishEpehemeral(jobId, payload) {
   if (allSubscribers.size) writeAll(allSubscribers, ev);
 }
 
+/**
+ * Deliver a live-only event to the connections that asked for everything
+ * (subscribe to '*'). Used for the dispatcher stream.
+ */
+function publishLive(event, payload) {
+  if (!allSubscribers.size) return;
+  writeAll(allSubscribers, { event, ts: new Date().toISOString(), ...payload });
+}
+
 function subscribe(sock, jobId) {
   if (jobId === '*') {
     allSubscribers.add(sock);
@@ -153,13 +174,23 @@ function eventsSince(afterId, limit = 500) {
 // Progress sink: every agent forwards its stream updates to subscribers.
 // ---------------------------------------------------------------------------
 
-for (const agent of pool.values()) {
+function wireAgent(agent) {
   agent.setProgressSink((jobId, p) => publishEpehemeral(jobId, p));
   // An unexpected exit is a health event even when no run is in flight.
   agent.onExit = (info) => {
     publish(allocEvent('agent.exit', { ...info }));
   };
 }
+for (const agent of pool.values()) wireAgent(agent);
+
+// ---------------------------------------------------------------------------
+// Dispatcher: the pi that picks the agent. Started on first use.
+// ---------------------------------------------------------------------------
+
+const dispatcher = new Dispatcher({
+  cwd: process.env.AGENTD_CWD_DISPATCHER || CONFIG?.dispatcher?.cwd || BASE_CWD,
+  onEvent: (ev) => publishLive('dispatcher.event', { data: ev }),
+});
 
 // ---------------------------------------------------------------------------
 // Receipts: one line per finished run
@@ -219,23 +250,81 @@ const OPS = {
     pid: process.pid,
     startedAt,
     baseCwd: BASE_CWD,
-    agents: Object.keys(AGENTS),
+    agents: [...pool.keys()],
+    types: Object.keys(AGENTS),
   }),
 
+  /** Every instance in the pool, built-in and created. */
   agents: () => ({
-    agents: Object.entries(AGENTS).map(([name, spec]) => {
-      const a = pool.get(name);
-      return {
-        name,
-        label: spec.label,
-        description: spec.description,
-        alive: Boolean(a?.child),
-        spawns: a?.spawnCount ?? 0,
-        sessionId: a?.sessionId ?? null,
-        busy: a?.busy ?? false,
-      };
-    }),
+    agents: [...pool.entries()].map(([name, a]) => ({
+      name,
+      type: a.type,
+      custom: a.custom,
+      label: a.spec.label,
+      description: a.spec.description,
+      cwd: a.spec.defaultCwd ?? null,
+      alive: Boolean(a.child),
+      spawns: a.spawnCount,
+      sessionId: a.sessionId,
+      busy: a.busy,
+    })),
   }),
+
+  instances: () => ({ instances: listInstances(), types: Object.keys(AGENTS) }),
+
+  'instance.create': ({ id, type, cwd }) => {
+    const agent = createInstance({ id, type, cwd });
+    wireAgent(agent);
+    return { id: agent.name, type: agent.type, cwd: agent.spec.defaultCwd };
+  },
+
+  'instance.remove': ({ id }) => removeInstance(id),
+
+  /**
+   * Conversation record of one session, as agentd saw it. Without sessionId it
+   * reads the instance's active session. Cursor: pass the last seq as `afterSeq`.
+   */
+  transcript: ({ agent, sessionId, afterSeq, limit, tail }) => {
+    const a = getAgent(agent);
+    const sid = sessionId || a.sessionId;
+    if (!sid) throw new Error(`${a.name} has no active session; pass sessionId`);
+    return readTranscript(a.name, sid, { afterSeq, limit, tail });
+  },
+
+  // -- dispatcher (the pi that chooses agents) ---------------------------
+
+  'dispatcher.state': () => dispatcher.state(),
+  'dispatcher.models': () => dispatcher.models(),
+  'dispatcher.setModel': ({ value }) => dispatcher.setModel(value),
+  'dispatcher.setThinking': ({ level }) => dispatcher.setThinking(level),
+  'dispatcher.prompt': ({ message }) => dispatcher.prompt(message),
+  'dispatcher.abort': () => dispatcher.abort(),
+  'dispatcher.new': () => dispatcher.newSession(),
+  'dispatcher.sessions': () => dispatcher.sessions(),
+  'dispatcher.use': ({ sessionFile }) => dispatcher.switchSession(sessionFile),
+  'dispatcher.messages': () => dispatcher.messages(),
+  'dispatcher.restart': () => dispatcher.restart(),
+
+  /** Providers and models in pi's models.json (secrets masked). */
+  'dispatcher.customModels': () => ({ agentDir: agentDir(), ...listProviders() }),
+
+  /**
+   * Add an LLM to the dispatcher: write it to models.json, then restart the
+   * dispatcher so pi reads the new file. Refused while a prompt is running.
+   */
+  'dispatcher.addModel': async (spec) => {
+    if (dispatcher.busy) throw new Error('dispatcher is working on a prompt; abort it first');
+    const written = addProvider(spec);
+    const state = dispatcher.child ? await dispatcher.restart() : await dispatcher.state();
+    return { ...written, dispatcher: state };
+  },
+
+  'dispatcher.removeModel': async ({ provider, modelIds }) => {
+    if (dispatcher.busy) throw new Error('dispatcher is working on a prompt; abort it first');
+    const removed = removeProvider(provider, modelIds);
+    const state = dispatcher.child ? await dispatcher.restart() : await dispatcher.state();
+    return { ...removed, dispatcher: state };
+  },
 
   status: ({ agent }) => getAgent(agent).status(),
 
@@ -327,7 +416,7 @@ const OPS = {
   /** Agent health view: liveness + last run's inferred attention. */
   health: async () => {
     const agents = [];
-    for (const name of Object.keys(AGENTS)) {
+    for (const name of [...pool.keys()]) {
       agents.push(await getAgent(name).serialized(() => getAgent(name).status()));
     }
     return { agents };
@@ -441,12 +530,12 @@ server.listen(PORT ?? PIPE_NAME, () => {
     log('could not publish endpoint file:', err.message);
   }
   log(`listening on ${endpoint} (pid ${process.pid})`);
-  log(`base cwd: ${BASE_CWD}; agents: ${Object.keys(AGENTS).join(', ')}`);
+  log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
 });
 
 // Idle shutdown: no clients, nothing running.
 setInterval(() => {
-  const busy = [...pool.values()].some((a) => a.busy);
+  const busy = [...pool.values()].some((a) => a.busy) || dispatcher.busy;
   if (connections === 0 && !busy && Date.now() - lastActivity > IDLE_MS) {
     log('idle; shutting down');
     shutdown(0);
@@ -459,7 +548,7 @@ async function shutdown(code) {
   } catch {
     /* ignore */
   }
-  await Promise.all([...pool.values()].map((a) => a.shutdown()));
+  await Promise.all([...[...pool.values()].map((a) => a.shutdown()), dispatcher.shutdown()]);
   process.exit(code);
 }
 

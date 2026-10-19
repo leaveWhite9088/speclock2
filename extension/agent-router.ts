@@ -4,7 +4,7 @@
  * It is the front door to `agentd`; the daemon keeps the agents, this file only
  * renders and routes. What it adds over a plain tool protocol:
  *   - live streaming through `onUpdate` (progress in the TUI, no context cost)
- *   - slash commands: /agents, /model, /usage
+ *   - slash commands: /agents, /agent-model, /agent-usage
  *   - rich result rendering (model, tokens, tok/s, cost)
  *
  * Everything about process lifetime and session state still lives in the daemon,
@@ -52,11 +52,16 @@ async function closeDaemon(): Promise<void> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const AGENT_NAMES = ["mcode", "dsh", "pi"] as const;
+/** Instance ids known to the daemon: mcode, dsh, pi and any created instance. */
+async function agentNames(c: Daemon): Promise<string[]> {
+	const { agents } = await c.call("agents");
+	return agents.map((a: any) => a.name);
+}
 
 const agentParam = Type.Optional(
 	Type.String({
-		description: 'Which scheduler agent to use: mcode, dsh, or pi. Default "mcode".',
+		description:
+			'Which agent instance to use: mcode, dsh, pi, or the id of an instance from agent_instances. Default "mcode".',
 	}),
 );
 
@@ -242,7 +247,7 @@ const sessionsTool = defineTool({
 
 	async execute(_id, params) {
 		const c = await daemon();
-		const names = params.agent ? [params.agent] : [...AGENT_NAMES];
+		const names = params.agent ? [params.agent] : await agentNames(c);
 		const blocks: string[] = [];
 		const data: any[] = [];
 
@@ -377,7 +382,7 @@ const statusTool = defineTool({
 	parameters: Type.Object({ agent: agentParam }),
 	async execute(_id, params) {
 		const c = await daemon();
-		const names = params.agent ? [params.agent] : [...AGENT_NAMES];
+		const names = params.agent ? [params.agent] : await agentNames(c);
 		const rows = [];
 		for (const name of names) rows.push(await c.call("status", { agent: name }));
 		const text = rows
@@ -399,6 +404,45 @@ const statusTool = defineTool({
 	},
 });
 
+const instancesTool = defineTool({
+	name: "agent_instances",
+	label: "Agent instances",
+	description:
+		"List agent instances: the built-in mcode, dsh and pi, and any created ones. " +
+		"Each instance is one resident process pinned to one directory.",
+	parameters: Type.Object({}),
+	async execute() {
+		const c = await daemon();
+		const { instances, types } = await c.call("instances");
+		const rows = instances.map(
+			(i: any) =>
+				`${i.id}  [${i.type}${i.custom ? ", created" : ""}]  ${i.alive ? "alive" : "stopped"}${i.busy ? ", busy" : ""}\n  cwd ${i.cwd ?? "(base)"}`,
+		);
+		return {
+			content: [{ type: "text", text: `${rows.join("\n")}\n\ntypes you can create: ${types.join(", ")}` }],
+			details: { instances, types },
+		};
+	},
+});
+
+const createInstanceTool = defineTool({
+	name: "agent_instance_create",
+	label: "Agent instance create",
+	description:
+		"Create another instance of mcode, dsh or pi, pinned to a directory. " +
+		"Use it when work must run in a different project than the existing instances.",
+	parameters: Type.Object({
+		id: Type.String({ description: "New instance id: a-z, 0-9, - or _, starts with a letter." }),
+		type: Type.String({ description: "mcode, dsh or pi." }),
+		cwd: Type.String({ description: "Directory the instance works in." }),
+	}),
+	async execute(_id, params) {
+		const c = await daemon();
+		const r = await c.call("instance.create", params);
+		return { content: [{ type: "text", text: `created ${r.id} (${r.type}) in ${r.cwd}` }], details: r };
+	},
+});
+
 function flatten(opts: any[] = []): any[] {
 	return opts.flatMap((o) => (Array.isArray(o.options) ? flatten(o.options) : [{ value: o.value, name: o.name }]));
 }
@@ -415,7 +459,8 @@ function parseDuration(s: string): number {
 // ---------------------------------------------------------------------------
 
 async function pickAgent(ctx: ExtensionContext): Promise<string | null> {
-	const c = await ctx.ui.select("Which agent?", [...AGENT_NAMES]);
+	const names = await agentNames(await daemon());
+	const c = await ctx.ui.select("Which agent?", names);
 	return c ?? null;
 }
 
@@ -434,6 +479,8 @@ export default function agentRouter(pi: ExtensionAPI) {
 	pi.registerTool(modelsTool);
 	pi.registerTool(setModelTool);
 	pi.registerTool(statusTool);
+	pi.registerTool(instancesTool);
+	pi.registerTool(createInstanceTool);
 
 	pi.registerCommand("agents", {
 		description: "Browse, switch and rename agent sessions",

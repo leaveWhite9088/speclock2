@@ -23,7 +23,7 @@ const LOG = join(ROOT, 'data', 'agentd.log');
 const PIPE_NAME = process.env.AGENTD_PIPE || '\\\\.\\pipe\\pi-agentd';
 const PORT = process.env.AGENTD_PORT ? Number(process.env.AGENTD_PORT) : null;
 const ENDPOINT_FILE = join(ROOT, 'data', 'agentd.endpoint.json');
-const PROTOCOL = 1;
+const PROTOCOL = 2;
 
 /**
  * Find the daemon the same way for every client.

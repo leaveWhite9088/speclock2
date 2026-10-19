@@ -93,15 +93,28 @@ const routes = [
   ['POST', '/api/agents/:id/run', ({ params, body }) => startRun(params.id, body)],
   ['POST', '/api/agents/:id/cancel', ({ params }) => call('cancel', { agent: params.id })],
 
-  ['GET', '/api/dispatcher', () => call('dispatcher.state')],
-  ['GET', '/api/dispatcher/models', () => call('dispatcher.models')],
-  ['POST', '/api/dispatcher/model', ({ body }) => call('dispatcher.setModel', { value: body.value })],
-  ['POST', '/api/dispatcher/thinking', ({ body }) => call('dispatcher.setThinking', { level: body.level })],
-  ['POST', '/api/dispatcher/prompt', ({ body }) => call('dispatcher.prompt', { message: body.message })],
-  ['POST', '/api/dispatcher/abort', () => call('dispatcher.abort')],
-  ['POST', '/api/dispatcher/new', () => call('dispatcher.new')],
-  ['GET', '/api/dispatcher/messages', () => call('dispatcher.messages')],
-  ['GET', '/api/dispatcher/sessions', () => call('dispatcher.sessions')],
+  // Projects. `?project=<id>` on the dispatcher routes picks that project's dispatcher;
+  // without it they address the global one.
+  ['GET', '/api/projects', () => call('projects')],
+  ['POST', '/api/projects', ({ body }) => call('project.create', body)],
+  ['DELETE', '/api/projects/:id', ({ params, query }) => call('project.remove', { project: params.id, force: query.force === '1' })],
+  ['POST', '/api/projects/:id/stop', ({ params, body }) => call('project.stop', { project: params.id, force: body.force === true })],
+  ['POST', '/api/projects/:id/instances', ({ params, body }) => call('project.addInstance', { ...body, project: params.id })],
+  [
+    'DELETE',
+    '/api/projects/:id/instances/:iid',
+    ({ params, query }) => call('project.removeInstance', { project: params.id, id: params.iid, force: query.force === '1' }),
+  ],
+
+  ['GET', '/api/dispatcher', ({ query }) => call('dispatcher.state', { project: query.project })],
+  ['GET', '/api/dispatcher/models', ({ query }) => call('dispatcher.models', { project: query.project })],
+  ['POST', '/api/dispatcher/model', ({ query, body }) => call('dispatcher.setModel', { project: query.project, value: body.value })],
+  ['POST', '/api/dispatcher/thinking', ({ query, body }) => call('dispatcher.setThinking', { project: query.project, level: body.level })],
+  ['POST', '/api/dispatcher/prompt', ({ query, body }) => call('dispatcher.prompt', { project: query.project, message: body.message })],
+  ['POST', '/api/dispatcher/abort', ({ query }) => call('dispatcher.abort', { project: query.project })],
+  ['POST', '/api/dispatcher/new', ({ query }) => call('dispatcher.new', { project: query.project })],
+  ['GET', '/api/dispatcher/messages', ({ query }) => call('dispatcher.messages', { project: query.project })],
+  ['GET', '/api/dispatcher/sessions', ({ query }) => call('dispatcher.sessions', { project: query.project })],
   ['GET', '/api/dispatcher/llms', () => call('dispatcher.customModels')],
   ['POST', '/api/dispatcher/llms', ({ body }) => call('dispatcher.addModel', body)],
   [

@@ -129,8 +129,25 @@ try {
   const badLlm = await api('POST', '/api/dispatcher/llms', { provider: 'x', baseUrl: 'https://x.test', apiKey: '!rm -rf', models: [{ id: 'm' }] });
   check('apiKey starting with ! is refused', badLlm.status === 400 && /shell command/.test(badLlm.body.error));
 
+  // projects
+  const pid = `p${Date.now().toString(36)}`;
+  const proot = mkdtempSync(join(tmpdir(), 'backend-proj-'));
+  const pc = await api('POST', '/api/projects', { id: pid, root: proot });
+  check('POST /api/projects creates a project', pc.status === 200);
+  const pi = await api('POST', `/api/projects/${pid}/instances`, { id: 'one', type: AG, dir: '.', role: 'tester' });
+  check('POST project instance works', pi.status === 200);
+  const esc = await api('POST', `/api/projects/${pid}/instances`, { id: 'two', type: AG, dir: '..' });
+  check('dir escaping the root is a 4xx', esc.status === 400 && /outside/.test(esc.body.error));
+  const pl = await api('GET', '/api/projects');
+  const mine = pl.body.projects.find((p) => p.id === pid);
+  check('GET /api/projects lists it with instances and limits', Boolean(mine?.instances.some((i) => i.key === `${pid}~one`)) && pl.body.limits.maxProcesses > 0);
+  const pd = await api('GET', `/api/dispatcher/models?project=${pid}`);
+  check('project dispatcher models route answers', pd.status === 200 && pd.body.models.length > 0);
+  const pdel = await api('DELETE', `/api/projects/${pid}`);
+  check('DELETE /api/projects/:id removes it', pdel.status === 200);
+
   // cleanup
-  const rm = await api('DELETE', `/api/instances/${id}`);
+  const rm =await api('DELETE', `/api/instances/${id}`);
   check('DELETE /api/instances/:id removes it', rm.status === 200 && rm.body.removed === true);
   ac.abort();
 } finally {

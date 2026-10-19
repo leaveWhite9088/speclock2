@@ -14,6 +14,25 @@ pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode /
 
 架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，踩过的坑和实测数据见 [LESSONS.md](LESSONS.md)。
 
+## 仓库结构（npm workspaces）
+
+| 包 | 作用 |
+| --- | --- |
+| `packages/agentd` | 调度器：daemon、agent 池、pi 扩展、调度器 pi、测试。以下大部分内容都在讲它 |
+| `packages/backend` | 薄网关：HTTP + SSE，每个路由对应 agentd 的一个操作，自己不存状态 |
+| `packages/web` | 看板：纯静态页面（无构建），开发服务器把 `/api` 代理到 backend |
+
+```powershell
+npm install            # 仅用于建立 workspace 链接，没有第三方依赖
+npm run backend        # http://127.0.0.1:8787，首次请求时自动拉起 agentd
+npm run web            # http://127.0.0.1:5173，打开这个
+npm test               # agentd 全部回归
+npm test -w @speclock/backend   # 网关测试
+```
+
+backend 只监听 `127.0.0.1`，并拒绝非本机的 Host / 跨站 Origin：它能运行 agent、改 pi 的 `models.json`，不要对外暴露。
+命令中的路径（`tools/`、`data/`、`agentd.config.json` 等）都相对 `packages/agentd`。
+
 ---
 
 ## 安装

@@ -53,6 +53,15 @@
                   └──► transcripts/  instances.json  dispatcher-sessions/
 ```
 
+**仓库是 monorepo，三层各一个包：**
+
+```
+web（静态页）──/api──► backend（HTTP+SSE 薄网关）──agentd-client──► agentd ──► 实例 / 调度器
+```
+
+backend 只是 agentd 的又一个客户端（和测试脚本、pi 扩展同级）：路由一对一映射到 agentd 操作，
+SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd 里，换前端或网关不动核心。
+
 ---
 
 ## 分层

@@ -25,7 +25,7 @@ const AGENTS = {
   },
   pi: {
     cmd: NODE_BIN,
-    args: ['D:/Project2/code-261013-speclock2/speclock2/server/pi-acp-adapter.mjs'],
+    args: ['D:/Project2/code-261013-speclock2/speclock2/packages/agentd/server/pi-acp-adapter.mjs'],
   },
 };
 

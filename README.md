@@ -23,7 +23,7 @@ pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode /
 ```powershell
 # 项目级（需要项目信任）
 #   <project>/.pi/extensions/agent-router.ts 内容：
-#   export { default } from "../../speclock2/extension/agent-router.ts";
+#   export { default } from "../../speclock2/packages/agentd/extension/agent-router.ts";
 
 # 用户级（所有项目生效）
 copy speclock2\extension\agent-router.ts $env:USERPROFILE\.pi\agent\extensions\

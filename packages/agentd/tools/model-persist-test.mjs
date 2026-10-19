@@ -76,7 +76,7 @@ function stopDaemon() {
         [
           '--input-type=module',
           '-e',
-          "import('file:///D:/Project2/code-261013-speclock2/speclock2/client/agentd-client.mjs').then(async m=>{const r=await m.isRunning();process.exit(r?0:1)});",
+          "import('file:///D:/Project2/code-261013-speclock2/speclock2/packages/agentd/client/agentd-client.mjs').then(async m=>{const r=await m.isRunning();process.exit(r?0:1)});",
         ],
         { stdio: 'ignore', timeout: 4000 },
       );

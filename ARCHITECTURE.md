@@ -6,7 +6,7 @@
 ┌──────────────────────────────────────────────────────────┐
 │ pi（TUI）                                                 │
 │   extension: agent-router                                │
-│     · 8 个工具                                           │
+│     · 10 个工具                                          │
 │     · 3 个斜杠命令                                        │
 │     · onUpdate 流式渲染（不占 context）                    │
 │     · abort signal → session/cancel                      │
@@ -36,6 +36,22 @@
 
 为什么是 daemon：agent 进程的寿命不应该绑在 pi 会话上。没有 daemon 时，3 个 pi 窗口
 = 3 套 agent（约 2GB）、3 份互不相识的会话状态、并发写同一个 sidecar 丢更新。
+
+**三项扩展（协议版本 2）**
+
+- **多实例**：池里的单位是「实例」而不是「CLI 类型」。实例 id → 一个 AcpClient 进程 → 一个固定目录。
+  内置实例 id 等于类型名；自建实例存 `data/instances.json`。
+- **对话记录**：`core/transcripts.mjs` 把经手的每一轮追加到 `data/transcripts/<实例>/<sessionId>.jsonl`，
+  `seq` 做游标。这是「补 harness 缺的」：ACP 不提供读历史的统一方式。
+- **调度器就是 pi**：`core/dispatcher.mjs` 持有一个 `pi --mode rpc`（加载 agent-router 扩展），
+  由它的 LLM 决定调哪个实例。池里的 `pi` agent 是 `--no-extensions` 的执行者，二者是两个进程。
+  LLM 通过 `core/pi-models.mjs` 写 pi 的 `models.json` 来增删，随后重启调度器。
+
+```
+看板/客户端 ──► agentd ──► dispatcher (pi rpc + 扩展) ──agent_run──► agentd ──► 实例 × N
+                  │
+                  └──► transcripts/  instances.json  dispatcher-sessions/
+```
 
 ---
 
@@ -243,6 +259,10 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
 | --- | --- | --- |
 | 对话历史 | 各 harness 的磁盘 | 不碰，只要求 resume |
 | 会话 id | harness 生成 | 记录 + 映射 |
+| 对话内容（经 agentd 的） | 我们（`data/transcripts/`） | 追加记录 |
+| 调度器对话历史 | pi（`data/dispatcher-sessions/`） | 不复制，按需读取 |
+| 自建实例清单 | 我们（`data/instances.json`） | 持久化 + 启动时恢复 |
+| pi 的 LLM 清单 | pi（`models.json`） | 显式命令才写，写前备份 |
 | 活跃会话指针 | 我们（连接内） | 持有 |
 | 标签 / 模型选择 | 我们（sidecar） | 补 harness 的缺口 |
 | job / 进度 / 回执 | 我们 | 生成、持久化、广播 |
@@ -294,4 +314,6 @@ harness 自己能做好的，我们不做。每项状态都必须对应某个 ha
 - **标签只在本地**：不写回 harness
 - **pi 适配器 cwd 固定**：工作目录在进程启动时确定
 - **无 `session/close`**：切过的会话会留在进程内存里
+- **对话记录不含 agentd 之外的会话**：直接在 CLI 里聊的内容我们看不到
+- **改 models.json 要重启调度器**：pi 只在启动时读取该文件；调度器忙时拒绝修改
 - **未做 Web**：事件层已经具备条件（id + 重放 + 回执），但还没有 HTTP 出口

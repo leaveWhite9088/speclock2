@@ -78,6 +78,10 @@ pi 会自己决定调哪个工具、哪个 agent。你也可以显式说：
 | `agent_models` | 列模型 / 推理强度 / 权限选项 | `agent`、`sessionId` |
 | `agent_set_model` | 为会话设模型 | `value`、`configId` |
 | `agent_status` | 存活、健康、会话、模型、spawns、pid、cwd | `agent` |
+| `agent_instances` | 列出所有实例（内置 + 自建）及可创建的类型 | — |
+| `agent_instance_create` | 为同一个 CLI 再建一个实例，绑定自己的目录 | `id`、`type`、`cwd` |
+
+`agent` 参数现在是**实例 id**：内置实例的 id 就是类型名（`mcode`、`dsh`、`pi`），自建实例用自己的 id。
 
 几个约定：
 
@@ -124,10 +128,62 @@ log:         data/runs/pi-xxx.log
 
 目录不存在会自动创建。改配置后需要重启 daemon（`npm run daemon:stop`，下次调用自动拉起）。
 
+调度器 pi（见下）的启动目录用 `"dispatcher": { "cwd": "..." }`，也可用 `AGENTD_CWD_DISPATCHER`。
+
+### 多实例：同一个 CLI 跑多份
+
+一个 CLI 类型可以有多个实例，每个实例是独立进程、固定在自己的目录里，会话列表互不混。
+实例记录在 `data/instances.json`，重启 daemon 后自动恢复。
+
+```
+agentd 操作：instances | instance.create {id,type,cwd} | instance.remove {id}
+```
+
+- id 以字母开头，只含 `a-z 0-9 - _`，最长 32；不能和已有实例重名
+- 内置实例不能删除；内置实例的会话列表不包含自建实例目录下的会话
+
+### 对话记录
+
+agentd 把它经手的每一轮对话记在 `data/transcripts/<实例>/<sessionId>.jsonl`（user / assistant 两类条目，
+带递增 `seq`、`jobId`、`stopReason`），看板读它即可，不必向 agent 要历史。
+
+```
+agentd 操作：transcript {agent, sessionId?, afterSeq?, limit?, tail?}
+```
+
+不传 `sessionId` 取活跃会话；`afterSeq` 用来增量拉取；agentd 没经手过的会话返回 `recorded:false`。
+
+### 调度器：由 pi（及其 LLM）决定调哪个 agent
+
+调度器是 agentd 持有的一个 `pi --mode rpc` 进程，加载了 agent-router 扩展，由它的 LLM（例如 DeepSeek）
+读用户请求并调用 `agent_run` 等工具。注意它和池里的 `pi` agent 不是一回事：后者带 `--no-extensions`，只是执行者。
+
+| 操作 | 作用 |
+| --- | --- |
+| `dispatcher.state` / `models` / `setModel {value}` / `setThinking {level}` | 状态、可用模型、切换模型（`provider/modelId`） |
+| `dispatcher.prompt {message}` / `abort` | 发请求 / 中断；进度以 `dispatcher.event` 推给订阅 `*` 的连接 |
+| `dispatcher.new` / `sessions` / `use {sessionFile}` / `messages` | 会话管理与历史（历史由 pi 自己保存） |
+| `dispatcher.customModels` / `addModel` / `removeModel` | 增删 pi 的 LLM（写 `models.json`，然后重启调度器） |
+| `dispatcher.restart` | 重启调度器进程，会话自动恢复 |
+
+添加 LLM 示例（参数名与 pi 的 `models.json` 一致）：
+
+```json
+{ "provider": "my-llm", "baseUrl": "https://example.com/v1", "apiKey": "$MY_LLM_KEY",
+  "models": [{ "id": "my-model", "name": "My Model", "reasoning": false }] }
+```
+
+- `apiKey` 写环境变量引用（`$NAME`）或字面值；以 `!` 开头会被拒绝（pi 会把它当 shell 命令执行）
+- 文件在 `PI_CODING_AGENT_DIR`（默认 `~/.pi/agent`）下，写入前备份为 `models.json.bak`
+- 调度器正在处理请求时拒绝修改，先 `dispatcher.abort`
+
 ### 环境变量
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
+| `AGENTD_CWD_DISPATCHER` | 基准目录 | 调度器 pi 的工作目录 |
+| `PI_CLI` / `PI_NODE_BIN` | 本机安装路径 | 调度器启动 pi 用的入口 / node |
+| `DISPATCHER_SESSION_DIR` | `./data/dispatcher-sessions` | 调度器会话文件目录 |
 | `AGENTD_BASE_CWD` | `D:/Project2/.../speclock2` | 没配置时的默认工作区 |
 | `AGENTD_CWD_<AGENT>` | — | 覆盖某个 agent 的目录 |
 | `AGENTD_DEFAULT_AGENT` | `mcode` | 不指定 agent 时的默认值 |
@@ -168,6 +224,10 @@ npm run test:health   # 健康信号 + 回执 + 崩溃恢复
 npm run test:stream   # 流式 + 指标
 npm run test:daemon   # 单 daemon / 单套 agent
 npm run test:cwd      # 每个 agent 的启动目录
+npm run test:models-json  # models.json 编辑器（纯单元，不调 LLM）
+npm run test:instances    # 多实例
+npm run test:transcript   # 对话记录
+npm run test:dispatcher   # 调度器（加 -- --prompt 会真的调一次 LLM）
 npm run bench         # 切换开销基准
 
 npm run daemon        # 前台启动（调试用）
@@ -187,6 +247,9 @@ npm run daemon:stop   # 停掉
 | `receipts.jsonl` | 每次运行的回执，追加式 |
 | `runs/<jobId>.log` | 单次运行的流式正文 |
 | `pi-sessions/` | pi agent 自己的会话文件 |
+| `instances.json` | 自建实例（id / 类型 / 目录） |
+| `transcripts/` | 按实例、会话分文件的对话记录 |
+| `dispatcher-sessions/` | 调度器 pi 的会话文件 |
 
 ### 排查
 
@@ -213,5 +276,8 @@ npm run daemon:stop   # 停掉
 - 流式粒度取决于 agent：dsh 只发 1 个 chunk（整段返回）
 - mcode / dsh 不暴露 token 数
 - 会话标签只在本地，agent 自己的界面看不到
+- 对话记录只含经 agentd 的轮次；在 agentd 之外直接用 CLI 产生的会话没有记录
+- 新增 LLM 要重启调度器 pi 才生效（agentd 自动做，但会打断空闲前的进程内状态）
+- 协议版本为 2；旧版 daemon 需先 `npm run daemon:stop`
 - pi agent 的 cwd 在进程启动时固定，改它要重启 daemon
 - 切过的会话会一直留在进程内存里（没有调用 `session/close`）

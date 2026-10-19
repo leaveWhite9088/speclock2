@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>agentd 看板</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><b>agentd 看板</b><span id="conn" class="dim">连接中…</span></header>
+<main>
+  <section id="col-agents">
+    <h2>实例</h2>
+    <ul id="agents"></ul>
+    <form id="form-instance">
+      <h3>新建实例</h3>
+      <select name="type" id="types"></select>
+      <input name="id" placeholder="实例 id，例如 dsh-b" required>
+      <input name="cwd" placeholder="目录，例如 D:/work/b" required>
+      <button>创建</button>
+    </form>
+  </section>
+
+  <section id="col-session">
+    <h2 id="session-title">选择一个实例</h2>
+    <ul id="sessions"></ul>
+    <div id="transcript"></div>
+    <form id="form-run">
+      <textarea name="prompt" rows="2" placeholder="直接发给这个实例（走 agentd，会写入对话记录）"></textarea>
+      <button>发送</button>
+    </form>
+  </section>
+
+  <section id="col-dispatcher">
+    <h2>调度器（pi）</h2>
+    <div class="row">
+      <select id="dmodels"></select>
+      <button id="dnew">新会话</button>
+      <button id="dabort">中断</button>
+    </div>
+    <div id="dstate" class="dim"></div>
+    <div id="dlog"></div>
+    <form id="form-dispatch">
+      <textarea name="message" rows="2" placeholder="对调度器说：让 dsh 做 X、让 mcode 做 Y…"></textarea>
+      <button>发送</button>
+    </form>
+    <details>
+      <summary>添加 LLM</summary>
+      <form id="form-llm">
+        <input name="provider" placeholder="provider，例如 my-llm" required>
+        <input name="baseUrl" placeholder="baseUrl，例如 https://api.x.com/v1" required>
+        <input name="apiKey" placeholder="apiKey：$ENV_NAME 或字面值" required>
+        <input name="model" placeholder="模型 id" required>
+        <button>添加并重启调度器</button>
+      </form>
+      <pre id="llms" class="dim"></pre>
+    </details>
+  </section>
+</main>
+<div id="toast"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

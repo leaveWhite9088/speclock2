@@ -1,0 +1,10 @@
+{
+  "name": "@speclock/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dashboard: static files plus a tiny dev server that proxies /api to the backend.",
+  "scripts": {
+    "dev": "node serve.mjs"
+  }
+}

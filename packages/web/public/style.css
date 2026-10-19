@@ -1,0 +1,32 @@
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif; background: #f6f7f9; color: #1c1e21; height: 100vh; display: flex; flex-direction: column; }
+header { padding: 8px 16px; background: #1c1e21; color: #fff; display: flex; gap: 12px; align-items: baseline; }
+.dim { color: #8a8f98; font-size: 12px; }
+header .dim { color: #b5bac3; }
+main { flex: 1; display: grid; grid-template-columns: 260px 1fr 380px; gap: 12px; padding: 12px; min-height: 0; }
+section { background: #fff; border: 1px solid #e1e4e8; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+h2 { margin: 0 0 8px; font-size: 15px; }
+h3 { margin: 12px 0 6px; font-size: 13px; }
+ul { list-style: none; margin: 0; padding: 0; overflow: auto; }
+li { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
+li:hover { background: #f0f2f5; }
+li.sel { background: #e3edff; }
+li small { color: #8a8f98; display: block; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #c4c8ce; display: inline-block; margin-right: 6px; }
+.dot.on { background: #2da44e; } .dot.busy { background: #d29922; }
+form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+input, select, textarea, button { font: inherit; padding: 6px 8px; border: 1px solid #d0d4da; border-radius: 6px; background: #fff; }
+button { background: #1f6feb; color: #fff; border-color: #1f6feb; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 6px; } .row select { flex: 1; min-width: 0; }
+#sessions { max-height: 120px; border-bottom: 1px solid #eee; margin-bottom: 8px; }
+#transcript, #dlog { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 0; min-height: 0; }
+.msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; max-width: 92%; }
+.msg.user { background: #e3edff; align-self: flex-end; }
+.msg.assistant { background: #f0f2f5; align-self: flex-start; }
+.msg.tool { background: #fff8e1; font-size: 12px; align-self: flex-start; font-family: ui-monospace, Consolas, monospace; }
+.msg small { display: block; color: #8a8f98; font-size: 11px; margin-bottom: 2px; }
+details { margin-top: 8px; } summary { cursor: pointer; }
+pre { white-space: pre-wrap; margin: 6px 0 0; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #b42318; color: #fff; padding: 8px 14px; border-radius: 6px; display: none; max-width: 70vw; }
+#toast.ok { background: #1a7f37; }

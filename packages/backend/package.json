@@ -1,0 +1,14 @@
+{
+  "name": "@speclock/backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP + SSE gateway in front of agentd. No logic of its own.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node test/api-test.mjs"
+  },
+  "dependencies": {
+    "@speclock/agentd": "*"
+  }
+}

@@ -1,16 +1,2 @@
-# python
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-
-# node
+data/
 node_modules/
-dist/
-
-# 运行时数据（账本与注册表不入库）
-backend/data/
-
-# 杂项
-*.log
-.DS_Store

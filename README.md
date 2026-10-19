@@ -196,6 +196,29 @@ agentd 操作：transcript {agent, sessionId?, afterSeq?, limit?, tail?}
 - 文件在 `PI_CODING_AGENT_DIR`（默认 `~/.pi/agent`）下，写入前备份为 `models.json.bak`
 - 调度器正在处理请求时拒绝修改，先 `dispatcher.abort`
 
+### 项目：配置单元
+
+项目 = 一个根目录 + 一个调度器（pi，cwd 就是根目录）+ 一组实例（`id`、`type`、相对根目录的 `dir`、`role`）。
+实例只属于一个项目、不共享，池里的键是 `<项目>~<实例>`；不同项目可以有同名实例，各自是独立进程。
+配置存在 `data/projects.json`，重启 daemon 后恢复。
+
+- **切项目只是切视图**：其它项目的进程继续跑，不卸载。
+- **懒启动**：创建实例只写配置，第一次用才拉起进程；空闲超过 `limits.idleMinutes`（默认 15）自动回收，下次用到再起。
+- **进程总数上限** `limits.maxProcesses`（默认 12，或 `AGENTD_MAX_PROCESSES`），超了拒绝拉起。
+- **隔离**：`dir` 必须落在根目录内（拒绝 `..`、根外绝对路径、指向根外的符号链接/junction）。
+  项目调度器的所有工具调用都被限定在本项目内（环境变量 `AGENTD_PROJECT`，daemon 端改写 agent 名并拒绝含 `~` 的名字）。
+- **角色**：`role` 是给调度器看的用途说明（`agent_instances` 会列出）。没写则取 `agentd.config.json` 的 `roles.<类型>`。
+- **确认**：关闭/删除项目、删除实例时若还有任务在跑，会返回 `still running: …`，带 `force` 重发才会中断它们（看板会弹确认）。
+- 调度器模型列表只显示有凭据的模型（`auth.json`、`models.json` 里带 apiKey 的 provider、`<NAME>_API_KEY` 环境变量）。
+
+```
+agentd 操作：projects | project.create {id,name?,root,instances?} | project.addInstance {project,id,type,dir,role?}
+            project.removeInstance {project,id,force?} | project.stop {project,force?} | project.remove {project,force?}
+            agents/instances/dispatcher.* 均可带 {project}；带 {project, short:true} 时名字不带前缀
+```
+
+协议版本 3。后端对应 `/api/projects…`，调度器路由加 `?project=<id>`。
+
 ### 环境变量
 
 | 变量 | 默认 | 作用 |

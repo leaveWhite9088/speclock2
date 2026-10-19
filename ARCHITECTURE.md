@@ -271,6 +271,7 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
 | 对话内容（经 agentd 的） | 我们（`data/transcripts/`） | 追加记录 |
 | 调度器对话历史 | pi（`data/dispatcher-sessions/`） | 不复制，按需读取 |
 | 自建实例清单 | 我们（`data/instances.json`） | 持久化 + 启动时恢复 |
+| 项目清单（根目录、实例、角色） | 我们（`data/projects.json`） | 持久化 + 启动时恢复；项目调度器会话在 `data/dispatcher-sessions/<项目>/` |
 | pi 的 LLM 清单 | pi（`models.json`） | 显式命令才写，写前备份 |
 | 活跃会话指针 | 我们（连接内） | 持有 |
 | 标签 / 模型选择 | 我们（sidecar） | 补 harness 的缺口 |

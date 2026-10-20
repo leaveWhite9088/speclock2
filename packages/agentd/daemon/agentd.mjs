@@ -469,6 +469,13 @@ const OPS = {
 
   sessions: async ({ agent }) => getAgent(agent).serialized(() => getAgent(agent).listSessions()),
 
+  /** Start the process now (manual retry after a failed start). */
+  start: async ({ agent }) => {
+    const a = getAgent(agent);
+    await a.serialized(() => a.ensureReady());
+    return a.status();
+  },
+
   use: async ({ agent, sessionId, cwd }) => getAgent(agent).useSession(sessionId, cwd),
 
   new: async ({ agent, cwd }) => {

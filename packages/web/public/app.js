@@ -268,8 +268,24 @@ function renderHead() {
   const busy = dsp ? project()?.dispatcher?.busy : m?.busy;
   const alive = dsp ? project()?.dispatcher?.alive : m?.alive;
   $('head-state').textContent = busy ? '工作中' : alive ? '待命' : m?.lastError ? `启动失败：${m.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
+  $('btn-retry').hidden = !(m && !alive && m.lastError);
   $('input').placeholder = dsp ? '告诉调度器要做什么，例如：让后端执行者修一下登录接口' : `直接对 ${m?.id ?? ''} 说话`;
   $('btn-abort').hidden = !busy;
+}
+
+async function retryStart() {
+  const m = member(state.sel);
+  if (!m) return;
+  const btn = $('btn-retry');
+  btn.disabled = true;
+  $('head-state').textContent = '正在启动…';
+  try {
+    await api('POST', `/api/agents/${enc(m.key)}/start`);
+  } catch (e) {
+    toast(e.message);
+  }
+  btn.disabled = false;
+  await loadProjects();
 }
 
 function toggleDrawer(open) {
@@ -278,6 +294,7 @@ function toggleDrawer(open) {
   if (open) renderDrawer().catch((e) => toast(e.message));
 }
 $('btn-settings').onclick = () => toggleDrawer(!state.drawer);
+$('btn-retry').onclick = retryStart;
 
 function section(title, ...children) {
   const s = el('section', 'dr-sec');

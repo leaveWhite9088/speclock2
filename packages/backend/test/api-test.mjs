@@ -138,6 +138,8 @@ try {
   check('POST project instance works', pi.status === 200);
   const esc = await api('POST', `/api/projects/${pid}/instances`, { id: 'two', type: AG, dir: '..' });
   check('dir escaping the root is a 4xx', esc.status === 400 && /outside/.test(esc.body.error));
+  const st = await api('POST', `/api/agents/${pid}~one/start`);
+  check('POST start brings the process up', st.status === 200 && st.body.alive === true, JSON.stringify(st.body).slice(0, 80));
   const pl = await api('GET', '/api/projects');
   const mine = pl.body.projects.find((p) => p.id === pid);
   check('GET /api/projects lists it with instances and limits', Boolean(mine?.instances.some((i) => i.key === `${pid}~one`)) && pl.body.limits.maxProcesses > 0);

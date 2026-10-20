@@ -191,7 +191,8 @@ export class AcpClient {
         this._write({
           jsonrpc: '2.0',
           id: msg.id,
-          result: picked ? { optionId: picked.optionId } : {},
+          // The ACP shape; some adapters (claude) treat anything else as a refusal.
+          result: { outcome: picked ? { outcome: 'selected', optionId: picked.optionId } : { outcome: 'cancelled' } },
         });
       } else {
         this._write({

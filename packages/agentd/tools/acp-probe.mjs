@@ -100,7 +100,7 @@ child.stdout.on('data', (chunk) => {
         const opts = msg.params?.options ?? [];
         const pick = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? '')) ?? opts[0];
         child.stdin.write(
-          JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: pick ? { optionId: pick.optionId } : {} }) + '\n',
+          JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { outcome: pick ? { outcome: 'selected', optionId: pick.optionId } : { outcome: 'cancelled' } } }) + '\n',
         );
       }
     }

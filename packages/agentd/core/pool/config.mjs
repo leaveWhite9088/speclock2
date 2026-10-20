@@ -1,6 +1,7 @@
 /** Constants, the CLI registry and `agentd.config.json`. Nothing here talks to a process. */
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +23,17 @@ export const LABELS_FILE = process.env.AGENTD_LABELS_FILE || join(DATA_DIR, 'ses
 export const RUNS_DIR = process.env.AGENTD_RUNS_DIR || join(DATA_DIR, 'runs');
 
 /** Registry: add an entry to support another ACP-capable CLI. */
+/** The `env` block of the user's Claude Code settings, as plain strings. Never logged. */
+function claudeSettingsEnv() {
+  try {
+    const file = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json');
+    const env = JSON.parse(readFileSync(file, 'utf8'))?.env ?? {};
+    return Object.fromEntries(Object.entries(env).map(([k, v]) => [k, String(v)]));
+  } catch {
+    return {};
+  }
+}
+
 export const AGENTS = {
   mcode: {
     label: 'MiniMax Code',
@@ -48,9 +60,10 @@ export const AGENTS = {
     label: 'Claude Code',
     cmd: NODE_BIN,
     args: [`${NODE_MODULES}/@agentclientprotocol/claude-agent-acp/dist/index.js`],
-    // Use the installed Claude Code (and its login), not the copy bundled with the adapter.
-    env: { CLAUDE_CODE_EXECUTABLE: `${NODE_MODULES}/@anthropic-ai/claude-code/bin/claude.exe` },
-    description: 'Claude Code through the ACP adapter. Needs `claude auth login` once on this machine.',
+    // Use the installed Claude Code, and the `env` block of the user's own ~/.claude/settings.json (endpoint, model, token):
+    // the adapter does not read that block itself, so without it the CLI reports "not logged in".
+    env: { CLAUDE_CODE_EXECUTABLE: `${NODE_MODULES}/@anthropic-ai/claude-code/bin/claude.exe`, ...claudeSettingsEnv() },
+    description: 'Claude Code through the ACP adapter. Uses the endpoint and login configured in ~/.claude/settings.json.',
     defaultCwd: process.env.AGENTD_CWD_CLAUDE || null,
   },
   codex: {

@@ -49,6 +49,7 @@ import {
   seedContexts,
 } from '../core/agent-pool.mjs';
 import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
+import { createHandoffs } from '../core/handoff.mjs';
 import * as projects from '../core/projects.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
@@ -182,8 +183,11 @@ function eventsSince(afterId, limit = 500) {
 
 function wireAgent(agent) {
   agent.setProgressSink((jobId, p) => publishEpehemeral(jobId, p));
+  agent.onCompact = (info) => {
+    publish(allocEvent('agent.compacted', info));
+    suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次从约 ${info.before?.used} 降到 ${info.after?.used} token`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
+  };
   // An unexpected exit is a health event even when no run is in flight.
-  agent.onCompact = (info) => publish(allocEvent('agent.compacted', info));
   agent.onExit = (info) => {
     publish(allocEvent('agent.exit', { ...info }));
   };
@@ -243,12 +247,34 @@ const AGENT_ARG_OPS = new Set([
  * deletes one, and an executor's directory is fixed when it is created. The one way a dispatcher changes a
  * session is the confirmed handoff, which runs inside agentd and never goes through these ops.
  */
-const DISPATCHER_DENIED = new Set(['use', 'new', 'rename', 'deleteSession', 'instance.remove', 'project.updateInstance']);
+const DISPATCHER_DENIED = new Set(['use', 'new', 'rename', 'deleteSession', 'instance.remove', 'project.updateInstance', 'handoff.generate', 'handoff.apply', 'handoff.cancel']);
 function checkCaller(op, args) {
   if (args?.caller !== 'dispatcher') return;
   const sessionArgs = op === 'run' && (args.reset || args.sessionId || args.cwd);
   if (DISPATCHER_DENIED.has(op) || sessionArgs) {
     throw new Error(`the dispatcher cannot do "${op}": switching, creating, renaming or deleting sessions and changing an executor's directory are done by a person. Send the task with agent_run, or ask the user.`);
+  }
+}
+
+const handoffs = createHandoffs({
+  getAgent: (key) => getAgent(key),
+  keyOf: (project, id) => `${project}${projects.SEP}${id}`,
+  onChange: (p) => publishLive('handoff.changed', { project: p.project, data: p }),
+});
+
+/**
+ * Objective drift signals. Crossing one only raises a proposal; a person still has to confirm it. Context size alone
+ * is never a signal: compaction deals with that.
+ */
+const COMPACTIONS_BEFORE_HANDOFF = 3;
+const FAILURES_BEFORE_HANDOFF = 3;
+const failStreak = new Map();
+function suggestHandoff(agent, reason, evidence, when = true) {
+  if (!when || !agent.project) return;
+  try {
+    handoffs.propose({ project: agent.project, agent: agent.shortId, reason, evidence });
+  } catch (err) {
+    log('handoff proposal skipped:', err.message);
   }
 }
 
@@ -337,6 +363,13 @@ async function stopProjectProcesses(project, force) {
 }
 
 const OPS = {
+  /** The dispatcher may only propose; a person generates, reviews and applies. */
+  'handoff.propose': (a) => handoffs.propose(a),
+  'handoff.list': (a) => handoffs.list(a),
+  'handoff.generate': (a) => handoffs.generate(a),
+  'handoff.apply': (a) => handoffs.apply(a),
+  'handoff.cancel': (a) => handoffs.cancel(a),
+
   hello: () => ({
     protocol: PROTOCOL,
     epoch: EPOCH,
@@ -558,6 +591,10 @@ const OPS = {
         ev.id,
       );
       publish(ev);
+      const failed = !!error || !!result?.metrics?.error;
+      const streak = failed ? (failStreak.get(a.name) ?? 0) + 1 : 0;
+      failStreak.set(a.name, streak);
+      suggestHandoff(a, `连续 ${streak} 次任务失败`, `最近 ${streak} 次运行都失败了：${error?.message ?? result?.metrics?.error ?? ''}`, streak >= FAILURES_BEFORE_HANDOFF);
       return ev;
     };
 

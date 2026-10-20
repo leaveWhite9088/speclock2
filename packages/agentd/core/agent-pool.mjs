@@ -871,11 +871,6 @@ class AcpClient {
   }
 
   /**
-   * Start a prompt and return `{ jobId, done }` immediately, so the caller can
-   * report the job id before the run finishes (async / streaming mode).
-   */
-  /** Front ends register one sink; it receives (jobId, progressPayload). */
-  /**
    * Past the configured size, ask the CLI to compact: only between runs, never while the executor works, and not
    * again when the last compaction did not bring the conversation down (it would only loop).
    */
@@ -893,7 +888,7 @@ class AcpClient {
       await this.startPrompt(cmd, { timeoutMs: 600_000 }).done;
       const after = contextOf(this);
       noteSession(this.name, sessionId, { compactions: (e.compactions ?? 0) + 1, compactedAt: Date.now(), lastCompactUsed: ctx.used });
-      this.onCompact?.({ agent: this.name, sessionId, before: ctx, after, threshold: limit });
+      this.onCompact?.({ agent: this.name, sessionId, before: ctx, after, threshold: limit, compactions: (e.compactions ?? 0) + 1 });
     } catch (err) {
       log(`[${this.name}] compaction failed: ${err.message}`);
     } finally {
@@ -901,10 +896,15 @@ class AcpClient {
     }
   }
 
+  /** Front ends register one sink; it receives (jobId, progressPayload). */
   setProgressSink(fn) {
     this.progressSink = fn;
   }
 
+  /**
+   * Start a prompt and return `{ jobId, done }` immediately, so the caller can
+   * report the job id before the run finishes (async / streaming mode).
+   */
   startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const done = this._enqueue(async () => {

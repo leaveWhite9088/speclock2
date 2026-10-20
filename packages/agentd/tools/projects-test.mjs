@@ -156,6 +156,16 @@ try {
   await fails(call('project.updateInstance', { project: A, id: 'tmp2', dir: '..' }), /outside|cannot be changed/, 'moving outside the root is rejected');
   await fails(call('use', { agent: `${A}~tmp2`, sessionId: 'x', project: A, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot switch sessions');
   await fails(call('run', { agent: 'tmp2', project: A, prompt: 'x', reset: true, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot reset a session through run');
+  const prop = await call('handoff.propose', { agent: 'tmp2', project: A, reason: 'test', evidence: 'e', caller: 'dispatcher' });
+  check('the dispatcher can propose a handoff', prop.status === 'pending' && prop.agent === 'tmp2', JSON.stringify(prop));
+  const again = await call('handoff.propose', { agent: 'tmp2', project: A, reason: 'again', caller: 'dispatcher' });
+  check('a second proposal for the same executor reuses the open one', again.id === prop.id);
+  await fails(call('handoff.generate', { id: prop.id, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot generate a handoff');
+  await fails(call('handoff.apply', { id: prop.id, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot apply a handoff');
+  await fails(call('handoff.apply', { id: prop.id }), /not ready/, 'apply needs a reviewed document first');
+  check('open proposals are listed', (await call('handoff.list', { project: A })).handoffs.some((h) => h.id === prop.id));
+  await call('handoff.cancel', { id: prop.id });
+  check('a cancelled proposal leaves the list', !(await call('handoff.list', { project: A })).handoffs.some((h) => h.id === prop.id));
   await call('project.removeInstance', { project: A, id: 'tmp2' });
 
   // 7. busy refusal

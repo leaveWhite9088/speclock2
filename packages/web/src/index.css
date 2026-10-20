@@ -90,6 +90,15 @@
   [hidden] { display: none !important; }
 }
 
+/* The one control style, taken from the project bar: no outlines, a soft fill on hover, floating panels with a hairline
+   border and a soft shadow. Every button, field, menu, dialog and drawer is built from these; components add layout only. */
+@layer components {
+  .ctl { @apply inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md whitespace-nowrap transition-colors hover:bg-hover disabled:pointer-events-none disabled:opacity-45; }
+  .field { @apply rounded-md bg-hover text-[13.5px] transition-colors placeholder:text-muted focus-visible:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30; }
+  .surface { @apply rounded-lg border border-line bg-raised shadow-pop; }
+  .menu-item { @apply flex w-full flex-col items-start rounded-sm px-2.5 py-1.5 text-left hover:bg-hover aria-selected:bg-hover aria-selected:font-semibold; }
+}
+
 /* Rendered markdown (react-markdown output): the one place that styles bare tags. */
 .md { min-width: 0; max-width: 100%; }
 .md > :first-child { margin-top: 0; }

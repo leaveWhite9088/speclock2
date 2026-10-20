@@ -29,7 +29,6 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const { data: sessions, isPending: sessionsLoading, isError } = useProbeSessions(project?.id ?? "", type, dir, open);
 
   const known = ['./', ...dirs.map((d) => relDir(d))];
-  const dirHint = !form.dir.trim() ? '选已有目录；填一个不存在的会自动创建' : known.includes(dir) ? `使用已有目录 ${dir}` : `${dir} 不存在，创建时会自动建好`;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -63,7 +62,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
           <Field label="CLI">
             <Select value={type} onChange={(v) => set({ type: v, model: '', sessionId: 'new' })} options={types.map((t) => ({ value: t, label: t }))} />
           </Field>
-          <Field label="目录" hint={dirHint}>
+          <Field label="目录">
             <Input
               required
               list="member-dirs"

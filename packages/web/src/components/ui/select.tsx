@@ -37,7 +37,7 @@ export function Select({ value, onChange, options, placeholder, disabled, classN
         <RS.Content
           position="popper"
           sideOffset={4}
-          className="z-[70] max-h-72 min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border border-line bg-raised p-1.5 shadow-pop"
+          className="surface z-[70] max-h-72 min-w-(--radix-select-trigger-width) overflow-hidden p-1.5"
         >
           <RS.Viewport>
             {options.map((o) => (

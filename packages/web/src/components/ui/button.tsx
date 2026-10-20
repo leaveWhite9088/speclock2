@@ -3,14 +3,14 @@ import type { ButtonHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 
 export const buttonVariants = cva(
-  'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent text-[13.5px] transition-colors disabled:pointer-events-none disabled:opacity-45',
+  'ctl text-[13.5px]',
   {
     variants: {
       variant: {
-        primary: 'bg-ink font-semibold text-bg hover:opacity-90',
-        outline: 'border-line-2 hover:bg-hover',
-        ghost: 'hover:bg-hover',
-        dashed: 'border-dashed border-line-2 text-ink-2 hover:border-solid hover:text-ink',
+        primary: 'bg-ink font-semibold text-bg hover:bg-ink hover:opacity-90',
+        outline: 'bg-hover hover:bg-line',
+        ghost: '',
+        dashed: 'text-ink-2 hover:text-ink',
         danger: 'text-danger hover:bg-hover',
         link: 'h-auto px-0 text-[12.5px] font-medium text-accent hover:underline',
         linkDanger: 'h-auto px-0 text-[12.5px] font-medium text-danger hover:underline',

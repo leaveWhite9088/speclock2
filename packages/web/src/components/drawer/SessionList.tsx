@@ -74,7 +74,7 @@ export function SessionList({ rows, error, emptyText, onUse, onRename, onDelete 
               <span className={cn('max-w-full truncate', r.current && 'font-semibold text-accent')}>{r.title || '（无标题）'}</span>
               <small className="text-[11.5px] text-muted">{r.current ? `${r.sub} · 当前` : r.sub}</small>
             </button>
-            <Button size="iconSm" variant="ghost" className="opacity-35 group-hover:opacity-100 focus-visible:opacity-100" title="重命名" aria-label="重命名" onClick={() => {
+            <Button size="iconSm" variant="ghost" className="" title="重命名" aria-label="重命名" onClick={() => {
                 cancelled.current = false;
                 setEditing(r.key);
               }}>
@@ -84,7 +84,7 @@ export function SessionList({ rows, error, emptyText, onUse, onRename, onDelete 
               <Button
                 size="iconSm"
                 variant="ghost"
-                className="opacity-35 group-hover:opacity-100 hover:text-danger focus-visible:opacity-100"
+                className="hover:text-danger"
                 title="删除会话"
                 aria-label="删除会话"
                 onClick={run(async () => {

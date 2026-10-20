@@ -1,4 +1,3 @@
-import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dot } from '@/components/ui/dot';
@@ -37,8 +36,7 @@ export function Sidebar() {
       <ProjectBar />
       <MemberList />
       <div className="grid gap-2 px-3 pt-2 pb-3 max-[620px]:hidden">
-        <Button variant="dashed" className="w-full" disabled={!project} onClick={() => setCreating(true)}>
-          <Plus className="size-4" />
+        <Button variant="outline" className="w-full" disabled={!project} onClick={() => setCreating(true)}>
           新建执行者
         </Button>
         <StatusBar />

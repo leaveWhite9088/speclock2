@@ -13,7 +13,7 @@ export function PopoverContent({ className, ...rest }: ComponentProps<typeof RP.
       <RP.Content
         align="start"
         sideOffset={6}
-        className={cn('z-40 w-(--radix-popover-trigger-width) min-w-60 rounded-lg border border-line bg-raised p-1.5 shadow-pop', className)}
+        className={cn('surface z-40 w-(--radix-popover-trigger-width) min-w-60 p-1.5', className)}
         {...rest}
       />
     </RP.Portal>
@@ -25,7 +25,7 @@ export function MenuItem({ className, ...rest }: ComponentProps<'button'>) {
   return (
     <button
       type="button"
-      className={cn('flex w-full flex-col items-start rounded-sm px-2.5 py-1.5 text-left hover:bg-hover aria-selected:bg-hover aria-selected:font-semibold', className)}
+      className={cn('menu-item', className)}
       {...rest}
     />
   );

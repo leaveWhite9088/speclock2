@@ -50,7 +50,7 @@ export function Composer({ placeholder, busy, onSend }: Props) {
         e.preventDefault();
         void submit();
       }}
-      className="mx-auto mb-5 flex w-[calc(100%-48px)] max-w-[740px] items-end gap-1.5 rounded-lg border border-line-2 bg-bg py-1 pr-1 pl-3 focus-within:border-accent"
+      className="mx-auto mb-5 flex w-[calc(100%-48px)] max-w-[740px] items-end gap-1.5 field rounded-lg py-1 pr-1 pl-3 focus-within:bg-raised focus-within:ring-2 focus-within:ring-accent/30"
     >
       <textarea
         ref={box}
@@ -68,7 +68,7 @@ export function Composer({ placeholder, busy, onSend }: Props) {
         className="max-h-[220px] min-h-8 flex-1 resize-none bg-transparent py-1.5 leading-[1.55] outline-none placeholder:text-muted"
       />
       {busy ? (
-        <Button size="none" className="size-8 bg-hover text-ink hover:bg-line-2" title="中断" aria-label="中断" onClick={() => void abort()}>
+        <Button size="none" className="size-8 bg-line text-ink hover:bg-line-2" title="中断" aria-label="中断" onClick={() => void abort()}>
           <Square className="size-3.5 fill-current" />
         </Button>
       ) : null}

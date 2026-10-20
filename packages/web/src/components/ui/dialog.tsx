@@ -15,7 +15,7 @@ export function DialogContent({
     <RD.Portal>
       <RD.Overlay className="fixed inset-0 z-50 bg-black/40" />
       <RD.Content
-        className={cn('fixed top-1/2 left-1/2 z-50 w-[min(460px,94vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-line bg-raised p-5 shadow-pop', className)}
+        className={cn('fixed top-1/2 left-1/2 z-50 w-[min(460px,94vw)] -translate-x-1/2 -translate-y-1/2 surface p-5', className)}
         {...rest}
       >
         <RD.Title className="m-0 text-base font-semibold">{title}</RD.Title>

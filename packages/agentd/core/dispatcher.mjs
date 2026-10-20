@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { usableProviders } from './pi-models.mjs';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,31 @@ const DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor']);
 
 /** Largest event we forward whole. Bigger ones are cut to a marker. */
 const MAX_EVENT_BYTES = 20_000;
+
+/** First user message of a pi session file, as a title. Reads only the head of the file. */
+function firstUserText(file) {
+  try {
+    const fd = openSync(file, 'r');
+    const buf = Buffer.alloc(65536);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    closeSync(fd);
+    for (const line of buf.toString('utf8', 0, n).split('\n')) {
+      let o;
+      try {
+        o = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const m = o?.message;
+      if (m?.role !== 'user') continue;
+      const t = typeof m.content === 'string' ? m.content : (m.content ?? []).map((c) => c.text ?? '').join(' ');
+      if (t.trim()) return t.trim().replace(/\s+/g, ' ').slice(0, 60);
+    }
+  } catch {
+    /* no title */
+  }
+  return null;
+}
 
 export class Dispatcher {
   /**
@@ -127,6 +152,8 @@ export class Dispatcher {
       this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
     });
 
+    // After a daemon restart nothing is remembered in memory: go back to the newest conversation.
+    if (!this.resumeFile) this.resumeFile = this.sessions().sessions[0]?.file ?? null;
     if (this.resumeFile && existsSync(this.resumeFile)) {
       try {
         await this.command('switch_session', { sessionPath: this.resumeFile }, 60_000);
@@ -329,6 +356,7 @@ export class Dispatcher {
           }
           rows.push({
             file: p,
+            title: firstUserText(p),
             sessionId: header?.id ?? null,
             cwd: header?.cwd ?? null,
             updatedAt: statSync(p).mtime.toISOString(),

@@ -441,6 +441,16 @@ const OPS = {
   /** Existing sessions of a CLI type in a project directory, to pick from when creating an instance. */
   'project.sessions': ({ project, type, dir }) => projects.probeSessions(project, type, dir),
 
+  /** Edit an instance: role and preferred model. A running instance with a session switches model now. */
+  'project.updateInstance': async ({ project, id, role, model }) => {
+    const r = projects.updateInstance(project, id, { role, model });
+    const agent = pool.get(r.key);
+    if (model && agent.child && agent.sessionId && !agent.busy) {
+      await agent.setConfigOption('model', model, agent.sessionId).catch(() => {});
+    }
+    return r;
+  },
+
   'project.removeInstance': ({ project, id, force }) => projects.removeInstance(project, id, { force }),
 
   /** Close a project: stop its processes. Configuration and sessions stay. */

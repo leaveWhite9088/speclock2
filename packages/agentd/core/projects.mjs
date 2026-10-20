@@ -251,6 +251,24 @@ export async function probeSessions(projectId, type, dir = '.') {
   }
 }
 
+/** Change what an instance is for and which model it prefers. Directory and type are fixed. */
+export function updateInstance(projectId, id, { role, model }) {
+  const project = find(projectId);
+  const inst = project.instances.find((i) => i.id === id);
+  if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
+  const agent = pool.get(keyOf(projectId, id));
+  if (role !== undefined) {
+    inst.role = role ? String(role).slice(0, 500) : null;
+    agent.role = inst.role ?? agent.role;
+  }
+  if (model !== undefined) {
+    inst.model = model ? String(model).slice(0, 200) : null;
+    agent.preferModel = inst.model ?? defaultModelFor(inst.type);
+  }
+  save();
+  return { key: agent.name, id, role: inst.role, model: inst.model };
+}
+
 function busyOf(agents) {
   return agents.filter((a) => a.busy).map((a) => a.shortId);
 }

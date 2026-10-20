@@ -107,6 +107,12 @@ const routes = [
   ],
   ['POST', '/api/projects/:id/instances', ({ params, body }) => call('project.addInstance', { ...body, project: params.id })],
   [
+    'PATCH',
+    '/api/projects/:id/instances/:iid',
+    ({ params, body }) => call('project.updateInstance', { project: params.id, id: params.iid, role: body.role, model: body.model }),
+  ],
+  ['POST', '/api/agents/:id/use', ({ params, body }) => call('use', { agent: params.id, sessionId: body.sessionId })],
+  [
     'DELETE',
     '/api/projects/:id/instances/:iid',
     ({ params, query }) => call('project.removeInstance', { project: params.id, id: params.iid, force: query.force === '1' }),
@@ -118,6 +124,7 @@ const routes = [
   ['POST', '/api/dispatcher/thinking', ({ query, body }) => call('dispatcher.setThinking', { project: query.project, level: body.level })],
   ['POST', '/api/dispatcher/prompt', ({ query, body }) => call('dispatcher.prompt', { project: query.project, message: body.message })],
   ['POST', '/api/dispatcher/abort', ({ query }) => call('dispatcher.abort', { project: query.project })],
+  ['POST', '/api/dispatcher/use', ({ query, body }) => call('dispatcher.use', { project: query.project, sessionFile: body.sessionFile })],
   ['POST', '/api/dispatcher/new', ({ query }) => call('dispatcher.new', { project: query.project })],
   ['GET', '/api/dispatcher/messages', ({ query }) => call('dispatcher.messages', { project: query.project })],
   ['GET', '/api/dispatcher/sessions', ({ query }) => call('dispatcher.sessions', { project: query.project })],
@@ -198,7 +205,7 @@ const server = http.createServer(async (req, res) => {
 
     const hit = match(req.method, url.pathname);
     if (!hit) throw new HttpError(404, `no route for ${req.method} ${url.pathname}`);
-    const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : {};
+    const body = req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' ? await readBody(req) : {};
     const result = await hit.r.handler({ params: hit.params, query: Object.fromEntries(url.searchParams), body });
     json(res, 200, result ?? {});
   } catch (err) {

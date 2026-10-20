@@ -2,80 +2,92 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>agentd 看板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentd</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <b>agentd 看板</b>
-  <label>项目 <select id="project"></select></label>
-  <button id="btn-stop" class="ghost" title="停掉这个项目的所有进程，配置和会话保留">关闭项目</button>
-  <button id="btn-delete" class="ghost danger" title="删除项目配置">删除项目</button>
-  <details id="new-project">
-    <summary>新建项目</summary>
-    <form id="form-project">
-      <input name="id" placeholder="项目 id，例如 shop" required>
-      <input name="name" placeholder="显示名（可选）">
-      <input name="root" placeholder="根目录（绝对路径，必须已存在）" required>
-      <button>创建</button>
-    </form>
-  </details>
-  <span id="limits" class="dim"></span>
-  <span id="conn" class="dim">连接中…</span>
-</header>
-<main>
-  <section id="col-agents">
-    <h2 id="agents-title">实例</h2>
-    <ul id="agents"></ul>
-    <form id="form-instance">
-      <h3>新建实例</h3>
-      <select name="type" id="types"></select>
-      <input name="id" placeholder="实例 id，例如 dsh-backend" required>
-      <input name="dir" id="dir-input" placeholder="目录" required>
-      <input name="role" placeholder="用途（调度器据此选人），例如 后端服务">
-      <label class="dim">模型 <select name="model" id="model-input"><option value="">（默认）</option></select></label>
-      <label class="dim">会话 <select name="sessionId" id="session-input"><option value="new">新建会话</option></select></label>
-      <button>创建</button>
-    </form>
-  </section>
+<div id="app">
 
-  <section id="col-session">
-    <h2 id="session-title">选择一个实例</h2>
-    <ul id="sessions"></ul>
-    <div id="transcript"></div>
-    <form id="form-run">
-      <textarea name="prompt" rows="2" placeholder="直接发给这个实例（走 agentd，会写入对话记录）"></textarea>
-      <button>发送</button>
-    </form>
-  </section>
-
-  <section id="col-dispatcher">
-    <h2 id="dispatcher-title">调度器（pi）</h2>
-    <div class="row">
-      <select id="dmodels"></select>
-      <button id="dnew">新会话</button>
-      <button id="dabort">中断</button>
-    </div>
-    <div id="dstate" class="dim"></div>
-    <div id="dlog"></div>
-    <form id="form-dispatch">
-      <textarea name="message" rows="2" placeholder="对调度器说：让后端实例做 X、让前端实例做 Y…"></textarea>
-      <button>发送</button>
-    </form>
-    <details>
-      <summary>添加 LLM</summary>
-      <form id="form-llm">
-        <input name="provider" placeholder="provider，例如 my-llm" required>
-        <input name="baseUrl" placeholder="baseUrl，例如 https://api.x.com/v1" required>
-        <input name="apiKey" placeholder="apiKey：$ENV_NAME 或字面值" required>
-        <input name="model" placeholder="模型 id" required>
-        <button>添加并重启调度器</button>
+  <aside id="side">
+    <div class="side-top">
+      <div class="proj-row">
+        <select id="project" aria-label="当前项目"></select>
+        <button id="btn-newproj" class="icon" title="新建项目" aria-label="新建项目">＋</button>
+        <button id="btn-projmenu" class="icon" title="项目操作" aria-label="项目操作">⋯</button>
+      </div>
+      <div id="projmenu" class="pop" hidden>
+        <button id="btn-stop">关闭项目<small>停掉所有进程，配置和会话保留</small></button>
+        <button id="btn-delete" class="danger">删除项目<small>移除配置，目录里的文件不动</small></button>
+      </div>
+      <form id="form-project" class="pop" hidden>
+        <input name="id" placeholder="项目 id，例如 shop" required autocomplete="off">
+        <input name="name" placeholder="显示名（可不填）" autocomplete="off">
+        <input name="root" placeholder="根目录，绝对路径，需已存在" required autocomplete="off">
+        <div class="pop-actions"><button type="button" class="ghost" id="cancel-project">取消</button><button class="primary">创建项目</button></div>
       </form>
-      <pre id="llms" class="dim"></pre>
-    </details>
-  </section>
-</main>
-<div id="toast"></div>
+    </div>
+
+    <nav id="members" aria-label="成员"></nav>
+
+    <div class="side-bottom">
+      <button id="btn-newmember" class="ghost wide">＋ 新建执行者</button>
+      <div id="limits" class="dim"></div>
+      <div id="conn" class="dim">连接中…</div>
+    </div>
+  </aside>
+
+  <main id="chat">
+    <header id="chat-head">
+      <div class="head-main">
+        <h1 id="head-title">&nbsp;</h1>
+        <div id="head-tag"></div>
+      </div>
+      <div class="head-side">
+        <span id="head-state" class="dim"></span>
+        <button id="btn-settings" class="ghost">设置</button>
+      </div>
+    </header>
+
+    <div id="stream" tabindex="-1" aria-live="polite"></div>
+
+    <form id="composer">
+      <textarea id="input" rows="1" placeholder="" aria-label="消息"></textarea>
+      <div class="composer-row">
+        <span id="composer-hint" class="dim">Enter 发送，Shift+Enter 换行</span>
+        <span>
+          <button type="button" id="btn-abort" class="ghost" hidden>中断</button>
+          <button id="btn-send" class="primary">发送</button>
+        </span>
+      </div>
+    </form>
+  </main>
+
+  <aside id="drawer" hidden aria-label="设置"></aside>
+</div>
+
+<dialog id="dlg-member">
+  <form id="form-member" method="dialog">
+    <h2>新建执行者</h2>
+    <p class="dim">执行者是一个固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。</p>
+    <label>名称<input name="id" placeholder="例如 dsh-backend" required autocomplete="off"></label>
+    <div class="two">
+      <label>CLI<select name="type" id="m-type"></select></label>
+      <label>目录<input name="dir" id="m-dir" placeholder="相对项目根目录，例如 ./server" required autocomplete="off"></label>
+    </div>
+    <label>用途<input name="role" placeholder="调度器据此挑人，例如 后端服务" autocomplete="off"></label>
+    <div class="two">
+      <label>模型<select name="model" id="m-model"><option value="">默认</option></select></label>
+      <label>会话<select name="sessionId" id="m-session"><option value="new">新建会话</option></select></label>
+    </div>
+    <div class="dlg-actions">
+      <button type="button" class="ghost" id="cancel-member">取消</button>
+      <button class="primary">创建执行者</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status"></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

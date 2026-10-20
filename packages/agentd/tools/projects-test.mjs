@@ -120,6 +120,13 @@ try {
   const free = await call('project.sessions', { project: A, type: TYPE, dir: '.' });
   check('project.sessions offers existing sessions of that directory', free.sessions.some((x) => x.sessionId === r2.sessionId), `${free.sessions.length}`);
 
+  // editing an instance
+  const upd = await call('project.updateInstance', { project: A, id: 'srv', role: 'changed role', model: pick.value });
+  check('project.updateInstance changes role and model', upd.role === 'changed role' && upd.model === pick.value);
+  const shown = (await call('projects')).projects.find((p) => p.id === A).instances.find((i) => i.id === 'srv');
+  check('the change shows in the project listing', shown.role === 'changed role' && shown.preferModel === pick.value);
+  await fails(call('project.updateInstance', { project: A, id: 'nope', role: 'x' }), /unknown instance/, 'updating an unknown instance is rejected');
+
   // 7. busy refusal
   const started = await call('run', { agent: `${A}~srv`, prompt: 'Count slowly from 1 to 200, one number per line.', async: true });
   await new Promise((res) => setTimeout(res, 1500));

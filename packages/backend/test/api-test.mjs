@@ -141,6 +141,10 @@ try {
   const pl = await api('GET', '/api/projects');
   const mine = pl.body.projects.find((p) => p.id === pid);
   check('GET /api/projects lists it with instances and limits', Boolean(mine?.instances.some((i) => i.key === `${pid}~one`)) && pl.body.limits.maxProcesses > 0);
+  const patch = await api('PATCH', `/api/projects/${pid}/instances/one`, { role: 'edited' });
+  check('PATCH project instance edits it', patch.status === 200 && patch.body.role === 'edited');
+  const dsess = await api('GET', `/api/dispatcher/sessions?project=${pid}`);
+  check('dispatcher sessions route answers', dsess.status === 200 && Array.isArray(dsess.body.sessions));
   const pd = await api('GET', `/api/dispatcher/models?project=${pid}`);
   check('project dispatcher models route answers', pd.status === 200 && pd.body.models.length > 0);
   const pdel = await api('DELETE', `/api/projects/${pid}`);

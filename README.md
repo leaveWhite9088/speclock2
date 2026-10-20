@@ -210,6 +210,9 @@ agentd 操作：transcript {agent, sessionId?, afterSeq?, limit?, tail?}
   项目调度器的所有工具调用都被限定在本项目内（环境变量 `AGENTD_PROJECT`，daemon 端改写 agent 名并拒绝含 `~` 的名字）。
 - **创建实例时可选模型和会话**：`model`（不填则用 `agentd.config.json` 的 `defaultModels.<类型>`，mcode 默认 M3）；`sessionId` 填已有会话即接着用，不填或 `new` 就在首次使用时新建。
   实例会记住最后用的会话，进程被回收或 daemon 重启后回到同一个会话。可选项由 `project.models {type}` 和 `project.sessions {project,type,dir}` 提供（用临时进程探测，已被别的实例占用的会话不会列出）。
+- **设置抽屉**：看板主界面只放对话；每个成员（调度器、执行者）右上的「设置」里改用途、模型、会话（切换/新建）。
+  对应操作 `project.updateInstance {project,id,role?,model?}`、`use`/`new`（执行者会话）、`dispatcher.use`/`new`/`sessions`（调度器会话，带标题）。
+  调度器重启后回到最新的会话。
 - **角色**：`role` 是给调度器看的用途说明（`agent_instances` 会列出）。没写则取 `agentd.config.json` 的 `roles.<类型>`。
 - **确认**：关闭/删除项目、删除实例时若还有任务在跑，会返回 `still running: …`，带 `force` 重发才会中断它们（看板会弹确认）。
 - 调度器模型列表只显示有凭据的模型（`auth.json`、`models.json` 里带 apiKey 的 provider、`<NAME>_API_KEY` 环境变量）。

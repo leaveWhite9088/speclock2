@@ -46,7 +46,33 @@ function seedGuides(project) {
     }
   };
   put(project.root, 'project.md');
-  for (const inst of project.instances) put(resolve(project.root, inst.dir), 'executor.md');
+  for (const inst of project.instances) {
+    const dir = resolve(project.root, inst.dir);
+    put(dir, 'executor.md');
+    seedSkills(dir, inst.type);
+  }
+}
+
+/** Where each CLI looks for project skills. mcode reads `.minimax/skills`; dsh and pi read `.agents/skills`. */
+const SKILL_ROOT = { mcode: '.minimax/skills' };
+const DEFAULT_SKILL_ROOT = '.agents/skills';
+const SKILLS_SRC = join(dirname(CONTEXTS), 'skills');
+
+/** Copy the bundled skills into an executor directory, never over a file that is already there. */
+function seedSkills(dir, type) {
+  try {
+    if (!isDir(dir) || !isDir(SKILLS_SRC)) return;
+    for (const name of readdirSync(SKILLS_SRC)) {
+      const src = join(SKILLS_SRC, name, 'SKILL.md');
+      if (!existsSync(src)) continue;
+      const target = join(dir, SKILL_ROOT[type] ?? DEFAULT_SKILL_ROOT, name);
+      if (existsSync(join(target, 'SKILL.md'))) continue;
+      mkdirSync(target, { recursive: true });
+      copyFileSync(src, join(target, 'SKILL.md'));
+    }
+  } catch (err) {
+    log('could not write skills in', dir, err.message);
+  }
 }
 
 const DATA_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'data');

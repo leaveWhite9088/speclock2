@@ -328,6 +328,72 @@ const linkBtn = (text, fn, cls = '') => {
   return b;
 };
 
+// -- forms with drafts ----------------------------------------------------------
+// Every settings form works the same way: edits are kept as a draft (so a reload or a
+// switch to another member does not lose them), and nothing is applied until 提交.
+
+/**
+ * @param key      localStorage key for the draft
+ * @param specs    [{ name, label, control, saved, secret? }]  `saved` is the value in effect now;
+ *                 a `secret` field is never written to the draft
+ * @param submit   async (values) => void
+ */
+function draftForm(key, specs, submitText, submit) {
+  let draft = {};
+  try {
+    draft = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {};
+  } catch {
+    /* a broken draft is just no draft */
+  }
+  const form = el('form', 'form inline');
+  const note = el('span', 'dim');
+  const undo = linkBtn('撤销修改', () => {
+    for (const s of specs) s.control.value = s.saved ?? '';
+    localStorage.removeItem(key);
+    refresh();
+  });
+  const go = el('button', 'primary', submitText);
+  const actions = el('div', 'actions');
+  actions.append(go, undo, note);
+
+  const values = () => Object.fromEntries(specs.map((s) => [s.name, s.control.value.trim()]));
+  const dirty = () => specs.some((s) => s.control.value.trim() !== (s.saved ?? '').trim());
+  function refresh() {
+    const d = dirty();
+    go.disabled = !d || !form.checkValidity();
+    undo.hidden = !d;
+    note.textContent = d ? '有未提交的修改，已存为草稿' : '';
+  }
+  const store = () => {
+    const keep = Object.fromEntries(specs.filter((s) => !s.secret && s.control.value.trim() !== (s.saved ?? '').trim()).map((s) => [s.name, s.control.value]));
+    if (Object.keys(keep).length) localStorage.setItem(key, JSON.stringify(keep));
+    else localStorage.removeItem(key);
+    refresh();
+  };
+
+  for (const s of specs) {
+    s.control.value = draft[s.name] ?? s.saved ?? '';
+    // A draft value that is no longer a choice (a select) falls back to the saved one.
+    if (s.control.value !== (draft[s.name] ?? s.saved ?? '')) s.control.value = s.saved ?? '';
+    s.control.addEventListener('input', store);
+    s.control.addEventListener('change', store);
+    form.append(field(s.label, s.control));
+  }
+  form.append(actions);
+  form.onsubmit = guard(async (e) => {
+    e.preventDefault();
+    go.disabled = true;
+    try {
+      await submit(values());
+      localStorage.removeItem(key);
+    } finally {
+      refresh();
+    }
+  });
+  refresh();
+  return form;
+}
+
 /** One session line: click to switch, pencil to rename in place. */
 function sessionRow(title, sub, current, onUse, onRename) {
   const row = el('div', `sess-row${current ? ' cur' : ''}`);
@@ -397,33 +463,9 @@ async function executorSettings() {
   await ensureCatalog(m.type, true);
   const cat = state.catalog[m.type] ?? { models: [], default: null };
 
-  // Every field saves as soon as it changes.
-  const save = async (patch, undo) => {
-    if (patch.dir !== undefined && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return undo();
-    try {
-      const r = await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, patch);
-      if (r.key !== m.key) state.sel = r.key;
-      toast('已保存', true);
-      await loadProjects();
-      if (patch.name !== undefined || patch.dir !== undefined) await loadConversation();
-      await renderDrawer();
-    } catch (e) {
-      undo();
-      toast(e.message);
-    }
-  };
-  const bind = (input, key, current) => {
-    input.onchange = () => {
-      const v = input.value.trim();
-      if (key === 'name' && !v) return (input.value = current);
-      if (v !== current) save({ [key]: v }, () => (input.value = current));
-    };
-    return input;
-  };
-
-  const name = bind(textInput(m.id), 'name', m.id);
-  const role = bind(textInput(m.role, '调度器据此挑人'), 'role', m.role ?? '');
-  const dir = bind(textInput(m.dir, '相对项目根目录'), 'dir', m.dir);
+  const name = textInput(m.id);
+  const role = textInput('', '调度器据此挑人，例如 后端服务');
+  const dir = textInput('', '相对项目根目录');
   const sel = el('select');
   let cur = m.model ?? m.preferModel ?? '';
   if (cur === cat.default) cur = '';
@@ -431,11 +473,32 @@ async function executorSettings() {
   for (const mo of cat.models) sel.append(opt(mo.name || mo.value, mo.value));
   // The saved choice must show even when the model list could not be read.
   if (cur && ![...sel.options].some((o) => o.value === cur)) sel.append(opt(modelName(m.type, cur) ?? cur, cur));
-  sel.value = cur;
-  sel.onchange = () => save({ model: sel.value || null }, () => (sel.value = cur));
+  name.required = true;
 
-  const form = el('div', 'form inline');
-  form.append(field('名称', name), field('用途', role), field('目录', dir), field('模型', sel));
+  const form = draftForm(
+    `draft:instance:${state.project}:${m.id}`,
+    [
+      { name: 'name', label: '名称', control: name, saved: m.id },
+      { name: 'role', label: '用途', control: role, saved: m.role ?? '' },
+      { name: 'dir', label: '目录', control: dir, saved: m.dir },
+      { name: 'model', label: '模型', control: sel, saved: cur },
+    ],
+    '提交修改',
+    async (v) => {
+      const patch = {};
+      if (v.name !== m.id) patch.name = v.name;
+      if (v.role !== (m.role ?? '')) patch.role = v.role;
+      if (v.dir !== m.dir) patch.dir = v.dir;
+      if (v.model !== cur) patch.model = v.model || null;
+      if (patch.dir !== undefined && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return;
+      const r = await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, patch);
+      if (r.key !== m.key) state.sel = r.key;
+      toast('已提交', true);
+      await loadProjects();
+      if (patch.name !== undefined || patch.dir !== undefined) await loadConversation();
+      await renderDrawer();
+    },
+  );
   wrap.append(form);
 
   const base = `/api/agents/${enc(m.key)}`;
@@ -540,32 +603,25 @@ async function dispatcherSettings() {
   );
 
   // LLMs are shared by every project's dispatcher.
-  const lf = el('form', 'form');
-  for (const [n, ph] of [
-    ['provider', '名称，例如 my-llm'],
-    ['baseUrl', '接口地址，例如 https://api.x.com/v1'],
-    ['apiKey', 'API key：写 $环境变量名 或直接填值'],
-    ['model', '模型 id'],
-  ]) {
-    const i = textInput('', ph);
-    i.name = n;
-    i.required = true;
-    lf.append(i);
-  }
-  const add = el('button', 'ghost', '添加并重启调度器');
-  lf.append(add);
-  lf.onsubmit = guard(async (e) => {
-    e.preventDefault();
-    const v = Object.fromEntries(new FormData(lf));
-    add.disabled = true;
-    try {
+  const lf = draftForm(
+    'draft:llm',
+    [
+      ['provider', '名称', '例如 my-llm', false],
+      ['baseUrl', '地址', '例如 https://api.x.com/v1', false],
+      ['apiKey', 'Key', '写 $环境变量名 或直接填值', true],
+      ['model', '模型 id', '', false],
+    ].map(([name, label, ph, secret]) => {
+      const control = textInput('', ph);
+      control.required = true;
+      return { name, label, control, saved: '', secret };
+    }),
+    '添加并重启调度器',
+    async (v) => {
       await api('POST', '/api/dispatcher/llms', { provider: v.provider, baseUrl: v.baseUrl, apiKey: v.apiKey, models: [{ id: v.model }] });
       toast('已添加，运行中的调度器已重启', true);
       await renderDrawer();
-    } finally {
-      add.disabled = false;
-    }
-  });
+    },
+  );
   const llms = el('pre', 'plain', '读取中…');
   api('GET', '/api/dispatcher/llms').then((l) => {
     llms.textContent = l.providers.length
@@ -911,6 +967,11 @@ function connectEvents() {
     });
   }
 }
+
+// A provider added to pi while this page was in the background: re-read the list on return.
+window.addEventListener('focus', () => {
+  if (state.project && isDispatcher()) refreshDispatcher().catch(() => {});
+});
 
 // -- start --------------------------------------------------------------------
 

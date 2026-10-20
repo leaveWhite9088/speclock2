@@ -17,7 +17,7 @@
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { usableProviders } from './pi-models.mjs';
+import { agentDir, usableProviders } from './pi-models.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -111,6 +111,7 @@ export class Dispatcher {
       this.sessionDir,
     ];
     this.spawnCount += 1;
+    this.startedAt = Date.now();
     log(`spawning pi rpc (spawn #${this.spawnCount}, cwd=${this.cwd})`);
 
     const env = { ...process.env };
@@ -250,7 +251,24 @@ export class Dispatcher {
   // -- models -------------------------------------------------------------
 
   /** Models the dispatcher can use now, with the current choice. */
+  /** pi reads models.json and auth.json once, at start. True when either changed after that. */
+  _configChanged() {
+    if (!this.child || !this.startedAt) return false;
+    return ['models.json', 'auth.json'].some((n) => {
+      try {
+        return statSync(join(agentDir(), n)).mtimeMs > this.startedAt;
+      } catch {
+        return false;
+      }
+    });
+  }
+
   async models() {
+    // A provider added to pi outside agentd shows up here: restart (when idle) so pi reloads its files.
+    if (this._configChanged() && !this.streaming) {
+      log('pi config changed since start, restarting the dispatcher to pick it up');
+      await this.restart().catch((err) => log(`restart for new config failed: ${err.message}`));
+    }
     await this.ensureStarted();
     const [list, st] = await Promise.all([this.command('get_available_models'), this.command('get_state')]);
     let levels = null;

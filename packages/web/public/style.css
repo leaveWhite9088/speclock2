@@ -266,3 +266,13 @@ dialog p { margin: 0; }
 /* composer: a clearly visible edge */
 #composer { border: 1.5px solid color-mix(in srgb, var(--ink) 38%, var(--bg)); box-shadow: 0 2px 4px rgba(18, 22, 33, 0.08), 0 10px 28px rgba(18, 22, 33, 0.1); }
 #composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), 0 10px 28px rgba(18, 22, 33, 0.1); }
+
+/* forms: one pattern for the drawer, the new-executor dialog and the add-LLM form */
+.form.inline label { grid-template-columns: 4.2em minmax(0, 1fr); }
+.form .actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.form .actions .dim { flex: 1 1 100%; }
+.form .actions button.primary { padding: 6px 16px; }
+dialog form.form { gap: 8px; }
+dialog .two { display: contents; }
+dialog form label > input, dialog form label > select { margin-top: 0; }
+.dr-more .form { margin-top: 10px; }

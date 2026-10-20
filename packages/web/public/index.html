@@ -63,7 +63,7 @@
 </div>
 
 <dialog id="dlg-member">
-  <form id="form-member" method="dialog">
+  <form id="form-member" class="form inline" method="dialog">
     <h2>新建执行者</h2>
     <p class="dim">执行者是一个固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。</p>
     <label>名称<input name="id" placeholder="例如 dsh-backend" required autocomplete="off"></label>
@@ -76,7 +76,7 @@
       <label>模型<select name="model" id="m-model"><option value="">默认</option></select></label>
       <label>会话<select name="sessionId" id="m-session"><option value="new">新建会话</option></select></label>
     </div>
-    <div class="dlg-actions">
+    <div class="dlg-actions actions">
       <button type="button" class="ghost" id="cancel-member">取消</button>
       <button class="primary">创建执行者</button>
     </div>

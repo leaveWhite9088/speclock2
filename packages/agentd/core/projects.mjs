@@ -20,7 +20,7 @@
  * executor in its directory), and only when that file does not exist yet.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dshSessions } from './session-disk.mjs';
@@ -95,6 +95,39 @@ export function resolveInside(root, dir) {
   const rel2 = relative(realRoot, real);
   if (rel2.startsWith('..') || isAbsolute(rel2)) throw new Error(`directory "${dir}" resolves outside the project root`);
   return target;
+}
+
+/** Like resolveInside, but a missing directory (still inside the root) is created. */
+export function ensureInside(root, dir) {
+  const target = resolve(root, String(dir ?? '.') || '.');
+  const rel = relative(root, target);
+  if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`directory "${dir}" is outside the project root`);
+  if (!existsSync(target)) mkdirSync(target, { recursive: true });
+  return resolveInside(root, dir);
+}
+
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', '__pycache__']);
+
+/** Existing sub-directories of the project root (two levels), as "./x/y", for the directory picker. */
+export function listDirs(projectId) {
+  const project = find(projectId);
+  const out = [];
+  const walk = (abs, rel, depth) => {
+    let names = [];
+    try {
+      names = readdirSync(abs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of names) {
+      if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
+      const r = `${rel}/${e.name}`;
+      out.push(r);
+      if (depth > 1) walk(join(abs, e.name), r, depth - 1);
+    }
+  };
+  walk(project.root, '.', 2);
+  return { root: project.root, dirs: out.sort() };
 }
 
 function find(id) {
@@ -212,7 +245,7 @@ export function addInstance(projectId, { id, type, dir = '.', role = null, model
   checkId('instance', id);
   if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
   if (project.instances.some((i) => i.id === id)) throw new Error(`instance "${id}" already exists in project "${projectId}"`);
-  const abs = resolveInside(project.root, dir);
+  const abs = ensureInside(project.root, dir);
 
   const rel = relative(project.root, abs).replace(/\\/g, '/') || '.';
   const inst = {
@@ -292,7 +325,7 @@ export async function updateInstance(projectId, id, { role, model, name, dir }) 
   if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
   let agent = pool.get(keyOf(projectId, id));
   const rename = name !== undefined && name !== id;
-  const relDir = dir !== undefined ? relative(project.root, resolveInside(project.root, dir || '.')).replace(/\\/g, '/') || '.' : inst.dir;
+  const relDir = dir !== undefined ? relative(project.root, ensureInside(project.root, dir || '.')).replace(/\\/g, '/') || '.' : inst.dir;
   const moved = relDir !== inst.dir;
   if (rename || moved) {
     if (rename) {

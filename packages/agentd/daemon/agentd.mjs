@@ -390,6 +390,8 @@ const OPS = {
   'dispatcher.abort': ({ project } = {}) => getDispatcher(project).abort(),
   'dispatcher.new': ({ project } = {}) => getDispatcher(project).newSession(),
   'dispatcher.sessions': ({ project } = {}) => getDispatcher(project).sessions(),
+  'dispatcher.deleteSession': ({ project, sessionFile }) => getDispatcher(project).deleteSession(sessionFile),
+  'project.dirs': ({ project }) => projects.listDirs(project),
   'dispatcher.renameSession': ({ project, sessionFile, label }) => getDispatcher(project).renameSession(sessionFile, label),
   'dispatcher.use': ({ project, sessionFile }) => getDispatcher(project).switchSession(sessionFile),
   'dispatcher.messages': ({ project } = {}) => getDispatcher(project).messages(),
@@ -485,6 +487,8 @@ const OPS = {
     const sessionId = await a.newSession(cwd);
     return { agent: a.name, sessionId, cwd: a.cwd };
   },
+
+  deleteSession: ({ agent, sessionId }) => getAgent(agent).deleteSession(sessionId),
 
   rename: ({ agent, sessionId, label }) => getAgent(agent).renameSession(sessionId, label),
 

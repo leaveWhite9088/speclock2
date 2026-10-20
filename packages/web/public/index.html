@@ -12,15 +12,16 @@
   <aside id="side">
     <div class="side-top">
       <div class="proj-row">
-        <select id="project" aria-label="当前项目"></select>
-        <button id="btn-newproj" class="icon" title="新建项目" aria-label="新建项目">＋</button>
-        <button id="btn-projmenu" class="icon" title="项目操作" aria-label="项目操作">⋯</button>
+        <button id="btn-proj" class="proj-switch" aria-haspopup="listbox" aria-expanded="false" title="切换项目"><span id="proj-name">…</span><svg class="i chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button id="btn-newproj" class="icon" title="新建项目" aria-label="新建项目"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button id="btn-projmenu" class="icon" title="项目操作" aria-label="项目操作"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
       </div>
-      <div id="projmenu" class="pop" hidden>
+      <div id="projlist" class="pop menu" role="listbox" hidden></div>
+      <div id="projmenu" class="pop menu" hidden>
         <button id="btn-stop">关闭项目<small>停掉所有进程，配置和会话保留</small></button>
         <button id="btn-delete" class="danger">删除项目<small>移除配置，目录里的文件不动</small></button>
       </div>
-      <form id="form-project" class="pop" hidden>
+      <form id="form-project" class="pop form" hidden>
         <input name="id" placeholder="项目 id，例如 shop" required autocomplete="off">
         <input name="name" placeholder="显示名（可不填）" autocomplete="off">
         <input name="root" placeholder="根目录，绝对路径，需已存在" required autocomplete="off">
@@ -31,9 +32,13 @@
     <nav id="members" aria-label="成员"></nav>
 
     <div class="side-bottom">
-      <button id="btn-newmember" class="ghost wide">＋ 新建执行者</button>
-      <div id="limits" class="dim"></div>
-      <div id="conn" class="dim">连接中…</div>
+      <button id="btn-newmember" class="ghost wide"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新建执行者</button>
+      <div class="statusbar dim">
+        <span id="conn-dot" class="dot"></span>
+        <span id="conn">连接中</span>
+        <span class="sep-dot" aria-hidden="true"></span>
+        <span id="limits"></span>
+      </div>
     </div>
   </aside>
 
@@ -65,17 +70,15 @@
 <dialog id="dlg-member">
   <form id="form-member" class="form inline" method="dialog">
     <h2>新建执行者</h2>
-    <p class="dim">执行者是一个固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。</p>
+    <p class="dim">执行者是固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。</p>
     <label>名称<input name="id" placeholder="例如 dsh-backend" required autocomplete="off"></label>
-    <div class="two">
-      <label>CLI<select name="type" id="m-type"></select></label>
-      <label>目录<input name="dir" id="m-dir" placeholder="相对项目根目录，例如 ./server" required autocomplete="off"></label>
-    </div>
+    <label>CLI<select name="type" id="m-type"></select></label>
+    <label>目录<input name="dir" id="m-dir" list="m-dirs" placeholder="选已有目录，或填新的" required autocomplete="off"></label>
+    <datalist id="m-dirs"></datalist>
+    <small id="m-dir-hint" class="dim hint"></small>
     <label>用途<input name="role" placeholder="调度器据此挑人，例如 后端服务" autocomplete="off"></label>
-    <div class="two">
-      <label>模型<select name="model" id="m-model"><option value="">默认</option></select></label>
-      <label>会话<select name="sessionId" id="m-session"><option value="new">新建会话</option></select></label>
-    </div>
+    <label>模型<select name="model" id="m-model"><option value="">默认</option></select></label>
+    <label>会话<select name="sessionId" id="m-session"><option value="new">新建会话</option></select></label>
     <div class="dlg-actions actions">
       <button type="button" class="ghost" id="cancel-member">取消</button>
       <button class="primary">创建执行者</button>

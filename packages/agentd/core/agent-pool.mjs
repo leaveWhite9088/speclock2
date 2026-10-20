@@ -1131,7 +1131,9 @@ class AcpClient {
     const local = store[this.name] ?? {};
     const byId = new Map();
 
+    const hidden = (id) => Boolean(local[id]?.hidden);
     for (const s of remote) {
+      if (hidden(s.sessionId)) continue;
       // An agent lists every session of its CLI. A custom instance only owns the
       // ones in its own directory, so two instances of one CLI do not mix.
       if (this.custom && s.cwd && normPath(s.cwd) !== normPath(this.spec.defaultCwd)) continue;
@@ -1147,7 +1149,7 @@ class AcpClient {
       });
     }
     for (const [id, meta] of Object.entries(local)) {
-      if (byId.has(id)) continue;
+      if (byId.has(id) || meta.hidden) continue;
       byId.set(id, {
         sessionId: id,
         cwd: meta.cwd ?? null,
@@ -1159,7 +1161,7 @@ class AcpClient {
     }
     // Sessions created in this process may be too new for the agent's list.
     for (const id of this.live) {
-      if (byId.has(id)) continue;
+      if (byId.has(id) || hidden(id)) continue;
       byId.set(id, {
         sessionId: id,
         cwd: local[id]?.cwd ?? this.cwd,
@@ -1184,6 +1186,21 @@ class AcpClient {
     const rows = [...byId.values()].map((r) => ({ ...r, active: r.sessionId === this.sessionId }));
     rows.sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
     return { sessions: rows, remoteError };
+  }
+
+  /**
+   * Remove a session from the list. The CLI keeps its own record on disk (there is no API to delete
+   * one), so this hides it; the active session cannot be removed.
+   */
+  deleteSession(sessionId) {
+    if (!sessionId) throw new Error('sessionId is required');
+    if (sessionId === this.sessionId) throw new Error('cannot delete the active session; switch to another first');
+    const e = entry(this.name, sessionId);
+    e.hidden = true;
+    delete e.label;
+    this.live.delete(sessionId);
+    saveStore();
+    return { sessionId, deleted: true };
   }
 
   renameSession(sessionId, label) {

@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { agentDir, usableProviders } from './pi-models.mjs';
 import { fileURLToPath } from 'node:url';
@@ -386,6 +386,20 @@ export class Dispatcher {
     mkdirSync(this.sessionDir, { recursive: true });
     writeFileSync(join(this.sessionDir, 'labels.json'), JSON.stringify(labels, null, 2));
     return { file: p, label: text || null };
+  }
+
+  /** Delete a session file and its name. The session in use cannot be deleted. */
+  deleteSession(file) {
+    const p = resolve(String(file ?? ''));
+    if (!existsSync(p) || !p.endsWith('.jsonl') || !p.startsWith(resolve(this.sessionDir))) throw new Error('unknown session');
+    if (this.resumeFile && resolve(this.resumeFile) === p) throw new Error('cannot delete the active session; switch to another first');
+    unlinkSync(p);
+    const labels = this._labels();
+    if (basename(p) in labels) {
+      delete labels[basename(p)];
+      writeFileSync(join(this.sessionDir, 'labels.json'), JSON.stringify(labels, null, 2));
+    }
+    return { file: p, deleted: true };
   }
 
   /** Session files of the dispatcher, newest first. */

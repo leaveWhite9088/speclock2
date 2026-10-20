@@ -150,9 +150,10 @@ async function loadProjects() {
   state.projects = r.projects;
   if (!r.projects.some((p) => p.id === state.project)) state.project = r.projects[0]?.id ?? '';
   localStorage.setItem('project', state.project);
-  $('project').replaceChildren(...r.projects.map((p) => opt(p.name, p.id, p.id === state.project)));
+  renderProjectSwitch();
   const g = r.limits.global ? `，其中项目外 ${r.limits.global}` : '';
-  $('limits').textContent = `进程 ${r.limits.alive}/${r.limits.maxProcesses}${g}，空闲 ${r.limits.idleMinutes} 分钟回收`;
+  $('limits').textContent = `进程 ${r.limits.alive}/${r.limits.maxProcesses} · 空闲 ${r.limits.idleMinutes} 分钟回收`;
+  $('limits').title = `进程 ${r.limits.alive}/${r.limits.maxProcesses}${g}，空闲 ${r.limits.idleMinutes} 分钟回收`;
   if (state.sel !== DISPATCHER && !member(state.sel)) state.sel = DISPATCHER;
   for (const i of members()) ensureCatalog(i.type);
   syncLive();
@@ -160,28 +161,56 @@ async function loadProjects() {
   renderHead();
 }
 
-$('project').onchange = guard(async (e) => {
-  state.project = e.target.value;
-  localStorage.setItem('project', state.project);
-  await openMember(DISPATCHER);
-});
+function renderProjectSwitch() {
+  $('proj-name').textContent = project()?.name ?? '还没有项目';
+  const list = $('projlist');
+  list.replaceChildren();
+  for (const p of state.projects) {
+    const b = el('button', null, p.name);
+    b.type = 'button';
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(p.id === state.project));
+    if (p.name !== p.id) b.append(el('small', null, p.id));
+    b.onclick = guard(async () => {
+      closePops();
+      if (p.id === state.project) return;
+      state.project = p.id;
+      localStorage.setItem('project', state.project);
+      renderProjectSwitch();
+      await openMember(DISPATCHER);
+    });
+    list.append(b);
+  }
+  if (!state.projects.length) list.append(el('div', 'dim', '还没有项目，点右边的 ＋ 新建。'));
+}
 
+// The project list, the project actions and the new-project form are one family: opening any of
+// them closes the others, and so does a click anywhere else.
+const POPS = { projlist: 'btn-proj', projmenu: 'btn-projmenu', 'form-project': 'btn-newproj' };
 const closePops = () => {
-  $('projmenu').hidden = true;
-  $('form-project').hidden = true;
+  for (const id of Object.keys(POPS)) $(id).hidden = true;
+  $('btn-proj').setAttribute('aria-expanded', 'false');
 };
-$('btn-newproj').onclick = () => {
-  const open = $('form-project').hidden;
+function togglePop(id) {
+  const wasOpen = !$(id).hidden;
   closePops();
-  $('form-project').hidden = !open;
-  if (open) $('form-project').elements.id.focus();
+  if (wasOpen) return false;
+  $(id).hidden = false;
+  $('btn-proj').setAttribute('aria-expanded', String(id === 'projlist'));
+  return true;
+}
+$('btn-proj').onclick = () => togglePop('projlist');
+$('btn-newproj').onclick = () => {
+  if (togglePop('form-project')) $('form-project').elements.id.focus();
+};
+$('btn-projmenu').onclick = () => {
+  if (state.project) togglePop('projmenu');
 };
 $('cancel-project').onclick = closePops;
-$('btn-projmenu').onclick = () => {
-  const open = $('projmenu').hidden;
+document.addEventListener('mousedown', (e) => {
+  if (e.target.closest('.pop') || e.target.closest('.proj-row')) return;
   closePops();
-  $('projmenu').hidden = !open || !state.project;
-};
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closePops();
@@ -432,16 +461,29 @@ function draftForm(key, specs, submitText, submit) {
   return form;
 }
 
-/** One session line: click to switch, pencil to rename in place. */
-function sessionRow(title, sub, current, onUse, onRename) {
+const ICONS = {
+  pen: '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  trash: '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>',
+  close: '<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+};
+const iconBtn = (name, label, cls = '') => {
+  const b = el('button', `icon ${cls}`);
+  b.type = 'button';
+  b.title = label;
+  b.setAttribute('aria-label', label);
+  b.innerHTML = ICONS[name]; // fixed markup above, no data in it
+  return b;
+};
+
+/** One session line: click to switch, pencil to rename in place, bin to delete (not the one in use). */
+function sessionRow(title, sub, current, onUse, onRename, onDelete) {
   const row = el('div', `sess-row${current ? ' cur' : ''}`);
   const main = el('button', 'sess');
   main.type = 'button';
   main.disabled = current;
   main.append(el('span', 't', title || '（无标题）'), el('small', null, current ? `${sub} · 当前` : sub));
   if (!current) main.onclick = guard(onUse);
-  const pen = el('button', 'icon sm', '✎');
-  pen.type = 'button';
+  const pen = iconBtn('pen', '重命名', 'sm');
   pen.title = '重命名';
   pen.setAttribute('aria-label', '重命名');
   pen.onclick = () => {
@@ -470,14 +512,23 @@ function sessionRow(title, sub, current, onUse, onRename) {
     input.select();
   };
   row.append(main, pen);
+  if (!current && onDelete) {
+    const bin = iconBtn('trash', '删除会话', 'sm del');
+    bin.onclick = guard(async () => {
+      if (!confirm(`删除会话「${title || sub}」？\n\n删除后无法在这里恢复。`)) return;
+      await onDelete();
+      toast('已删除会话', true);
+      await renderDrawer();
+    });
+    row.append(bin);
+  }
   return row;
 }
 
 async function renderDrawer() {
   const dr = $('drawer');
   const head = el('div', 'dr-head');
-  const x = el('button', 'icon', '✕');
-  x.setAttribute('aria-label', '关闭设置');
+  const x = iconBtn('close', '关闭设置');
   x.onclick = () => toggleDrawer(false);
   head.append(el('h2', null, isDispatcher() ? '调度器设置' : `${member(state.sel)?.id ?? ''} 设置`), x);
   const body = el('div', 'dr-body');
@@ -564,6 +615,7 @@ async function executorSettings() {
                 await afterSessionChange();
               },
               (label) => api('POST', `${base}/rename`, { sessionId: x.sessionId, label }),
+              () => api('DELETE', `${base}/sessions/${enc(x.sessionId)}`),
             ),
           );
         }
@@ -639,6 +691,7 @@ async function dispatcherSettings() {
                 await afterSessionChange();
               },
               (label) => api('POST', `/api/dispatcher/rename${pq()}`, { sessionFile: x.file, label }),
+              () => api('DELETE', `/api/dispatcher/sessions${pq()}&file=${enc(x.file)}`),
             ),
           );
         }
@@ -764,11 +817,13 @@ const oneLine = (t, n) => {
 /** Tool calls and their results are one plain list; each line opens to show the full text. */
 function addCall(name, detail, result) {
   const l = lane();
-  let ul = l.lastElementChild;
-  if (!ul?.classList.contains('tools')) {
-    ul = el('ul', 'tools');
-    l.append(ul);
+  let group = l.lastElementChild;
+  if (!group?.classList.contains('toolgroup')) {
+    group = el('details', 'toolgroup');
+    group.append(el('summary'), el('ul', 'tools'));
+    l.append(group);
   }
+  const ul = group.querySelector('ul.tools');
   const li = el('li', result ? 'res' : '');
   const d = el('details');
   const sum = el('summary');
@@ -776,7 +831,22 @@ function addCall(name, detail, result) {
   d.append(sum, el('pre', null, detail));
   li.append(d);
   ul.append(li);
+  refreshGroup(group);
   scrollDown();
+  return li;
+}
+
+/** The one line a collapsed run of tool calls shows: how many, which, and whether any is running or failed. */
+function refreshGroup(group) {
+  const calls = [...group.querySelectorAll('ul.tools > li:not(.res)')];
+  const names = [...new Set(calls.map((li) => li.querySelector('b').textContent))];
+  const running = calls.filter((li) => li.classList.contains('run')).length;
+  const failed = calls.filter((li) => li.classList.contains('fail')).length;
+  const sum = group.querySelector('summary');
+  sum.replaceChildren(el('span', null, `${calls.length || 1} 次工具调用`));
+  if (running) sum.append(el('span', 'run', `${running} 进行中`));
+  if (failed) sum.append(el('span', 'fail', `${failed} 失败`));
+  sum.append(el('span', 'names', names.slice(0, 4).join('  ') + (names.length > 4 ? ' …' : '')));
 }
 
 /**
@@ -789,9 +859,7 @@ function addTool(e) {
   let li = toolLines.get(e.toolCallId);
   if (!li && done && !e.title) return; // an end without a start (a pull that began mid-call)
   if (!li) {
-    addCall(e.title || e.kind || '工具', '', false);
-    const ul = lane().lastElementChild;
-    li = ul.lastElementChild;
+    li = addCall(e.title || e.kind || '工具', '', false);
     li.querySelector('details').replaceChildren(li.querySelector('summary'));
     toolLines.set(e.toolCallId, li);
   }
@@ -799,6 +867,8 @@ function addTool(e) {
   li.classList.toggle('fail', e.status === 'failed');
   const mark = li.querySelector('.arg');
   if (mark) mark.textContent = done ? (e.status === 'failed' ? '失败' : '') : '进行中…';
+  const group = li.closest('details.toolgroup');
+  if (group) refreshGroup(group);
 }
 
 function emptyState() {
@@ -1013,12 +1083,39 @@ $('btn-newmember').onclick = guard(async () => {
     $('m-type').replaceChildren(...types.map((t) => opt(t, t)));
   }
   $('dlg-member').showModal();
+  loadDirs().catch(() => {});
   refreshPickers().catch((e) => toast(e.message));
 });
 $('cancel-member').onclick = () => $('dlg-member').close();
 $('m-type').onchange = guard(refreshPickers);
+
+// The directory field is a combo: pick an existing folder from the list, or type a new one and it is created.
+let knownDirs = [];
+async function loadDirs() {
+  const r = await api('GET', `/api/projects/${enc(state.project)}/dirs`);
+  knownDirs = ['./', ...r.dirs.map(relDir)];
+  $('m-dirs').replaceChildren(
+    ...knownDirs.map((d) => {
+      const o = el('option');
+      o.value = d;
+      return o;
+    }),
+  );
+  dirHint();
+}
+function dirHint() {
+  const v = $('m-dir').value.trim();
+  const h = $('m-dir-hint');
+  if (!v) h.textContent = '选已有目录；填一个不存在的会自动创建';
+  else {
+    const d = relDir(v);
+    h.textContent = knownDirs.includes(d) ? `使用已有目录 ${d}` : `${d} 不存在，创建时会自动建好`;
+  }
+}
+$('m-dir').addEventListener('input', dirHint);
 $('m-dir').onchange = guard(() => {
   $('m-dir').value = relDir($('m-dir').value);
+  dirHint();
   return refreshPickers();
 });
 
@@ -1063,8 +1160,12 @@ function onDispatcherEvent(d) {
 
 function connectEvents() {
   const es = new EventSource('/api/events');
-  es.onopen = () => ($('conn').textContent = '已连接');
-  es.onerror = () => ($('conn').textContent = '重连中…');
+  const conn = (ok, text) => {
+    $('conn').textContent = text;
+    $('conn-dot').className = `dot ${ok ? 'on' : 'off'}`;
+  };
+  es.onopen = () => conn(true, '已连接');
+  es.onerror = () => conn(false, '未连接');
   es.addEventListener('dispatcher.event', (m) => {
     const ev = JSON.parse(m.data);
     if (ev.project && ev.project === state.project) {

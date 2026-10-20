@@ -54,7 +54,11 @@ try {
 
   await fails(call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: '..' }), /outside|escape/i, 'dir ".." is rejected');
   await fails(call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: outside }), /outside|escape/i, 'absolute dir outside the root is rejected');
-  await fails(call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: './missing' }), /exist|directory/i, 'missing dir is rejected');
+  const fresh = await call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: './fresh/sub' });
+  check('a missing directory inside the root is created', fresh.dir === 'fresh/sub' && existsSync(join(rootA, 'fresh', 'sub')));
+  await call('project.removeInstance', { project: A, id: 'x' });
+  check('project.dirs lists existing folders', (await call('project.dirs', { project: A })).dirs.includes('./fresh/sub'));
+  await fails(call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: './../escape-new' }), /outside/i, 'a new directory outside the root is refused, not created');
   try {
     symlinkSync(outside, join(rootA, 'link'), 'junction');
     await fails(call('project.addInstance', { project: A, id: 'x', type: TYPE, dir: './link' }), /outside|escape/i, 'link leaving the root is rejected');

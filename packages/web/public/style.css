@@ -276,3 +276,10 @@ dialog form.form { gap: 8px; }
 dialog .two { display: contents; }
 dialog form label > input, dialog form label > select { margin-top: 0; }
 .dr-more .form { margin-top: 10px; }
+
+/* composer: flat, no shadow or fade */
+#composer { box-shadow: none; border: 1px solid var(--line-2); border-radius: 14px; padding: 5px 5px 5px 14px; background: var(--bg); transition: none; }
+#composer:focus-within { box-shadow: none; border-color: var(--accent); }
+#composer::before { display: none; }
+#composer button { border-radius: 10px; }
+#btn-abort { background: var(--hover); }

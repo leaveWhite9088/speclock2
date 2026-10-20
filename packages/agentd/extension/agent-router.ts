@@ -496,6 +496,42 @@ export default function agentRouter(pi: ExtensionAPI) {
 		await closeDaemon();
 	});
 
+	// A dispatcher gets the live roster of its project in the system prompt of every run, so an
+	// executor registered while the conversation is open is known at once. Without this the model
+	// reuses the list from the last agent_instances call earlier in the conversation.
+	if (PROJECT) {
+		pi.on("before_agent_start", async (event) => {
+			let roster = "";
+			try {
+				const c = await daemon();
+				const { instances } = await c.call("instances");
+				roster = instances
+					.map(
+						(i: any) =>
+							`- ${i.id} [${i.type}] ${i.busy ? "busy" : i.alive ? "running" : "idle"}, dir ${i.cwd ?? "(base)"}${i.role ? `, role: ${i.role}` : ""}`,
+					)
+					.join("\n");
+			} catch {
+				return undefined; // no daemon answer: leave the prompt alone
+			}
+			if (!roster) return undefined;
+			return {
+				systemPrompt:
+					event.systemPrompt +
+					`
+
+## Executors of this project (current, refreshed every turn)
+
+${roster}
+
+` +
+					"You are the dispatcher. Hands-on work (writing files, code, drawings, running commands) goes to the executor whose role fits it, through agent_run; " +
+					"do it yourself only when no executor fits, and say so. Pick by role and directory from the list above. " +
+					"This list is newer than anything agent_instances returned earlier in the conversation.",
+			};
+		});
+	}
+
 	pi.registerTool(runTool);
 	pi.registerTool(sessionsTool);
 	pi.registerTool(useTool);

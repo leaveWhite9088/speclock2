@@ -72,6 +72,23 @@ const members = () => project()?.instances ?? [];
 const member = (key) => members().find((i) => i.key === key);
 const isDispatcher = () => state.sel === DISPATCHER;
 
+/**
+ * Directories are always shown and typed relative to the project root: "./server", "./" for the root.
+ * An absolute path inside the root is turned into its relative form; anything else is left for the
+ * backend to refuse.
+ */
+function relDir(v) {
+  const fwd = (x) => String(x ?? '').trim().split(String.fromCharCode(92)).join('/');
+  const root = fwd(project()?.root).replace(/[/]+$/, '');
+  let d = fwd(v);
+  if (root && d.toLowerCase() === root.toLowerCase()) d = '.';
+  else if (root && d.toLowerCase().startsWith(root.toLowerCase() + '/')) d = d.slice(root.length + 1);
+  while (d.startsWith('./')) d = d.slice(2);
+  d = d.replace(/[/]+$/, '');
+  if (d === '' || d === '.') return './';
+  return d.startsWith('..') || /^([a-z]:|[/])/i.test(d) ? d : './' + d;
+}
+
 function when(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -376,8 +393,11 @@ function draftForm(key, specs, submitText, submit) {
     // A draft value that is no longer a choice (a select) falls back to the saved one.
     if (s.control.value !== (draft[s.name] ?? s.saved ?? '')) s.control.value = s.saved ?? '';
     s.control.addEventListener('input', store);
-    s.control.addEventListener('change', store);
-    form.append(field(s.label, s.control));
+    s.control.addEventListener('change', () => {
+      if (s.normalize) s.control.value = s.normalize(s.control.value);
+      store();
+    });
+    form.append(field(s.label, s.control, s.hint));
   }
   form.append(actions);
   form.onsubmit = guard(async (e) => {
@@ -465,7 +485,7 @@ async function executorSettings() {
 
   const name = textInput(m.id);
   const role = textInput('', '调度器据此挑人，例如 后端服务');
-  const dir = textInput('', '相对项目根目录');
+  const dir = textInput('', '相对项目根目录，例如 ./server');
   const sel = el('select');
   let cur = m.model ?? m.preferModel ?? '';
   if (cur === cat.default) cur = '';
@@ -480,7 +500,7 @@ async function executorSettings() {
     [
       { name: 'name', label: '名称', control: name, saved: m.id },
       { name: 'role', label: '用途', control: role, saved: m.role ?? '' },
-      { name: 'dir', label: '目录', control: dir, saved: m.dir },
+      { name: 'dir', label: '目录', control: dir, saved: relDir(m.dir), normalize: relDir, hint: `相对项目根目录：${project()?.root ?? ''}` },
       { name: 'model', label: '模型', control: sel, saved: cur },
     ],
     '提交修改',
@@ -488,7 +508,7 @@ async function executorSettings() {
       const patch = {};
       if (v.name !== m.id) patch.name = v.name;
       if (v.role !== (m.role ?? '')) patch.role = v.role;
-      if (v.dir !== m.dir) patch.dir = v.dir;
+      if (v.dir !== relDir(m.dir)) patch.dir = relDir(v.dir);
       if (v.model !== cur) patch.model = v.model || null;
       if (patch.dir !== undefined && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return;
       const r = await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, patch);
@@ -882,7 +902,7 @@ async function refreshPickers() {
   if (!type || !state.project) return;
   $('m-model').replaceChildren(opt('读取中…', ''));
   $('m-session').replaceChildren(opt('读取中…', 'new'));
-  const dir = $('m-dir').value.trim() || '.';
+  const dir = relDir($('m-dir').value);
   const [models, sessions] = await Promise.all([
     api('GET', `/api/models?type=${enc(type)}`).catch(() => ({ models: [] })),
     api('GET', `/api/projects/${enc(state.project)}/sessions?type=${enc(type)}&dir=${enc(dir)}`).catch(() => ({ sessions: [] })),
@@ -909,7 +929,10 @@ $('btn-newmember').onclick = guard(async () => {
 });
 $('cancel-member').onclick = () => $('dlg-member').close();
 $('m-type').onchange = guard(refreshPickers);
-$('m-dir').onchange = guard(refreshPickers);
+$('m-dir').onchange = guard(() => {
+  $('m-dir').value = relDir($('m-dir').value);
+  return refreshPickers();
+});
 
 $('form-member').onsubmit = guard(async (e) => {
   e.preventDefault();
@@ -917,7 +940,7 @@ $('form-member').onsubmit = guard(async (e) => {
   await api('POST', `/api/projects/${enc(state.project)}/instances`, {
     id: f.id,
     type: f.type,
-    dir: f.dir,
+    dir: relDir(f.dir),
     role: f.role || undefined,
     model: f.model || undefined,
     sessionId: f.sessionId || 'new',

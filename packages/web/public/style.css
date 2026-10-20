@@ -248,3 +248,11 @@ dialog p { margin: 0; }
 #head-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .head-side { min-width: 0; }
 .sess-list > .dim { padding: 4px 8px; }
+
+/* keep wide content (tool output, tables, long lines) inside the column */
+#app { overflow: hidden; }
+#stream { min-width: 0; overflow-x: hidden; }
+.lane { grid-template-columns: minmax(0, 1fr); }
+.lane > * { min-width: 0; }
+ul.tools li, ul.tools details { min-width: 0; }
+.md { min-width: 0; max-width: 100%; }

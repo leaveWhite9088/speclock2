@@ -271,8 +271,11 @@ class AcpClient {
     });
 
     child.stderr.setEncoding('utf8');
+    this.stderrTail = [];
     child.stderr.on('data', (d) => {
       for (const line of d.split('\n')) {
+        const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        if (plain) this.stderrTail = [...this.stderrTail, plain.slice(0, 160)].slice(-4);
         if (/ERROR|error:/.test(line)) {
           const clean = line.replace(/\x1b\[[0-9;]*m/g, '').slice(0, 200);
           this.lastError = clean;
@@ -554,24 +557,41 @@ class AcpClient {
 
   // -- lifecycle ----------------------------------------------------------
 
-  /** Spawn + initialize once. */
+  /**
+   * Spawn + initialize once.
+   *
+   * Starts of the same CLI type are serialized (two mcode processes starting at the same
+   * moment were seen to kill each other), and a process that dies while starting is retried
+   * with a short backoff. The final error carries the tail of the child's stderr.
+   */
   async _init() {
-    this._spawn();
-    if (!this.initPromise) {
-      this.initPromise = (async () => {
-        const init = await this._request('initialize', {
-          protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-        });
-        this.agentInfo = init?.agentInfo ?? null;
-        this.capabilities = init?.agentCapabilities ?? null;
-        return this.capabilities;
-      })().catch((err) => {
-        this.initPromise = null;
-        this.lastError = err.message;
-        throw err;
-      });
-    }
+    if (this.child && this.initPromise) return this.initPromise;
+    this.initPromise = withStartLock(this.type, async () => {
+      let lastErr;
+      for (let attempt = 1; attempt <= START_ATTEMPTS; attempt += 1) {
+        try {
+          this._spawn();
+          const init = await this._request('initialize', {
+            protocolVersion: 1,
+            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+          });
+          this.agentInfo = init?.agentInfo ?? null;
+          this.capabilities = init?.agentCapabilities ?? null;
+          return this.capabilities;
+        } catch (err) {
+          lastErr = err;
+          if (!/ACP exited/.test(err.message) || attempt === START_ATTEMPTS) break;
+          log(`[${this.name}] died while starting (attempt ${attempt}/${START_ATTEMPTS}); retrying`);
+          await new Promise((r) => setTimeout(r, attempt * 1500));
+        }
+      }
+      const tail = (this.stderrTail ?? []).join(' | ');
+      throw new Error(`${this.name} could not start: ${lastErr.message}${tail ? ` (${tail})` : ''}`);
+    }).catch((err) => {
+      this.initPromise = null;
+      this.lastError = err.message;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -1150,6 +1170,17 @@ function defaultModelFor(type) {
   return CONFIG?.defaultModels?.[type] ?? null;
 }
 
+const START_ATTEMPTS = 3;
+const startChains = new Map();
+
+/** Run `fn` after the previous start of the same CLI type has finished. */
+function withStartLock(key, fn) {
+  const prev = startChains.get(key) ?? Promise.resolve();
+  const next = prev.then(fn);
+  startChains.set(key, next.catch(() => {}));
+  return next;
+}
+
 function aliveCount(filter = () => true) {
   let n = 0;
   for (const a of pool.values()) if (a.child && filter(a)) n += 1;
@@ -1272,6 +1303,7 @@ function listInstances() {
     cwd: a.spec.defaultCwd ?? null,
     alive: Boolean(a.child),
     busy: a.busy,
+    lastError: a.child ? null : (a.lastError ?? null),
     sessionId: a.sessionId,
     model: a.currentModel(),
   }));

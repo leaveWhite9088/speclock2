@@ -267,7 +267,7 @@ function renderHead() {
   $('head-tag').replaceChildren(tag(dsp ? 'pi' : (m?.type ?? ''), llm.text, llm.faint));
   const busy = dsp ? project()?.dispatcher?.busy : m?.busy;
   const alive = dsp ? project()?.dispatcher?.alive : m?.alive;
-  $('head-state').textContent = busy ? '工作中' : alive ? '待命' : '未启动，发消息时才会启动';
+  $('head-state').textContent = busy ? '工作中' : alive ? '待命' : m?.lastError ? `启动失败：${m.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
   $('input').placeholder = dsp ? '告诉调度器要做什么，例如：让后端执行者修一下登录接口' : `直接对 ${m?.id ?? ''} 说话`;
   $('btn-abort').hidden = !busy;
 }

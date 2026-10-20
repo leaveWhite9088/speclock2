@@ -256,3 +256,16 @@ dialog p { margin: 0; }
 .lane > * { min-width: 0; }
 ul.tools li, ul.tools details { min-width: 0; }
 .md { min-width: 0; max-width: 100%; }
+
+/* drawer, compact: label beside control, no hints */
+.form.inline { gap: 8px; }
+.form.inline label { grid-template-columns: 3.2em minmax(0, 1fr); align-items: center; gap: 8px; }
+.form.inline input, .form.inline select { padding: 5px 9px; }
+.dr-body { gap: 14px; padding-top: 12px; }
+.sess-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.sess-row:hover { background: var(--hover); }
+.sess-row .sess { flex: 1; min-width: 0; background: none !important; }
+.sess-row button.sm { width: 24px; height: 24px; font-size: 13px; opacity: 0; flex: none; }
+.sess-row:hover button.sm, .sess-row button.sm:focus-visible { opacity: 1; }
+.sess-row.cur .sess .t { color: var(--accent); font-weight: 600; }
+input.sess-edit { margin: 2px 8px; padding: 4px 8px; }

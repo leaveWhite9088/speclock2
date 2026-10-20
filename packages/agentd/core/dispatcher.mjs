@@ -15,8 +15,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { usableProviders } from './pi-models.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -334,8 +334,30 @@ export class Dispatcher {
     return { messages: data?.messages ?? [] };
   }
 
+  _labels() {
+    try {
+      return JSON.parse(readFileSync(join(this.sessionDir, 'labels.json'), 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  /** Name a session file (pi has no rename of its own); an empty label removes the name. */
+  renameSession(file, label) {
+    const p = resolve(String(file ?? ''));
+    if (!existsSync(p) || !p.endsWith('.jsonl') || !p.startsWith(resolve(this.sessionDir))) throw new Error('unknown session');
+    const labels = this._labels();
+    const text = String(label ?? '').trim().slice(0, 120);
+    if (text) labels[basename(p)] = text;
+    else delete labels[basename(p)];
+    mkdirSync(this.sessionDir, { recursive: true });
+    writeFileSync(join(this.sessionDir, 'labels.json'), JSON.stringify(labels, null, 2));
+    return { file: p, label: text || null };
+  }
+
   /** Session files of the dispatcher, newest first. */
   sessions() {
+    const labels = this._labels();
     const rows = [];
     const walk = (dir) => {
       let entries = [];
@@ -357,6 +379,7 @@ export class Dispatcher {
           rows.push({
             file: p,
             title: firstUserText(p),
+            label: labels[basename(p)] ?? null,
             sessionId: header?.id ?? null,
             cwd: header?.cwd ?? null,
             updatedAt: statSync(p).mtime.toISOString(),

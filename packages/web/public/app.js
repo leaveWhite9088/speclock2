@@ -108,15 +108,20 @@ function dispatcherLlm() {
 }
 
 /** Model lists are per CLI type and need a probe process, so fetch them quietly and re-render. */
-async function ensureCatalog(type) {
-  if (state.catalog[type] || ensureCatalog.pending?.has(type)) return;
+const catalogFailed = {};
+async function ensureCatalog(type, retry = false) {
+  if (state.catalog[type]?.models.length || ensureCatalog.pending?.has(type)) return;
+  // A failed probe is not remembered as "no models": try again later (at once when asked).
+  if (!retry && Date.now() - (catalogFailed[type] ?? 0) < 30_000) return;
   (ensureCatalog.pending ??= new Set()).add(type);
   try {
     state.catalog[type] = await api('GET', `/api/models?type=${enc(type)}`);
     renderMembers();
     renderHead();
   } catch {
-    state.catalog[type] = { models: [], default: null };
+    catalogFailed[type] = Date.now();
+  } finally {
+    ensureCatalog.pending.delete(type);
   }
 }
 
@@ -323,13 +328,45 @@ const linkBtn = (text, fn, cls = '') => {
   return b;
 };
 
-function sessionRow(title, sub, current, onUse) {
-  const r = el('button', `sess${current ? ' cur' : ''}`);
-  r.type = 'button';
-  r.disabled = current;
-  r.append(el('span', 't', title || '（无标题）'), el('small', null, current ? `${sub} · 当前` : sub));
-  if (!current) r.onclick = guard(onUse);
-  return r;
+/** One session line: click to switch, pencil to rename in place. */
+function sessionRow(title, sub, current, onUse, onRename) {
+  const row = el('div', `sess-row${current ? ' cur' : ''}`);
+  const main = el('button', 'sess');
+  main.type = 'button';
+  main.disabled = current;
+  main.append(el('span', 't', title || '（无标题）'), el('small', null, current ? `${sub} · 当前` : sub));
+  if (!current) main.onclick = guard(onUse);
+  const pen = el('button', 'icon sm', '✎');
+  pen.type = 'button';
+  pen.title = '重命名';
+  pen.setAttribute('aria-label', '重命名');
+  pen.onclick = () => {
+    const input = textInput(title ?? '');
+    input.className = 'sess-edit';
+    let done = false;
+    const finish = guard(async (save) => {
+      if (done) return;
+      done = true;
+      if (save && input.value.trim() !== (title ?? '')) {
+        await onRename(input.value.trim());
+        toast('已重命名', true);
+      }
+      await renderDrawer();
+    });
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') finish(true);
+      else if (e.key === 'Escape') {
+        e.stopPropagation();
+        finish(false);
+      }
+    };
+    input.onblur = () => finish(true);
+    row.replaceChildren(input);
+    input.focus();
+    input.select();
+  };
+  row.append(main, pen);
+  return row;
 }
 
 async function renderDrawer() {
@@ -357,69 +394,76 @@ async function executorSettings() {
   const m = member(state.sel);
   const wrap = document.createDocumentFragment();
   if (!m) return wrap;
-  await ensureCatalog(m.type);
+  await ensureCatalog(m.type, true);
   const cat = state.catalog[m.type] ?? { models: [], default: null };
 
-  const name = textInput(m.id);
-  const role = textInput(m.role, '调度器据此挑人，例如 后端服务');
-  const dir = textInput(m.dir, '相对项目根目录');
-  const cli = el('div', 'static');
-  cli.append(tag(m.type, null, true).firstChild, el('span', 'dim', '创建后不能改'));
-  const sel = el('select');
-  const cur = m.model ?? '';
-  sel.append(opt(cat.default ? `默认（${modelName(m.type, cat.default)}）` : '默认', ''));
-  for (const mo of cat.models) sel.append(opt(mo.name || mo.value, mo.value, mo.value === cur));
-  sel.value = cur;
-  const save = el('button', 'primary', '保存');
-  save.onclick = guard(async () => {
-    const patch = {};
-    if (name.value.trim() !== m.id) patch.name = name.value.trim();
-    if (role.value.trim() !== (m.role ?? '')) patch.role = role.value.trim();
-    if (dir.value.trim() !== m.dir) patch.dir = dir.value.trim();
-    if (sel.value !== cur) patch.model = sel.value || null;
-    if (!Object.keys(patch).length) return toast('没有改动', true);
-    if (patch.dir && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return;
-    save.disabled = true;
+  // Every field saves as soon as it changes.
+  const save = async (patch, undo) => {
+    if (patch.dir !== undefined && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return undo();
     try {
       const r = await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, patch);
-      toast('已保存', true);
       if (r.key !== m.key) state.sel = r.key;
+      toast('已保存', true);
       await loadProjects();
-      await loadConversation();
+      if (patch.name !== undefined || patch.dir !== undefined) await loadConversation();
       await renderDrawer();
-    } finally {
-      save.disabled = false;
+    } catch (e) {
+      undo();
+      toast(e.message);
     }
-  });
-  const form = el('div', 'form');
-  form.append(
-    field('名称', name),
-    field('用途', role),
-    field('目录', dir),
-    field('CLI', cli),
-    field('模型', sel, '运行中的会话立即切换；新会话用这里的设置。'),
-    save,
-  );
+  };
+  const bind = (input, key, current) => {
+    input.onchange = () => {
+      const v = input.value.trim();
+      if (key === 'name' && !v) return (input.value = current);
+      if (v !== current) save({ [key]: v }, () => (input.value = current));
+    };
+    return input;
+  };
+
+  const name = bind(textInput(m.id), 'name', m.id);
+  const role = bind(textInput(m.role, '调度器据此挑人'), 'role', m.role ?? '');
+  const dir = bind(textInput(m.dir, '相对项目根目录'), 'dir', m.dir);
+  const sel = el('select');
+  let cur = m.model ?? m.preferModel ?? '';
+  if (cur === cat.default) cur = '';
+  sel.append(opt(cat.default ? `默认（${modelName(m.type, cat.default)}）` : '默认', ''));
+  for (const mo of cat.models) sel.append(opt(mo.name || mo.value, mo.value));
+  // The saved choice must show even when the model list could not be read.
+  if (cur && ![...sel.options].some((o) => o.value === cur)) sel.append(opt(modelName(m.type, cur) ?? cur, cur));
+  sel.value = cur;
+  sel.onchange = () => save({ model: sel.value || null }, () => (sel.value = cur));
+
+  const form = el('div', 'form inline');
+  form.append(field('名称', name), field('用途', role), field('目录', dir), field('模型', sel));
   wrap.append(form);
 
+  const base = `/api/agents/${enc(m.key)}`;
   wrap.append(
     sessionsBlock(
       async () => {
-        await api('POST', `/api/agents/${enc(m.key)}/sessions`, {});
+        await api('POST', `${base}/sessions`, {});
         toast('已新建会话', true);
         await afterSessionChange();
       },
       async (list) => {
-        const r = await api('GET', `/api/agents/${enc(m.key)}/sessions`);
+        const r = await api('GET', `${base}/sessions`);
         list.replaceChildren();
         const active = activeSessionId(m, r.sessions);
         if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话，第一次发消息时会自动创建。'));
         for (const x of r.sessions) {
+          const shown = x.label || x.title || '';
           list.append(
-            sessionRow(x.label || x.title || x.sessionId.slice(0, 8), when(x.updatedAt), x.sessionId === active, async () => {
-              await api('POST', `/api/agents/${enc(m.key)}/use`, { sessionId: x.sessionId });
-              await afterSessionChange();
-            }),
+            sessionRow(
+              shown || x.sessionId.slice(0, 8),
+              when(x.updatedAt),
+              x.sessionId === active,
+              async () => {
+                await api('POST', `${base}/use`, { sessionId: x.sessionId });
+                await afterSessionChange();
+              },
+              (label) => api('POST', `${base}/rename`, { sessionId: x.sessionId, label }),
+            ),
           );
         }
       },
@@ -479,10 +523,16 @@ async function dispatcherSettings() {
         if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话。'));
         for (const x of r.sessions) {
           list.append(
-            sessionRow(x.title || (x.sessionId ?? '').slice(0, 8), when(x.updatedAt), x.active, async () => {
-              await api('POST', `/api/dispatcher/use${pq()}`, { sessionFile: x.file });
-              await afterSessionChange();
-            }),
+            sessionRow(
+              x.label || x.title || (x.sessionId ?? '').slice(0, 8),
+              when(x.updatedAt),
+              x.active,
+              async () => {
+                await api('POST', `/api/dispatcher/use${pq()}`, { sessionFile: x.file });
+                await afterSessionChange();
+              },
+              (label) => api('POST', `/api/dispatcher/rename${pq()}`, { sessionFile: x.file, label }),
+            ),
           );
         }
       },
@@ -780,7 +830,7 @@ async function refreshPickers() {
     api('GET', `/api/projects/${enc(state.project)}/sessions?type=${enc(type)}&dir=${enc(dir)}`).catch(() => ({ sessions: [] })),
   ]);
   if (seq !== pickerSeq) return;
-  state.catalog[type] ??= models;
+  if (models.models?.length) state.catalog[type] ??= models;
   $('m-model').replaceChildren(
     opt(models.default ? `默认（${modelName(type, models.default)}）` : '默认', ''),
     ...models.models.map((m) => opt(m.name || m.value, m.value)),

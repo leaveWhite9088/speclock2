@@ -32,7 +32,7 @@ function scoped(c: Daemon): Daemon {
 		get(target: any, prop) {
 			if (prop === "call") {
 				return (op: string, args: any = {}, opts?: any) =>
-					target.call(op, { ...args, project: PROJECT, short: true }, opts);
+					target.call(op, { ...args, project: PROJECT, short: true, caller: "dispatcher" }, opts);
 			}
 			const v = target[prop];
 			return typeof v === "function" ? v.bind(target) : v;
@@ -151,20 +151,15 @@ const runTool = defineTool({
 	description:
 		"Send a prompt to a resident coding agent (mcode, dsh, or pi) and get its answer. " +
 		"Call agent_instances first: each instance has a role that says what it is for. " +
-		"The agent process stays alive between calls; follow-ups reuse the same conversation. " +
+		"The agent process stays alive between calls; follow-ups reuse the same conversation. Sessions and directories are managed by the user, not by you. " +
 		"Progress streams into the transcript while it runs.",
 	parameters: Type.Object({
 		prompt: Type.String({ description: "Task or question for the agent." }),
 		agent: agentParam,
-		sessionId: Type.Optional(
-			Type.String({ description: "Run in this stored session instead of the active one." }),
-		),
-		cwd: Type.Optional(Type.String({ description: "Workspace directory." })),
 		model: Type.Optional(
 			Type.String({ description: "Model value from agent_models to apply first." }),
 		),
 		timeout: Type.Optional(Type.String({ description: 'Give up after this much silence from the agent, e.g. "30s", "5m". Default "5m". A running tool call (build, long command) is not silence, and the agent keeps going as long as it reports progress.' })),
-		reset: Type.Optional(Type.Boolean({ description: "Start a fresh conversation first." })),
 	}),
 
 	async execute(_toolCallId, params, signal, onUpdate) {
@@ -174,10 +169,7 @@ const runTool = defineTool({
 		const started = await c.call("run", {
 			agent,
 			prompt: params.prompt,
-			cwd: params.cwd,
-			sessionId: params.sessionId,
 			model: params.model,
-			reset: params.reset,
 			timeoutMs,
 			async: true,
 			// Subscribe server-side before the run starts, so a fast agent cannot
@@ -299,59 +291,6 @@ const sessionsTool = defineTool({
 	renderResult(result, opts, theme) {
 		const text = result.content?.find((c: any) => c.type === "text")?.text ?? "";
 		return theme.text(opts.isPartial ? theme.dim("loading sessions…") : text);
-	},
-});
-
-const useTool = defineTool({
-	name: "agent_use",
-	label: "Agent switch session",
-	description: "Switch an agent to an existing session by id.",
-	parameters: Type.Object({
-		sessionId: Type.String({ description: "Session id from agent_sessions." }),
-		agent: agentParam,
-	}),
-	async execute(_id, params) {
-		const c = await daemon();
-		const r = await c.call("use", { agent: params.agent, sessionId: params.sessionId });
-		return {
-			content: [{ type: "text", text: `${params.agent ?? "mcode"}: attached to ${r.sessionId}\ncwd: ${r.cwd}` }],
-			details: r,
-		};
-	},
-});
-
-const newTool = defineTool({
-	name: "agent_new",
-	label: "Agent new session",
-	description: "Start a fresh session for an agent.",
-	parameters: Type.Object({ agent: agentParam, cwd: Type.Optional(Type.String()) }),
-	async execute(_id, params) {
-		const c = await daemon();
-		const r = await c.call("new", { agent: params.agent, cwd: params.cwd });
-		return { content: [{ type: "text", text: `new session for ${r.agent}: ${r.sessionId}` }], details: r };
-	},
-});
-
-const renameTool = defineTool({
-	name: "agent_rename",
-	label: "Agent rename session",
-	description: "Set a local label for a session (agents have no rename API).",
-	parameters: Type.Object({
-		label: Type.String({ description: "New label; empty clears it." }),
-		sessionId: Type.Optional(Type.String()),
-		agent: agentParam,
-	}),
-	async execute(_id, params) {
-		const c = await daemon();
-		const r = await c.call("rename", {
-			agent: params.agent,
-			sessionId: params.sessionId,
-			label: params.label,
-		});
-		return {
-			content: [{ type: "text", text: r.label ? `${r.sessionId} labelled "${r.label}"` : `${r.sessionId} label cleared` }],
-			details: r,
-		};
 	},
 });
 
@@ -542,9 +481,6 @@ ${roster}
 
 	pi.registerTool(runTool);
 	pi.registerTool(sessionsTool);
-	pi.registerTool(useTool);
-	pi.registerTool(newTool);
-	pi.registerTool(renameTool);
 	pi.registerTool(modelsTool);
 	pi.registerTool(setModelTool);
 	pi.registerTool(statusTool);

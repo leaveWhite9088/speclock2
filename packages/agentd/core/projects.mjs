@@ -21,7 +21,7 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dshSessions } from './session-disk.mjs';
 import { AGENTS, buildInstance, defaultModelFor, listInstances, pool } from './agent-pool.mjs';
@@ -315,9 +315,8 @@ export async function probeSessions(projectId, type, dir = '.') {
 }
 
 /**
- * Edit an instance: role, preferred model, and (while idle) name and directory. The CLI type is fixed.
- * A new name or directory restarts the process under the new identity; a new directory forgets the
- * remembered session, because sessions belong to the directory they were made in.
+ * Edit an instance: role, preferred model, and (while idle) name. The CLI type and the directory are fixed.
+ * A new name restarts the process under the new identity.
  */
 export async function updateInstance(projectId, id, { role, model, name, dir }) {
   const project = find(projectId);
@@ -325,21 +324,17 @@ export async function updateInstance(projectId, id, { role, model, name, dir }) 
   if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
   let agent = pool.get(keyOf(projectId, id));
   const rename = name !== undefined && name !== id;
-  const relDir = dir !== undefined ? relative(project.root, ensureInside(project.root, dir || '.')).replace(/\\/g, '/') || '.' : inst.dir;
-  const moved = relDir !== inst.dir;
-  if (rename || moved) {
-    if (rename) {
-      checkId('instance', name);
-      if (project.instances.some((i) => i.id === name)) throw new Error(`instance "${name}" already exists in project "${projectId}"`);
-    }
+  if (dir !== undefined) {
+    const next = relative(project.root, ensureInside(project.root, dir || '.')).split(sep).join('/') || '.';
+    if (next !== inst.dir) throw new Error("an executor's directory cannot be changed after it is created; create a new executor in that directory instead");
+  }
+  if (rename) {
+    checkId('instance', name);
+    if (project.instances.some((i) => i.id === name)) throw new Error(`instance "${name}" already exists in project "${projectId}"`);
     if (agent.busy) throw new Error(`instance "${id}" is running a prompt; cancel it first`);
     await agent.shutdown();
     pool.delete(agent.name);
-    if (rename) inst.id = name;
-    if (moved) {
-      inst.dir = relDir;
-      inst.sessionId = null;
-    }
+    inst.id = name;
     agent = register(project, inst);
     id = inst.id;
   }

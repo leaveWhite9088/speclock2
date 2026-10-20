@@ -145,14 +145,17 @@ try {
     check('and changing it back takes effect again', st4.model === pick.value, `${st4.model} (wanted ${pick.value})`);
   }
 
-  // rename and move
+  // rename; the directory is fixed once created
   await call('project.addInstance', { project: A, id: 'tmp', type: TYPE, dir: '.' });
-  const mv = await call('project.updateInstance', { project: A, id: 'tmp', name: 'tmp2', dir: 'server' });
-  check('rename + move returns the new key and dir', mv.key === `${A}~tmp2` && mv.dir === 'server', JSON.stringify(mv));
+  await fails(call('project.updateInstance', { project: A, id: 'tmp', dir: 'server' }), /cannot be changed/, 'changing the directory is refused');
+  const mv = await call('project.updateInstance', { project: A, id: 'tmp', name: 'tmp2', dir: '.' });
+  check('rename returns the new key and keeps the dir', mv.key === `${A}~tmp2` && mv.dir === '.', JSON.stringify(mv));
   const after = (await call('projects')).projects.find((p) => p.id === A).instances;
-  check('old name is gone, new one lists', !after.some((i) => i.id === 'tmp') && after.some((i) => i.id === 'tmp2' && i.dir === 'server'));
+  check('old name is gone, new one lists', !after.some((i) => i.id === 'tmp') && after.some((i) => i.id === 'tmp2'));
   await fails(call('project.updateInstance', { project: A, id: 'tmp2', name: 'srv' }), /already exists/, 'renaming onto an existing name is rejected');
-  await fails(call('project.updateInstance', { project: A, id: 'tmp2', dir: '..' }), /outside/, 'moving outside the root is rejected');
+  await fails(call('project.updateInstance', { project: A, id: 'tmp2', dir: '..' }), /outside|cannot be changed/, 'moving outside the root is rejected');
+  await fails(call('use', { agent: `${A}~tmp2`, sessionId: 'x', project: A, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot switch sessions');
+  await fails(call('run', { agent: 'tmp2', project: A, prompt: 'x', reset: true, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot reset a session through run');
   await call('project.removeInstance', { project: A, id: 'tmp2' });
 
   // 7. busy refusal

@@ -28,7 +28,8 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
 
   let current = m.model ?? m.preferModel ?? '';
   if (current === catalog?.default) current = '';
-  const saved = { name: m.id, role: m.role ?? '', dir: relDir(m.dir, root), model: current };
+  const saved = { name: m.id, role: m.role ?? '', model: current };
+  const dirLabel = relDir(m.dir, root);
   const draft = useDraft(`draft:instance:${projectId}:${m.id}`, saved);
   const v = draft.values;
 
@@ -47,16 +48,14 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
     const patch: Record<string, unknown> = {};
     if (v.name !== m.id) patch.name = v.name;
     if (v.role !== (m.role ?? '')) patch.role = v.role;
-    if (relDir(v.dir, root) !== saved.dir) patch.dir = relDir(v.dir, root);
     if (v.model !== current) patch.model = v.model || null;
-    if (patch.dir !== undefined && !(await confirm({ title: '换目录？', description: '换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？' }))) return;
     try {
       const r = await api<{ key: string }>('PATCH', `/api/projects/${enc(projectId)}/instances/${enc(m.id)}`, patch);
       draft.clear();
       if (r.key !== m.key) select(r.key);
       toast('已提交');
       await qc.invalidateQueries({ queryKey: ['projects'] });
-      if (patch.name !== undefined || patch.dir !== undefined) reloadConversation();
+      if (patch.name !== undefined) reloadConversation();
     } catch (err) {
       toast((err as Error).message);
     }
@@ -88,7 +87,9 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
           <Input placeholder="调度器据此挑人，例如 后端服务" filled={v.role.trim() !== saved.role.trim()} value={v.role} onChange={(e) => draft.set({ role: e.target.value })} />
         </Field>
         <Field label="目录">
-          <Input placeholder="相对项目根目录，例如 ./server" filled={v.dir.trim() !== saved.dir.trim()} value={v.dir} onChange={(e) => draft.set({ dir: e.target.value })} onBlur={() => draft.set({ dir: relDir(v.dir, root) })} />
+          <div className="truncate text-[12.5px] text-ink-2" title="目录在创建时定下，之后不能修改；要换目录请新建执行者">
+            {dirLabel}
+          </div>
         </Field>
         <Field label="模型">
           <Select filled={v.model !== saved.model} value={v.model} onChange={(x) => draft.set({ model: x })} options={options} />

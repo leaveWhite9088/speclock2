@@ -216,7 +216,8 @@ async function confirmedAction(label, run) {
 $('btn-stop').onclick = guard(async () => {
   closePops();
   if (!confirm(`关闭项目「${project()?.name}」？\n\n会停掉调度器和所有执行者的进程。配置和会话保留，下次用到时自动重新启动。`)) return;
-  await confirmedAction('关闭项目', (force) => api('POST', `/api/projects/${enc(state.project)}/stop`, { force }));
+  const done = await confirmedAction('关闭项目', (force) => api('POST', `/api/projects/${enc(state.project)}/stop`, { force }));
+  if (!done) return;
   toast('项目已关闭', true);
   await loadProjects();
 });

@@ -1,0 +1,114 @@
+/** Constants, the CLI registry and `agentd.config.json`. Nothing here talks to a process. */
+
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+/** packages/agentd */
+const ROOT = join(HERE, '..', '..');
+
+export const DATA_DIR = join(ROOT, 'data');
+
+export const NODE_BIN = process.env.MCODE_NODE_BIN || 'D:/Environment/nodejs/node.exe';
+const NODE_MODULES = 'D:/Environment/nodejs/node_modules';
+
+/** Base working directory for every agent session. */
+export const BASE_CWD = process.env.AGENTD_BASE_CWD || 'D:/Project2/code-261013-speclock2/speclock2';
+
+export const LABELS_FILE = process.env.AGENTD_LABELS_FILE || join(DATA_DIR, 'session-labels.json');
+
+/** One log file per run, so output can be tailed externally while it streams. */
+export const RUNS_DIR = process.env.AGENTD_RUNS_DIR || join(DATA_DIR, 'runs');
+
+/** Registry: add an entry to support another ACP-capable CLI. */
+export const AGENTS = {
+  mcode: {
+    label: 'MiniMax Code',
+    cmd: NODE_BIN,
+    args: [`${NODE_MODULES}/@minimax-ai/code/cli.js`, 'acp'],
+    description: 'MiniMax Code agent. Slower to start, strong at multi-step coding.',
+    defaultCwd: process.env.AGENTD_CWD_MCODE || null,
+  },
+  dsh: {
+    label: 'DeepSeek Harness',
+    cmd: NODE_BIN,
+    args: [`${NODE_MODULES}/@deepseek-ai/dsh/lib/bin.js`, '--profile', 'acp'],
+    description: 'DeepSeek Harness agent. Fast startup and short answers.',
+    defaultCwd: process.env.AGENTD_CWD_DSH || null,
+  },
+  pi: {
+    label: 'independent process',
+    cmd: NODE_BIN,
+    args: [join(ROOT, 'server', 'pi-acp-adapter.mjs')],
+    description:
+      'A separate pi instance, exposed through an ACP adapter over pi RPC mode. ' +
+      'Runs with --no-mcp so it cannot call back into this server.',
+    defaultCwd: process.env.AGENTD_CWD_PI || null,
+  },
+};
+
+/** A prompt is cancelled when the agent is silent this long (tool calls in progress do not count as silence). */
+export const IDLE_RUN_MS = 300_000;
+/** Hard ceiling for one prompt, however active the agent is. */
+export const MAX_RUN_MS = Number(process.env.AGENTD_MAX_RUN_MS) || 2 * 60 * 60_000;
+/** How long a cancelled prompt gets to wrap up before it is abandoned. */
+export const CANCEL_GRACE_MS = 15_000;
+
+export const log = (...a) => process.stderr.write(`[agent-pool] ${a.join(' ')}\n`);
+
+export const DEFAULT_AGENT = process.env.AGENTD_DEFAULT_AGENT || 'mcode';
+
+/**
+ * Optional per-agent startup configuration: `agentd.config.json` next to this
+ * lab, or AGENTD_CONFIG to point elsewhere.
+ *
+ *   { "agents": { "mcode": { "cwd": "D:/work/project-a" },
+ *                 "dsh":   { "cwd": "D:/work/project-b" } } }
+ *
+ * Precedence: explicit cwd on the request > AGENTD_CWD_<AGENT> env > this file >
+ * the agent's built-in default > BASE_CWD.
+ */
+const CONFIG_FILE =
+  process.env.AGENTD_CONFIG || join(ROOT, 'agentd.config.json');
+
+/** Parsed `agentd.config.json`; the dispatcher reads its own section from it. */
+export let CONFIG = {};
+
+(function applyConfig() {
+  let cfg = {};
+  try {
+    if (existsSync(CONFIG_FILE)) cfg = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) ?? {};
+  } catch (err) {
+    log('agentd.config.json unreadable, ignoring:', err.message);
+  }
+  CONFIG = cfg;
+  for (const [name, spec] of Object.entries(AGENTS)) {
+    spec.type = name;
+    const fromEnv = process.env[`AGENTD_CWD_${name.toUpperCase()}`];
+    const fromFile = cfg?.agents?.[name]?.cwd;
+    spec.defaultCwd = fromEnv || fromFile || spec.defaultCwd || null;
+    if (spec.defaultCwd) {
+      // A configured workspace that does not exist yet would fail session/new.
+      try {
+        mkdirSync(spec.defaultCwd, { recursive: true });
+      } catch (err) {
+        log(`could not create cwd for ${name}:`, err.message);
+      }
+    }
+  }
+})();
+
+/** Compare directories regardless of slash style, case and trailing slash. */
+export function normPath(p) {
+  return String(p ?? '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+export function flattenOptions(opts = []) {
+  return opts.flatMap((o) =>
+    Array.isArray(o.options) ? flattenOptions(o.options) : [{ value: o.value, name: o.name, description: o.description }],
+  );
+}

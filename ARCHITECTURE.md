@@ -66,15 +66,28 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 
 ## 分层
 
-| 层 | 文件 | 行数 | 只负责 |
-| --- | --- | --- | --- |
-| 入口 | `extension/agent-router.ts` | ~506 | 渲染 + 路由 |
-| 客户端 | `client/agentd-client.mjs` | ~281 | 连接 + 订阅 + 续传 |
-| 服务 | `daemon/agentd.mjs` | ~469 | 持有 pool + 事件身份与广播 |
-| 核心 | `core/agent-pool.mjs` | ~1024 | agent 生命周期 + 会话 + 指标 |
-| 适配 | `server/pi-acp-adapter.mjs` | ~530 | ACP ↔ pi RPC |
+| 层 | 文件 | 只负责 |
+| --- | --- | --- |
+| 入口 | `extension/agent-router.ts` | 调度器的工具（`agent_run`、`propose_handoff` 等）+ 渲染 |
+| 客户端 | `client/agentd-client.mjs` | 连接 + 订阅 + 续传 |
+| 服务 | `daemon/agentd.mjs` | 操作表 + socket 协议 + 空闲回收 |
+| | `daemon/events.mjs` | 事件身份（epoch/seq）、环形缓冲、投递 |
+| | `daemon/guard.mjs` | 谁能调哪些操作（调度器的限制）、项目内名字解析 |
+| | `daemon/receipts.mjs` | 回执（`receipts.jsonl`） |
+| 核心 | `core/agent-pool.mjs` | 只做再导出，保持一个导入路径 |
+| | `core/pool/config.mjs` | 常量、CLI 注册表、`agentd.config.json` |
+| | `core/pool/store.mjs` | 会话旁路数据（标签、目录、模型、上下文、压缩次数） |
+| | `core/pool/registry.mjs` | 池 Map、进程数上限、同类型启动锁 |
+| | `core/pool/acp-client.mjs` | 一个常驻进程：会话、运行、JSON-RPC |
+| | `core/pool/metrics.mjs` | 运行指标与推断的健康信号 |
+| | `core/pool/compaction.mjs` | 上下文占用与自动压缩 |
+| | `core/pool/instances.mjs` | 内置与自建实例 |
+| | `core/projects.mjs` | 项目、执行者配置、写入 guides 与 skills |
+| | `core/dispatcher.mjs` | 调度器（pi RPC） |
+| | `core/handoff.mjs` | 交接：提案、生成文档、开新会话 |
+| 适配 | `server/pi-acp-adapter.mjs` | ACP ↔ pi RPC（含 `/compact`） |
 
-依赖方向是单向的：入口 → 客户端 → daemon → core。`core` 不知道 HTTP、MCP、pi 扩展、
+依赖方向是单向的：入口 → 客户端 → daemon → core（`core/pool/` 内：acp-client → registry/store/metrics/compaction → config）。`core` 不知道 HTTP、MCP、pi 扩展、
 命名管道的存在，所以能被任何前端复用（测试脚本就通过同样的 socket 驱动它）。
 
 ---
@@ -278,6 +291,20 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
 | job / 进度 / 回执 | 我们 | 生成、持久化、广播 |
 | agent 进程 | 我们 | 起、重启、关闭 |
 | 工作区文件 | **用户** | 不写（见守则） |
+
+---
+
+## 会话与权限规则
+
+- **执行者的目录创建后只读**：要换目录就新建执行者（`projects.updateInstance` 拒绝改目录）。
+- **调度器只能派任务**：切换、新建、重命名、删除会话，重置会话、改目录，都只有人能做。`daemon/guard.mjs`
+  对带 `caller: "dispatcher"` 的请求拒绝这些操作，调度器的扩展里也没有对应工具。
+- **压缩**：每个执行者可设阈值（`compactAt`），由 agentd 在一个回合结束、执行者空闲时检查，超过就让 CLI 自己压缩
+  （`/compact`；mcode、pi 支持，dsh 没有）。同一个会话内进行，不换会话。
+- **交接**：换新会话，和压缩是两回事，上下文占比本身不触发。调度器只能 `propose_handoff`；系统也会在客观信号
+  （同一会话压缩 ≥3 次、连续失败 ≥3 次）出现时自动提出。之后必须由人：生成交接文档 → 查看并可修改 →
+  确认，才会开新会话。交接文档由内置 `handoff` skill 写到 `<执行者目录>/.agentd/HANDOFF.md`。
+- **skills**：随执行者目录写入（mcode 为 `.minimax/skills`，其他为 `.agents/skills`），来源 `packages/agentd/skills/`。
 
 ---
 

@@ -22,7 +22,6 @@
  */
 
 import net from 'node:net';
-import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
   writeFileSync,
@@ -51,6 +50,9 @@ import {
 import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
 import { createHandoffs } from '../core/handoff.mjs';
 import * as projects from '../core/projects.mjs';
+import { EPOCH, RING_MAX, addClient, allocEvent, dropClient, eventsSince, publish, publishEphemeral, publishLive, subscribe, unsubscribe } from './events.mjs';
+import { scopeArgs, viewRows } from './guard.mjs';
+import { appendReceipt, readReceipts } from './receipts.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -58,8 +60,6 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PIPE_NAME = process.env.AGENTD_PIPE || '\\\\.\\pipe\\pi-agentd';
 const PORT = process.env.AGENTD_PORT ? Number(process.env.AGENTD_PORT) : null;
 const ENDPOINT_FILE = join(ROOT, 'data', 'agentd.endpoint.json');
-/** Append-only log of finished runs, so receipts survive restarts and idle gaps. */
-const RECEIPTS_FILE = join(ROOT, 'data', 'receipts.jsonl');
 const IDLE_MS = Number(process.env.AGENTD_IDLE_MIN || 30) * 60_000;
 const PROTOCOL = 3;
 /** Project instances and dispatchers idle for this long are stopped. */
@@ -69,120 +69,11 @@ const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 const startedAt = new Date().toISOString();
 
 // ---------------------------------------------------------------------------
-// Event stream: identity, ring buffer, delivery
-// ---------------------------------------------------------------------------
-//
-// Every durable event gets `<epoch>-<seq>`:
-//   epoch  changes when the daemon restarts, so a stale Last-Event-ID is detected
-//   seq    is monotonic within one daemon lifetime
-//
-// Semantic events (job.started / job.done / agent.exit) are kept in a bounded
-// ring so a consumer can resume with `events.since`. High-frequency `progress`
-// events are delivered live but never ringed and never get an id: replaying a
-// cumulative char count would be meaningless.
-
-const EPOCH = randomUUID().slice(0, 8);
-const RING_MAX = 2000;
-const ring = [];
-let seq = 0;
-
-/** @type {Map<string, Set<import('node:net').Socket>>} */
-const subscribers = new Map();
-/** Sockets that asked for every event (the web bridge will do this). */
-const allSubscribers = new Set();
-/** Every connected socket: system events (no jobId) go to all of them. */
-const clients = new Set();
-function writeAll(socks, payload) {
-  const line = JSON.stringify(payload) + '\n';
-  for (const sock of socks) {
-    try {
-      sock.write(line);
-    } catch {
-      /* a broken socket is cleaned up by its own handler */
-    }
-  }
-}
-
-/** Allocate the next durable event id. */
-function allocEvent(type, payload = {}) {
-  seq += 1;
-  return { id: `${EPOCH}-${seq}`, seq, epoch: EPOCH, event: type, ts: new Date().toISOString(), ...payload };
-}
-
-function deliver(ev) {
-  // System events have no jobId and are relevant to every connected client.
-  if (!ev.jobId) return writeAll(clients, ev);
-  if (subscribers.has(ev.jobId)) writeAll(subscribers.get(ev.jobId), ev);
-  if (allSubscribers.size) writeAll(allSubscribers, ev);
-}
-
-/** Store a durable event and deliver it. */
-function publish(ev) {
-  ring.push(ev);
-  while (ring.length > RING_MAX) ring.shift();
-  deliver(ev);
-  return ev;
-}
-
-/** Deliver a live-only event (progress). Never ringed, no id. */
-function publishEpehemeral(jobId, payload) {
-  const ev = { event: 'progress', jobId, ts: new Date().toISOString(), ...payload };
-  if (subscribers.has(jobId)) writeAll(subscribers.get(jobId), ev);
-  if (allSubscribers.size) writeAll(allSubscribers, ev);
-}
-
-/**
- * Deliver a live-only event to the connections that asked for everything
- * (subscribe to '*'). Used for the dispatcher stream.
- */
-function publishLive(event, payload) {
-  if (!allSubscribers.size) return;
-  writeAll(allSubscribers, { event, ts: new Date().toISOString(), ...payload });
-}
-
-function subscribe(sock, jobId) {
-  if (jobId === '*') {
-    allSubscribers.add(sock);
-    return;
-  }
-  if (!subscribers.has(jobId)) subscribers.set(jobId, new Set());
-  subscribers.get(jobId).add(sock);
-}
-
-function unsubscribe(sock, jobId) {
-  if (jobId === '*') {
-    allSubscribers.delete(sock);
-    return;
-  }
-  const set = subscribers.get(jobId);
-  if (!set) return;
-  set.delete(sock);
-  if (set.size === 0) subscribers.delete(jobId);
-}
-
-/** Replay ringed events after `afterId`. Detects a daemon restart via epoch. */
-function eventsSince(afterId, limit = 500) {
-  if (!afterId) return { reset: false, epoch: EPOCH, events: ring.slice(-limit), hasMore: ring.length > limit };
-
-  const dash = String(afterId).lastIndexOf('-');
-  const epoch = dash > 0 ? String(afterId).slice(0, dash) : null;
-  const fromSeq = dash > 0 ? Number(String(afterId).slice(dash + 1)) : NaN;
-
-  if (epoch !== EPOCH || !Number.isFinite(fromSeq)) {
-    // Different daemon lifetime: the caller must reload history from receipts.
-    return { reset: true, epoch: EPOCH, events: [], reason: 'epoch-mismatch' };
-  }
-
-  const events = ring.filter((e) => e.seq > fromSeq).slice(0, limit);
-  return { reset: false, epoch: EPOCH, events, hasMore: events.length === limit };
-}
-
-// ---------------------------------------------------------------------------
 // Progress sink: every agent forwards its stream updates to subscribers.
 // ---------------------------------------------------------------------------
 
 function wireAgent(agent) {
-  agent.setProgressSink((jobId, p) => publishEpehemeral(jobId, p));
+  agent.setProgressSink((jobId, p) => publishEphemeral(jobId, p));
   agent.onCompact = (info) => {
     publish(allocEvent('agent.compacted', info));
     suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次从约 ${info.before?.used} 降到 ${info.after?.used} token`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
@@ -234,28 +125,6 @@ async function restartRunningDispatchers() {
   return out;
 }
 
-/**
- * Requests from a project's dispatcher carry `project`. Everything it names is
- * resolved inside that project, and a name that already points elsewhere is refused.
- */
-const AGENT_ARG_OPS = new Set([
-  'status', 'sessions', 'use', 'new', 'rename', 'models', 'setModel', 'run', 'tail', 'wait', 'cancel', 'transcript',
-]);
-
-/**
- * What a project's dispatcher may not do. Sessions belong to people: only a person switches, starts, renames or
- * deletes one, and an executor's directory is fixed when it is created. The one way a dispatcher changes a
- * session is the confirmed handoff, which runs inside agentd and never goes through these ops.
- */
-const DISPATCHER_DENIED = new Set(['use', 'new', 'rename', 'deleteSession', 'instance.remove', 'project.updateInstance', 'handoff.generate', 'handoff.apply', 'handoff.cancel']);
-function checkCaller(op, args) {
-  if (args?.caller !== 'dispatcher') return;
-  const sessionArgs = op === 'run' && (args.reset || args.sessionId || args.cwd);
-  if (DISPATCHER_DENIED.has(op) || sessionArgs) {
-    throw new Error(`the dispatcher cannot do "${op}": switching, creating, renaming or deleting sessions and changing an executor's directory are done by a person. Send the task with agent_run, or ask the user.`);
-  }
-}
-
 const handoffs = createHandoffs({
   getAgent: (key) => getAgent(key),
   keyOf: (project, id) => `${project}${projects.SEP}${id}`,
@@ -275,74 +144,6 @@ function suggestHandoff(agent, reason, evidence, when = true) {
     handoffs.propose({ project: agent.project, agent: agent.shortId, reason, evidence });
   } catch (err) {
     log('handoff proposal skipped:', err.message);
-  }
-}
-
-function scopeArgs(op, args) {
-  checkCaller(op, args);
-  const project = args?.project;
-  if (!project || !AGENT_ARG_OPS.has(op)) return args;
-  if (!projects.hasProject(project)) throw new Error(`unknown project "${project}"`);
-  const agent = args.agent;
-  if (!agent) throw new Error('agent is required inside a project');
-  if (String(agent).includes(projects.SEP)) throw new Error(`agent "${agent}" is outside project "${project}"`);
-  const scoped = { ...args, agent: `${project}${projects.SEP}${agent}` };
-  // A directory the dispatcher names must stay inside the project root.
-  if (args.cwd) scoped.cwd = projects.resolveInside(projects.projectRoot(project), args.cwd);
-  return scoped;
-}
-
-/** Rows of one project, with short names when the caller is that project's dispatcher. */
-function viewRows(rows, project, short) {
-  const mine = rows.filter((r) => (project ? r.project === project : true));
-  if (!short) return mine;
-  return mine.map((r) => ({ ...r, key: r.id ?? r.name, ...(r.id ? { id: r.shortId } : { name: r.shortId }) }));
-}
-
-// ---------------------------------------------------------------------------
-// Receipts: one line per finished run
-// ---------------------------------------------------------------------------
-
-function appendReceipt(agent, result, prompt, eventId = null) {
-  const m = result?.metrics ?? {};
-  const receipt = {
-    ts: new Date().toISOString(),
-    eventId,
-    jobId: m.jobId ?? null,
-    agent,
-    sessionId: result?.sessionId ?? null,
-    status: m.error ? 'failed' : m.stopReason === 'cancelled' ? 'cancelled' : 'done',
-    stopReason: m.stopReason ?? null,
-    durationMs: m.durationMs ?? null,
-    health: m.health ?? 'ok',
-    attention: m.attention ?? [],
-    model: m.modelName ?? m.model ?? null,
-    tokens: m.tokens ?? null,
-    context: m.context ?? null,
-    chars: m.chars ?? 0,
-    prompt: typeof prompt === 'string' ? prompt.slice(0, 160) : null,
-  };
-  try {
-    mkdirSync(dirname(RECEIPTS_FILE), { recursive: true });
-    appendFileSync(RECEIPTS_FILE, JSON.stringify(receipt) + '\n', 'utf8');
-  } catch (err) {
-    log('could not write receipt:', err.message);
-  }
-  return receipt;
-}
-
-function readReceipts(limit = 50) {
-  try {
-    const lines = readFileSync(RECEIPTS_FILE, 'utf8').trim().split('\n').filter(Boolean);
-    return lines.slice(-limit).map((l) => {
-      try {
-        return JSON.parse(l);
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
-  } catch {
-    return [];
   }
 }
 
@@ -653,7 +454,7 @@ let lastActivity = Date.now();
 
 const server = net.createServer((sock) => {
   connections += 1;
-  clients.add(sock);
+  addClient(sock);
   lastActivity = Date.now();
   let buf = '';
   sock.setEncoding('utf8');
@@ -689,12 +490,7 @@ const server = net.createServer((sock) => {
 
   const cleanup = () => {
     connections = Math.max(0, connections - 1);
-    clients.delete(sock);
-    allSubscribers.delete(sock);
-    for (const [jobId, set] of subscribers) {
-      set.delete(sock);
-      if (set.size === 0) subscribers.delete(jobId);
-    }
+    dropClient(sock);
   };
   sock.on('close', cleanup);
   sock.on('error', cleanup);

@@ -67,6 +67,7 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
   const { data: models } = useDispatcherModels(projectId);
   const { data: sessions, error } = useDispatcherSessions(projectId);
   const [switching, setSwitching] = useState(false);
+  const [changed, setChanged] = useState(false); // the model was switched here, so the field shows white
 
   const refreshAll = async () => {
     await qc.invalidateQueries({ queryKey: ['projects'] });
@@ -80,6 +81,7 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
     try {
       await api('POST', `/api/dispatcher/model${pq(projectId)}`, { value });
       await qc.invalidateQueries({ queryKey: ['dispatcher-models', projectId] });
+      setChanged(true);
       toast('调度器模型已切换');
     } catch (e) {
       toast((e as Error).message);
@@ -95,7 +97,7 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
           label="模型"
           hint={models?.hiddenWithoutCredentials ? `另有 ${models.hiddenWithoutCredentials} 个模型没有配置凭据，没有列出。` : '选择后立即生效。'}
         >
-          <Select value={models?.current ?? ''} onChange={(v) => void setModel(v)} disabled={switching || !models} options={(models?.models ?? []).map((x) => ({ value: x.value, label: x.name || x.value }))} />
+          <Select filled={changed} value={models?.current ?? ''} onChange={(v) => void setModel(v)} disabled={switching || !models} options={(models?.models ?? []).map((x) => ({ value: x.value, label: x.name || x.value }))} />
         </Field>
         {project?.root ? (
           <Field label="根目录">

@@ -46,6 +46,7 @@ export function Composer({ placeholder, busy, onSend }: Props) {
 
   return (
     <form
+      data-filled={text.trim() !== ''}
       onSubmit={(e) => {
         e.preventDefault();
         void submit();

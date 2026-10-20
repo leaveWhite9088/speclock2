@@ -82,16 +82,16 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
     <>
       <form onSubmit={submit} className="grid gap-2">
         <Field label="名称">
-          <Input required value={v.name} onChange={(e) => draft.set({ name: e.target.value })} />
+          <Input required filled={v.name.trim() !== saved.name.trim()} value={v.name} onChange={(e) => draft.set({ name: e.target.value })} />
         </Field>
         <Field label="用途">
-          <Input placeholder="调度器据此挑人，例如 后端服务" value={v.role} onChange={(e) => draft.set({ role: e.target.value })} />
+          <Input placeholder="调度器据此挑人，例如 后端服务" filled={v.role.trim() !== saved.role.trim()} value={v.role} onChange={(e) => draft.set({ role: e.target.value })} />
         </Field>
         <Field label="目录">
-          <Input placeholder="相对项目根目录，例如 ./server" value={v.dir} onChange={(e) => draft.set({ dir: e.target.value })} onBlur={() => draft.set({ dir: relDir(v.dir, root) })} />
+          <Input placeholder="相对项目根目录，例如 ./server" filled={v.dir.trim() !== saved.dir.trim()} value={v.dir} onChange={(e) => draft.set({ dir: e.target.value })} onBlur={() => draft.set({ dir: relDir(v.dir, root) })} />
         </Field>
         <Field label="模型">
-          <Select value={v.model} onChange={(x) => draft.set({ model: x })} options={options} />
+          <Select filled={v.model !== saved.model} value={v.model} onChange={(x) => draft.set({ model: x })} options={options} />
         </Field>
         <DraftActions dirty={draft.dirty} valid={Boolean(v.name.trim())} submitText="提交修改" onUndo={draft.undo} />
       </form>

@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 export const fieldClass =
   'field h-8 w-full px-2.5';
 
-export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input autoComplete="off" className={cn(fieldClass, className)} {...rest} />;
+/** Grey while empty (or unchanged), white once filled (or changed): pass `filled` to say what "filled" means. */
+export function Input({ className, filled, ...rest }: InputHTMLAttributes<HTMLInputElement> & { filled?: boolean }) {
+  const on = filled ?? String(rest.value ?? rest.defaultValue ?? '') !== '';
+  return <input autoComplete="off" data-filled={on} className={cn(fieldClass, className)} {...rest} />;
 }

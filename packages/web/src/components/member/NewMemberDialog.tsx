@@ -60,7 +60,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
             <Input required autoFocus placeholder="例如 dsh-backend" value={form.id} onChange={(e) => set({ id: e.target.value })} />
           </Field>
           <Field label="CLI">
-            <Select value={type} onChange={(v) => set({ type: v, model: '', sessionId: 'new' })} options={types.map((t) => ({ value: t, label: t }))} />
+            <Select filled={Boolean(form.type)} value={type} onChange={(v) => set({ type: v, model: '', sessionId: 'new' })} options={types.map((t) => ({ value: t, label: t }))} />
           </Field>
           <Field label="目录">
             <Input
@@ -82,6 +82,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
           </Field>
           <Field label="模型">
             <Select
+              filled={form.model !== ''}
               value={form.model}
               onChange={(v) => set({ model: v })}
               placeholder={modelsLoading ? '读取中…' : undefined}
@@ -93,6 +94,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
           </Field>
           <Field label="会话">
             <Select
+              filled={form.sessionId !== 'new'}
               value={form.sessionId}
               onChange={(v) => set({ sessionId: v })}
               placeholder={sessionsLoading ? '读取中，需要启动一次 CLI，约 10 秒…' : undefined}

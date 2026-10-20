@@ -17,15 +17,17 @@ interface Props {
   options: SelectOption[];
   placeholder?: string;
   disabled?: boolean;
+  /** White once the choice differs from the default one. */
+  filled?: boolean;
   className?: string;
 }
 
 /** Same look as Input, with a list that matches the page instead of the operating system's. */
-export function Select({ value, onChange, options, placeholder, disabled, className }: Props) {
+export function Select({ value, onChange, options, placeholder, disabled, filled, className }: Props) {
   const shown = options.some((o) => o.value === value) ? (value === '' ? EMPTY : value) : undefined;
   return (
     <RS.Root value={shown} onValueChange={(v) => onChange(v === EMPTY ? '' : v)} disabled={disabled}>
-      <RS.Trigger className={cn(fieldClass, 'flex items-center justify-between gap-2 text-left disabled:opacity-60', className)}>
+      <RS.Trigger data-filled={Boolean(filled)} className={cn(fieldClass, 'flex items-center justify-between gap-2 text-left disabled:opacity-60', className)}>
         <span className="min-w-0 flex-1 truncate">
           <RS.Value placeholder={placeholder} />
         </span>

@@ -100,6 +100,26 @@ try {
   const other = (await call('projects')).projects.find((p) => p.id === B);
   check('other project instance stayed stopped', other.instances.every((i) => i.alive === false));
 
+  // model and session choice at creation
+  const cat = await call('project.models', { type: TYPE });
+  check('project.models lists the models of a type', cat.models.length > 0, `${cat.models.length} models`);
+  const pick = cat.models.find((m) => m.value !== cat.current) ?? cat.models[0];
+  await call('project.addInstance', { project: A, id: 'mdl', type: TYPE, dir: '.', model: pick.value });
+  const r2 = await s.c.call('run', { agent: `${A}~mdl`, prompt: 'Reply with exactly: MODEL' });
+  const st2 = await s.status(`${A}~mdl`);
+  check('instance uses the model chosen at creation', st2.model === pick.value, `${st2.model} (wanted ${pick.value})`);
+  // A running CLI writes its session out late, so stop it first: what is on disk is what can be picked.
+  await call('project.stop', { project: A });
+  const owned = await call('project.sessions', { project: A, type: TYPE, dir: './server' });
+  check('a session another instance owns is not offered', !owned.sessions.some((x) => x.sessionId === r.sessionId));
+  await call('project.addInstance', { project: A, id: 'old', type: TYPE, dir: './server', sessionId: r.sessionId });
+  const r3 = await s.c.call('run', { agent: `${A}~old`, prompt: 'Reply with exactly: AGAIN' });
+  check('instance created on an existing session resumes it', r3.sessionId === r.sessionId, r3.sessionId);
+  await call('project.removeInstance', { project: A, id: 'old' });
+  await call('project.removeInstance', { project: A, id: 'mdl' });
+  const free = await call('project.sessions', { project: A, type: TYPE, dir: '.' });
+  check('project.sessions offers existing sessions of that directory', free.sessions.some((x) => x.sessionId === r2.sessionId), `${free.sessions.length}`);
+
   // 7. busy refusal
   const started = await call('run', { agent: `${A}~srv`, prompt: 'Count slowly from 1 to 200, one number per line.', async: true });
   await new Promise((res) => setTimeout(res, 1500));
@@ -119,6 +139,8 @@ try {
   s = await Scheduler.open();
   const back = (await s.c.call('projects')).projects;
   check('projects are restored after restart', back.some((p) => p.id === A) && back.some((p) => p.id === B));
+  const r4 = await s.c.call('run', { agent: `${A}~srv`, prompt: 'Reply with exactly: BACK' });
+  check('instance returns to its last session after restart', r4.sessionId === r.sessionId, r4.sessionId);
   check(
     'instance dir survives restart',
     back.find((p) => p.id === A).instances.find((i) => i.id === 'srv')?.dir?.replace(/\\/g, '/').endsWith('server'),

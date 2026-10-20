@@ -203,10 +203,13 @@ agentd 操作：transcript {agent, sessionId?, afterSeq?, limit?, tail?}
 配置存在 `data/projects.json`，重启 daemon 后恢复。
 
 - **切项目只是切视图**：其它项目的进程继续跑，不卸载。
+- **没有「全局」视图**：看板里一切都挂在项目下；空闲回收对所有实例生效（含项目外的内置实例）。
 - **懒启动**：创建实例只写配置，第一次用才拉起进程；空闲超过 `limits.idleMinutes`（默认 15）自动回收，下次用到再起。
 - **进程总数上限** `limits.maxProcesses`（默认 12，或 `AGENTD_MAX_PROCESSES`），超了拒绝拉起。
 - **隔离**：`dir` 必须落在根目录内（拒绝 `..`、根外绝对路径、指向根外的符号链接/junction）。
   项目调度器的所有工具调用都被限定在本项目内（环境变量 `AGENTD_PROJECT`，daemon 端改写 agent 名并拒绝含 `~` 的名字）。
+- **创建实例时可选模型和会话**：`model`（不填则用 `agentd.config.json` 的 `defaultModels.<类型>`，mcode 默认 M3）；`sessionId` 填已有会话即接着用，不填或 `new` 就在首次使用时新建。
+  实例会记住最后用的会话，进程被回收或 daemon 重启后回到同一个会话。可选项由 `project.models {type}` 和 `project.sessions {project,type,dir}` 提供（用临时进程探测，已被别的实例占用的会话不会列出）。
 - **角色**：`role` 是给调度器看的用途说明（`agent_instances` 会列出）。没写则取 `agentd.config.json` 的 `roles.<类型>`。
 - **确认**：关闭/删除项目、删除实例时若还有任务在跑，会返回 `still running: …`，带 `force` 重发才会中断它们（看板会弹确认）。
 - 调度器模型列表只显示有凭据的模型（`auth.json`、`models.json` 里带 apiKey 的 provider、`<NAME>_API_KEY` 环境变量）。

@@ -178,6 +178,11 @@ class AcpClient {
     this.shortId = spec.shortId ?? name;
     /** What this instance is for. The dispatcher's LLM reads it when choosing. */
     this.role = spec.role ?? CONFIG?.roles?.[spec.type ?? name] ?? null;
+    /** Model this instance should use (config value); applied to sessions that have no choice of their own. */
+    this.preferModel = spec.model ?? CONFIG?.defaultModels?.[spec.type ?? name] ?? null;
+    /** Session to come back to: the one chosen at creation, then whichever was last active. */
+    this.preferSession = spec.sessionId ?? null;
+    this.onSession = spec.onSession ?? null;
     /** Last time work was queued or finished, for idle recycling. */
     this.lastActive = Date.now();
     /** Set while we stop the process on purpose, so it is not reported as a crash. */
@@ -570,11 +575,56 @@ class AcpClient {
     return this.initPromise;
   }
 
+  /** Remember which session is active, so a recycled process comes back to it. */
+  _noteActive() {
+    if (!this.sessionId || this.preferSession === this.sessionId) return;
+    this.preferSession = this.sessionId;
+    try {
+      this.onSession?.(this.sessionId);
+    } catch (err) {
+      log(`[${this.name}] onSession failed: ${err.message}`);
+    }
+  }
+
+  /** Give a session the instance's model unless it already has a choice of its own. */
+  async _applyPreferredModel() {
+    const want = this.preferModel;
+    const opt = this.configOptions?.find((o) => o.id === 'model');
+    if (!want || !opt || opt.currentValue === want || !this.sessionId) return;
+    if (store[this.name]?.[this.sessionId]?.config?.model) return;
+    try {
+      const r = await this._request('session/set_config_option', {
+        sessionId: this.sessionId,
+        configId: 'model',
+        value: want,
+      });
+      this._captureConfig(r);
+      const meta = entry(this.name, this.sessionId);
+      meta.config = { ...(meta.config ?? {}), model: want };
+      if (!meta.cwd) meta.cwd = this.cwd;
+      saveStore();
+      log(`[${this.name}] applied instance model ${want}`);
+    } catch (err) {
+      log(`[${this.name}] could not apply instance model ${want}: ${err.message}`);
+    }
+  }
+
   /** Init + ensure an active session for `cwd`. */
   async ensureReady(cwd) {
     await this._init();
     const wantCwd = cwd || this.spec.defaultCwd || this.cwd || BASE_CWD;
     if (this.sessionId && wantCwd === this.cwd) return this.sessionId;
+
+    // First use after a (re)start: go back to the chosen / last active session.
+    if (!this.sessionId && this.preferSession) {
+      try {
+        await this._attach(this.preferSession, wantCwd);
+        return this.sessionId;
+      } catch (err) {
+        log(`[${this.name}] could not resume ${this.preferSession}: ${err.message}; starting a new session`);
+        this.preferSession = null;
+      }
+    }
 
     const t0 = Date.now();
     const sess = await this._request('session/new', { cwd: wantCwd, mcpServers: [] });
@@ -585,6 +635,8 @@ class AcpClient {
     this.sessionConfig.set(this.sessionId, this.configOptions);
     noteSession(this.name, this.sessionId, { cwd: wantCwd, updatedAt: new Date().toISOString() });
     log(`[${this.name}] new session ${this.sessionId} in ${Date.now() - t0}ms`);
+    await this._applyPreferredModel();
+    this._noteActive();
     return this.sessionId;
   }
 
@@ -593,6 +645,13 @@ class AcpClient {
    * retarget the pointer; otherwise resume it from disk.
    */
   async _attach(sessionId, cwd) {
+    const res = await this._attachRaw(sessionId, cwd);
+    await this._applyPreferredModel();
+    this._noteActive();
+    return res;
+  }
+
+  async _attachRaw(sessionId, cwd) {
     const wantCwd = cwd || store[this.name]?.[sessionId]?.cwd || this.cwd || BASE_CWD;
 
     if (this.live.has(sessionId)) {
@@ -680,6 +739,7 @@ class AcpClient {
     return this._enqueue(async () => {
       await this._init();
       this.sessionId = null;
+      this.preferSession = null; // an explicit "new" must not fall back to the remembered session
       return this.ensureReady(cwd);
     });
   }
@@ -708,6 +768,7 @@ class AcpClient {
           await this._attach(sessionId, cwd);
         } else if (reset) {
           this.sessionId = null;
+          this.preferSession = null;
         }
         await this.ensureReady(cwd);
         this.streamedText = '';
@@ -1084,9 +1145,14 @@ const pool = new Map();
 /** Upper bound on live agent processes, so many projects cannot exhaust memory. */
 const MAX_PROCESSES = Number(process.env.AGENTD_MAX_PROCESSES) || CONFIG?.limits?.maxProcesses || 12;
 
-function aliveCount() {
+/** Model a type uses when an instance names none (agentd.config.json defaultModels). */
+function defaultModelFor(type) {
+  return CONFIG?.defaultModels?.[type] ?? null;
+}
+
+function aliveCount(filter = () => true) {
   let n = 0;
-  for (const a of pool.values()) if (a.child) n += 1;
+  for (const a of pool.values()) if (a.child && filter(a)) n += 1;
   return n;
 }
 
@@ -1125,11 +1191,14 @@ function saveInstances() {
   }
 }
 
-function buildInstance({ id, type, cwd, project = null, shortId = id, role = null }) {
+function buildInstance({ id, type, cwd, project = null, shortId = id, role = null, model = null, sessionId = null, onSession = null }) {
   const base = AGENTS[type];
   const spec = {
     ...base,
     type,
+    model,
+    sessionId,
+    onSession,
     custom: true,
     project,
     shortId,
@@ -1194,6 +1263,8 @@ function listInstances() {
     project: a.project,
     shortId: a.shortId,
     role: a.role,
+    preferModel: a.preferModel,
+    preferSession: a.preferSession,
     lastActive: a.lastActive,
     type: a.type,
     custom: a.custom,
@@ -1260,6 +1331,7 @@ export {
   removeInstance,
   buildInstance,
   aliveCount,
+  defaultModelFor,
   MAX_PROCESSES,
   listInstances,
   readTranscript,

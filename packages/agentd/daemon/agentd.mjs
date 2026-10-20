@@ -420,7 +420,7 @@ const OPS = {
       ...p,
       dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy) },
     })),
-    limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
+    limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),
 
   'project.create': (args) => {
@@ -429,11 +429,17 @@ const OPS = {
     return p;
   },
 
-  'project.addInstance': ({ project, id, type, dir, role }) => {
-    const r = projects.addInstance(project, { id, type, dir, role });
+  'project.addInstance': ({ project, id, type, dir, role, model, sessionId }) => {
+    const r = projects.addInstance(project, { id, type, dir, role, model, sessionId });
     wireAgent(pool.get(r.key));
     return r;
   },
+
+  /** Models a CLI type offers (cached per type). */
+  'project.models': ({ type, refresh }) => projects.probeModels(type, { refresh: refresh === true }),
+
+  /** Existing sessions of a CLI type in a project directory, to pick from when creating an instance. */
+  'project.sessions': ({ project, type, dir }) => projects.probeSessions(project, type, dir),
 
   'project.removeInstance': ({ project, id, force }) => projects.removeInstance(project, id, { force }),
 

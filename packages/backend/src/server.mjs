@@ -99,6 +99,12 @@ const routes = [
   ['POST', '/api/projects', ({ body }) => call('project.create', body)],
   ['DELETE', '/api/projects/:id', ({ params, query }) => call('project.remove', { project: params.id, force: query.force === '1' })],
   ['POST', '/api/projects/:id/stop', ({ params, body }) => call('project.stop', { project: params.id, force: body.force === true })],
+  ['GET', '/api/models', ({ query }) => call('project.models', { type: query.type, refresh: query.refresh === '1' })],
+  [
+    'GET',
+    '/api/projects/:id/sessions',
+    ({ params, query }) => call('project.sessions', { project: params.id, type: query.type, dir: query.dir || '.' }),
+  ],
   ['POST', '/api/projects/:id/instances', ({ params, body }) => call('project.addInstance', { ...body, project: params.id })],
   [
     'DELETE',

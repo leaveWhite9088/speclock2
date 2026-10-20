@@ -58,20 +58,23 @@ function el(tag, cls, text) {
 async function loadProjects() {
   const r = await api('GET', '/api/projects');
   state.projects = r.projects;
-  if (state.project && !r.projects.some((p) => p.id === state.project)) state.project = '';
+  // A project is the basic unit: there is no project-less view. Fall back to the first one.
+  if (!r.projects.some((p) => p.id === state.project)) state.project = r.projects[0]?.id ?? '';
+  localStorage.setItem('project', state.project);
   const sel = $('project');
   sel.replaceChildren(
-    Object.assign(el('option', null, '（全局，无项目）'), { value: '' }),
     ...r.projects.map((p) => Object.assign(el('option', null, `${p.name}${p.busy ? ' · 运行中' : ''}`), { value: p.id })),
   );
   sel.value = state.project;
-  $('limits').textContent = `进程 ${r.limits.alive}/${r.limits.maxProcesses} · 空闲 ${r.limits.idleMinutes} 分钟回收`;
+  const g = r.limits.global ? `（其中项目外的内置实例 ${r.limits.global}）` : '';
+  $('limits').textContent = `进程 ${r.limits.alive}/${r.limits.maxProcesses}${g} · 空闲 ${r.limits.idleMinutes} 分钟回收`;
   const has = Boolean(state.project);
   $('btn-stop').style.display = has ? '' : 'none';
   $('btn-delete').style.display = has ? '' : 'none';
-  $('dir-input').placeholder = has ? '相对项目根目录，例如 ./server' : '目录（绝对路径）';
-  $('dispatcher-title').textContent = has ? `调度器（pi）· ${state.project}` : '调度器（pi）· 全局';
-  $('agents-title').textContent = has ? `实例 · ${r.projects.find((p) => p.id === state.project)?.root ?? ''}` : '实例（全局）';
+  $('form-instance').style.display = has ? '' : 'none';
+  $('form-dispatch').style.display = has ? '' : 'none';
+  $('dispatcher-title').textContent = has ? `调度器（pi）· ${state.project}` : '调度器（pi）';
+  $('agents-title').textContent = has ? `实例 · ${r.projects.find((p) => p.id === state.project)?.root ?? ''}` : '先在右上角「新建项目」';
 }
 
 $('project').onchange = guard(async (e) => {
@@ -126,39 +129,36 @@ $('btn-delete').onclick = guard(async () => {
 
 // -- instances --------------------------------------------------------------
 
-async function currentInstances() {
-  if (state.project) return state.projects.find((p) => p.id === state.project)?.instances ?? [];
-  const { instances } = await api('GET', '/api/instances');
-  return instances.filter((i) => !i.project).map((i) => ({ ...i, key: i.id }));
+function currentInstances() {
+  return state.projects.find((p) => p.id === state.project)?.instances ?? [];
 }
 
 async function loadAgents() {
   await loadProjects();
-  const { types } = await api('GET', '/api/instances');
-  $('types').replaceChildren(...types.map((t) => Object.assign(el('option', null, t), { value: t })));
+  if (!$('types').options.length) {
+    const { types } = await api('GET', '/api/instances');
+    $('types').replaceChildren(...types.map((t) => Object.assign(el('option', null, t), { value: t })));
+    refreshPickers().catch((e) => toast(e.message));
+  }
   const ul = $('agents');
   ul.replaceChildren();
-  for (const i of await currentInstances()) {
+  for (const i of currentInstances()) {
     const li = el('li', i.key === state.agent ? 'sel' : '');
     const left = el('div');
     left.append(
       el('span', 'dot' + (i.busy ? ' busy' : i.alive ? ' on' : '')),
       i.id,
-      el('small', null, `${i.type}${i.custom && !state.project ? ' · 自建' : ''} · ${state.project ? i.dir : (i.cwd ?? '(基准目录)')}`),
+      el('small', null, `${i.type} · ${i.dir} · ${i.currentModel ?? i.model ?? i.preferModel ?? '默认模型'}`),
     );
     if (i.role) left.append(el('div', 'role', i.role));
     li.append(left);
-    if (i.custom || state.project) {
+    {
       const rm = el('button', null, '删');
       rm.onclick = guard(async (ev) => {
         ev.stopPropagation();
-        if (state.project) {
-          await confirmedAction(`删除实例 ${i.id}`, (force) =>
-            api('DELETE', `/api/projects/${enc(state.project)}/instances/${enc(i.id)}${force ? '?force=1' : ''}`),
-          );
-        } else {
-          await api('DELETE', `/api/instances/${enc(i.id)}`);
-        }
+        await confirmedAction(`删除实例 ${i.id}`, (force) =>
+          api('DELETE', `/api/projects/${enc(state.project)}/instances/${enc(i.id)}${force ? '?force=1' : ''}`),
+        );
         if (state.agent === i.key) await selectAgent(null);
         await loadAgents();
       });
@@ -172,15 +172,50 @@ async function loadAgents() {
 $('form-instance').onsubmit = guard(async (e) => {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target));
-  if (state.project) {
-    await api('POST', `/api/projects/${enc(state.project)}/instances`, { id: f.id, type: f.type, dir: f.dir, role: f.role || undefined });
-  } else {
-    await api('POST', '/api/instances', { id: f.id, type: f.type, cwd: f.dir });
-  }
+  await api('POST', `/api/projects/${enc(state.project)}/instances`, {
+    id: f.id,
+    type: f.type,
+    dir: f.dir,
+    role: f.role || undefined,
+    model: f.model || undefined,
+    sessionId: f.sessionId || 'new',
+  });
   e.target.reset();
+  refreshPickers().catch(() => {});
   toast('已创建（首次使用时才会拉起进程）', true);
   await loadAgents();
 });
+
+// The model and session lists depend on the CLI type and directory, and need a short-lived probe
+// process, so they load when the type or directory changes, not on every render.
+let pickerSeq = 0;
+async function refreshPickers() {
+  const seq = ++pickerSeq;
+  const type = $('types').value;
+  if (!type || !state.project) return;
+  const mSel = $('model-input');
+  const sSel = $('session-input');
+  mSel.replaceChildren(Object.assign(el('option', null, '加载中…'), { value: '' }));
+  sSel.replaceChildren(Object.assign(el('option', null, '加载中…'), { value: 'new' }));
+  const dir = $('dir-input').value.trim() || '.';
+  const [models, sessions] = await Promise.all([
+    api('GET', `/api/models?type=${enc(type)}`).catch(() => ({ models: [] })),
+    api('GET', `/api/projects/${enc(state.project)}/sessions?type=${enc(type)}&dir=${enc(dir)}`).catch(() => ({ sessions: [] })),
+  ]);
+  if (seq !== pickerSeq) return; // a newer change superseded this one
+  mSel.replaceChildren(
+    Object.assign(el('option', null, models.default ? `（默认：${models.default}）` : '（默认）'), { value: '' }),
+    ...models.models.map((m) => Object.assign(el('option', null, m.name || m.value), { value: m.value })),
+  );
+  sSel.replaceChildren(
+    Object.assign(el('option', null, '新建会话'), { value: 'new' }),
+    ...sessions.sessions.map((s) =>
+      Object.assign(el('option', null, `${s.title || s.sessionId.slice(0, 8)} · ${(s.updatedAt ?? '').slice(0, 16)}`), { value: s.sessionId }),
+    ),
+  );
+}
+$('types').onchange = guard(refreshPickers);
+$('dir-input').onchange = guard(refreshPickers);
 
 // -- sessions and transcript ----------------------------------------------
 
@@ -194,7 +229,8 @@ async function selectAgent(key) {
   if (!key) return;
   const { sessions } = await api('GET', `/api/agents/${enc(key)}/sessions`);
   if (state.agent !== key) return; // the user clicked elsewhere meanwhile
-  const ul = $('sessions');
+  // Build off-screen and swap in one go: overlapping selectAgent calls must not append twice.
+  const ul = document.createDocumentFragment();
   for (const s of sessions) {
     const li = el('li', null);
     const d = el('div', null, s.label || s.title || s.sessionId.slice(0, 8));
@@ -203,6 +239,7 @@ async function selectAgent(key) {
     li.onclick = guard(() => selectSession(s.sessionId));
     ul.append(li);
   }
+  $('sessions').replaceChildren(ul);
   const active = sessions.find((s) => s.active) ?? sessions[0];
   if (active) await selectSession(active.sessionId);
 }
@@ -249,6 +286,11 @@ $('form-run').onsubmit = guard(async (e) => {
 // -- dispatcher -------------------------------------------------------------
 
 async function loadDispatcher() {
+  if (!state.project) {
+    $('dlog').replaceChildren();
+    $('dstate').textContent = '没有项目';
+    return;
+  }
   const m = await api('GET', `/api/dispatcher/models${pq()}`);
   $('dmodels').replaceChildren(
     ...m.models.map((x) => Object.assign(el('option', null, x.value), { value: x.value, selected: x.value === m.current })),
@@ -369,7 +411,7 @@ function connectEvents() {
   es.addEventListener('dispatcher.event', (m) => {
     const ev = JSON.parse(m.data);
     // Other projects' dispatchers keep running; only show the one on screen.
-    if ((ev.project ?? '') === state.project) onDispatcherEvent(ev.data ?? {});
+    if (ev.project && ev.project === state.project) onDispatcherEvent(ev.data ?? {});
     else loadProjects().catch(() => {});
   });
   for (const name of ['job.started', 'job.done', 'agent.exit']) {

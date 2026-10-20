@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENTS, buildInstance, listInstances, pool } from './agent-pool.mjs';
+import { AGENTS, buildInstance, defaultModelFor, listInstances, pool } from './agent-pool.mjs';
 
 export const SEP = '~';
 
@@ -90,6 +90,13 @@ function register(project, inst) {
     project: project.id,
     shortId: inst.id,
     role: inst.role ?? null,
+    model: inst.model ?? null,
+    sessionId: inst.sessionId ?? null,
+    // The instance comes back to the session it last used, also after a daemon restart.
+    onSession: (sid) => {
+      inst.sessionId = sid;
+      save();
+    },
   });
   pool.set(key, agent);
   return agent;
@@ -175,7 +182,7 @@ export function createProject({ id, name, root, instances = [] }) {
   return listProjects().find((p) => p.id === id);
 }
 
-export function addInstance(projectId, { id, type, dir = '.', role = null }, { persist = true } = {}) {
+export function addInstance(projectId, { id, type, dir = '.', role = null, model = null, sessionId = null }, { persist = true } = {}) {
   const project = find(projectId);
   checkId('instance', id);
   if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
@@ -183,11 +190,65 @@ export function addInstance(projectId, { id, type, dir = '.', role = null }, { p
   const abs = resolveInside(project.root, dir);
 
   const rel = relative(project.root, abs).replace(/\\/g, '/') || '.';
-  const inst = { id, type, dir: rel, role: role ? String(role).slice(0, 500) : null };
+  const inst = {
+    id,
+    type,
+    dir: rel,
+    role: role ? String(role).slice(0, 500) : null,
+    model: model ? String(model).slice(0, 200) : null,
+    // "new" (or nothing) means: start a fresh session on first use.
+    sessionId: sessionId && sessionId !== 'new' ? String(sessionId).slice(0, 200) : null,
+  };
   project.instances.push(inst);
   const agent = register(project, inst);
   if (persist) save();
-  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role };
+  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId };
+}
+
+// -- probes: what can I pick before the instance exists? -----------------------------
+
+const PROBE_DIR = join(DATA_DIR, 'probe');
+const modelCache = new Map();
+
+/** Models a CLI type offers. Needs a session, so it runs in a scratch directory, once per type. */
+export async function probeModels(type, { refresh = false } = {}) {
+  if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
+  if (modelCache.has(type) && !refresh) return modelCache.get(type);
+  mkdirSync(PROBE_DIR, { recursive: true });
+  const tmp = buildInstance({ id: `probe-${type}`, type, cwd: PROBE_DIR });
+  try {
+    const d = await tmp.describeModels();
+    const opt = d.configOptions.find((o) => o.id === 'model');
+    const out = {
+      type,
+      current: opt?.currentValue ?? null,
+      default: defaultModelFor(type),
+      models: (opt?.options ?? []).map((o) => ({ value: o.value, name: o.name ?? o.value })),
+    };
+    modelCache.set(type, out);
+    return out;
+  } finally {
+    await tmp.shutdown().catch(() => {});
+  }
+}
+
+/** Sessions a CLI already has in `dir` of the project, for picking one when creating an instance. */
+export async function probeSessions(projectId, type, dir = '.') {
+  const project = find(projectId);
+  if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
+  const abs = resolveInside(project.root, dir);
+  const tmp = buildInstance({ id: `probe-${type}-s`, type, cwd: abs });
+  try {
+    const r = await tmp.listSessions();
+    // Sessions another instance of this project already owns are not offered twice.
+    const taken = new Set(project.instances.map((i) => i.sessionId).filter(Boolean));
+    return {
+      sessions: r.sessions.filter((s) => s.source === 'agent' && !taken.has(s.sessionId)),
+      remoteError: r.remoteError,
+    };
+  } finally {
+    await tmp.shutdown().catch(() => {});
+  }
 }
 
 function busyOf(agents) {
@@ -229,12 +290,12 @@ export async function removeProject(projectId, { force = false } = {}) {
   return { id: projectId, removed: true };
 }
 
-/** Stop project instances that have been idle for `ms`. Returns their keys. */
+/** Stop instances (project and built-in alike, so none holds a slot forever) idle for `ms`. Returns their keys. */
 export async function sweepIdle(ms) {
   const now = Date.now();
   const stopped = [];
   for (const a of pool.values()) {
-    if (!a.project || !a.child || a.busy || now - a.lastActive < ms) continue;
+    if (!a.child || a.busy || now - a.lastActive < ms) continue;
     await a.shutdown();
     stopped.push(a.name);
   }

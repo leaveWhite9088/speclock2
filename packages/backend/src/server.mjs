@@ -41,8 +41,15 @@ async function readBody(req) {
     chunks.push(c);
   }
   if (!chunks.length) return {};
+  let text;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    // fatal: bytes that are not UTF-8 (for example a GBK terminal) must not turn into U+FFFD and be stored
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new HttpError(400, 'body must be UTF-8 text');
+  }
+  try {
+    return JSON.parse(text);
   } catch {
     throw new HttpError(400, 'body must be JSON');
   }

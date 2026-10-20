@@ -8,6 +8,8 @@
 
 const $ = (id) => document.getElementById(id);
 const enc = encodeURIComponent;
+import { renderMarkdown } from './md.mjs';
+
 const DISPATCHER = '@dispatcher';
 
 const state = {
@@ -269,7 +271,7 @@ function renderHead() {
   const alive = dsp ? project()?.dispatcher?.alive : m?.alive;
   $('head-state').textContent = busy ? '工作中' : alive ? '待命' : m?.lastError ? `启动失败：${m.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
   $('btn-retry').hidden = !(m && !alive && m.lastError);
-  $('input').placeholder = dsp ? '告诉调度器要做什么，例如：让后端执行者修一下登录接口' : `直接对 ${m?.id ?? ''} 说话`;
+  $('input').placeholder = dsp ? '告诉调度器要做什么（Enter 发送，Shift+Enter 换行）' : `直接对 ${m?.id ?? ''} 说话（Enter 发送，Shift+Enter 换行）`;
   $('btn-abort').hidden = !busy;
 }
 
@@ -296,37 +298,38 @@ function toggleDrawer(open) {
 $('btn-settings').onclick = () => toggleDrawer(!state.drawer);
 $('btn-retry').onclick = retryStart;
 
-function section(title, ...children) {
-  const s = el('section', 'dr-sec');
-  if (title) s.append(el('h3', null, title));
-  s.append(...children);
-  return s;
-}
+const field = (label, control, hint) => {
+  const l = el('label');
+  l.append(el('span', null, label), control);
+  if (hint) l.append(el('small', 'dim', hint));
+  return l;
+};
+const textInput = (value, placeholder) => {
+  const i = el('input');
+  i.value = value ?? '';
+  if (placeholder) i.placeholder = placeholder;
+  i.autocomplete = 'off';
+  return i;
+};
+const heading = (text, ...actions) => {
+  const h = el('div', 'dr-h');
+  h.append(el('span', null, text), ...actions);
+  return h;
+};
+const linkBtn = (text, fn, cls = '') => {
+  const b = el('button', `link ${cls}`, text);
+  b.type = 'button';
+  b.onclick = guard(fn);
+  return b;
+};
 
-function kv(rows) {
-  const dl = el('dl', 'kv');
-  for (const [k, v] of rows) {
-    dl.append(el('dt', null, k));
-    const dd = el('dd');
-    if (v instanceof Node) dd.append(v);
-    else dd.textContent = v ?? '—';
-    dl.append(dd);
-  }
-  return dl;
-}
-
-function sessionItem(title, sub, current, onUse) {
-  const it = el('div', `sess-item${current ? ' cur' : ''}`);
-  const left = el('div');
-  left.append(el('div', 't', title || '（无标题）'), el('small', null, sub));
-  it.append(left);
-  if (current) it.append(el('span', 'badge', '当前'));
-  else {
-    const b = el('button', 'ghost', '使用');
-    b.onclick = guard(onUse);
-    it.append(b);
-  }
-  return it;
+function sessionRow(title, sub, current, onUse) {
+  const r = el('button', `sess${current ? ' cur' : ''}`);
+  r.type = 'button';
+  r.disabled = current;
+  r.append(el('span', 't', title || '（无标题）'), el('small', null, current ? `${sub} · 当前` : sub));
+  if (!current) r.onclick = guard(onUse);
+  return r;
 }
 
 async function renderDrawer() {
@@ -336,7 +339,18 @@ async function renderDrawer() {
   x.setAttribute('aria-label', '关闭设置');
   x.onclick = () => toggleDrawer(false);
   head.append(el('h2', null, isDispatcher() ? '调度器设置' : `${member(state.sel)?.id ?? ''} 设置`), x);
-  dr.replaceChildren(head, isDispatcher() ? await dispatcherSettings() : await executorSettings());
+  const body = el('div', 'dr-body');
+  body.append(isDispatcher() ? await dispatcherSettings() : await executorSettings());
+  dr.replaceChildren(head, body);
+}
+
+function sessionsBlock(newFn, load) {
+  const list = el('div', 'sess-list');
+  list.append(el('div', 'dim', '读取中…'));
+  load(list).catch((e) => list.replaceChildren(el('div', 'dim', e.message)));
+  const f = document.createDocumentFragment();
+  f.append(heading('会话', linkBtn('＋ 新建', newFn)), list);
+  return f;
 }
 
 async function executorSettings() {
@@ -346,81 +360,90 @@ async function executorSettings() {
   await ensureCatalog(m.type);
   const cat = state.catalog[m.type] ?? { models: [], default: null };
 
-  wrap.append(
-    section('基本信息', kv([
-      ['CLI', m.type],
-      ['目录', el('code', 'mono', m.dir)],
-      ['进程', m.busy ? '工作中' : m.alive ? '待命' : '未启动'],
-    ])),
-  );
-
-  const role = el('input');
-  role.value = m.role ?? '';
-  role.placeholder = '调度器据此挑人';
-  const saveRole = el('button', 'ghost', '保存');
-  saveRole.onclick = guard(async () => {
-    await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, { role: role.value.trim() });
-    toast('已保存', true);
-    await loadProjects();
-  });
-  const r = el('div', 'row');
-  r.append(role, saveRole);
-  wrap.append(section('用途', r));
-
+  const name = textInput(m.id);
+  const role = textInput(m.role, '调度器据此挑人，例如 后端服务');
+  const dir = textInput(m.dir, '相对项目根目录');
+  const cli = el('div', 'static');
+  cli.append(tag(m.type, null, true).firstChild, el('span', 'dim', '创建后不能改'));
   const sel = el('select');
-  const cur = m.model ?? m.preferModel ?? '';
+  const cur = m.model ?? '';
   sel.append(opt(cat.default ? `默认（${modelName(m.type, cat.default)}）` : '默认', ''));
   for (const mo of cat.models) sel.append(opt(mo.name || mo.value, mo.value, mo.value === cur));
-  if (!m.model && m.preferModel === cat.default) sel.value = '';
-  const saveModel = el('button', 'ghost', '应用');
-  saveModel.onclick = guard(async () => {
-    await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, { model: sel.value || null });
-    toast('模型已更新', true);
-    await loadProjects();
-    await renderDrawer();
-  });
-  const mr = el('div', 'row');
-  mr.append(sel, saveModel);
-  const hint = el('div', 'dim', '正在运行的会话会立即切换；没选过模型的新会话用这里的设置。');
-  wrap.append(section('模型', mr, hint));
-
-  const list = el('div', 'sess-list');
-  const sessBox = section('会话', list);
-  const newBtn = el('button', 'ghost', '新建会话');
-  newBtn.onclick = guard(async () => {
-    await api('POST', `/api/agents/${enc(m.key)}/sessions`, {});
-    toast('已新建会话', true);
-    await afterSessionChange();
-  });
-  sessBox.insertBefore(newBtn, list);
-  list.append(el('div', 'dim', '读取中…'));
-  wrap.append(sessBox);
-  api('GET', `/api/agents/${enc(m.key)}/sessions`).then((r) => {
-    list.replaceChildren();
-    const active = activeSessionId(m, r.sessions);
-    if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话，第一次发消息时会自动创建。'));
-    for (const s of r.sessions) {
-      list.append(
-        sessionItem(s.label || s.title || s.sessionId.slice(0, 8), when(s.updatedAt), s.sessionId === active, async () => {
-          await api('POST', `/api/agents/${enc(m.key)}/use`, { sessionId: s.sessionId });
-          await afterSessionChange();
-        }),
-      );
+  sel.value = cur;
+  const save = el('button', 'primary', '保存');
+  save.onclick = guard(async () => {
+    const patch = {};
+    if (name.value.trim() !== m.id) patch.name = name.value.trim();
+    if (role.value.trim() !== (m.role ?? '')) patch.role = role.value.trim();
+    if (dir.value.trim() !== m.dir) patch.dir = dir.value.trim();
+    if (sel.value !== cur) patch.model = sel.value || null;
+    if (!Object.keys(patch).length) return toast('没有改动', true);
+    if (patch.dir && !confirm('换目录会重启它的进程，并且不再沿用原来的会话（会话属于创建时的目录）。继续吗？')) return;
+    save.disabled = true;
+    try {
+      const r = await api('PATCH', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}`, patch);
+      toast('已保存', true);
+      if (r.key !== m.key) state.sel = r.key;
+      await loadProjects();
+      await loadConversation();
+      await renderDrawer();
+    } finally {
+      save.disabled = false;
     }
-  }).catch((e) => list.replaceChildren(el('div', 'dim', e.message)));
-
-  const del = el('button', 'ghost danger', '删除这个执行者');
-  del.onclick = guard(async () => {
-    if (!confirm(`删除执行者「${m.id}」？\n\n只移除配置和进程，它的会话记录保留在磁盘上。`)) return;
-    const done = await confirmedAction(`删除执行者 ${m.id}`, (force) =>
-      api('DELETE', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}${force ? '?force=1' : ''}`),
-    );
-    if (!done) return;
-    toggleDrawer(false);
-    await loadProjects();
-    await openMember(DISPATCHER);
   });
-  wrap.append(section('', del));
+  const form = el('div', 'form');
+  form.append(
+    field('名称', name),
+    field('用途', role),
+    field('目录', dir),
+    field('CLI', cli),
+    field('模型', sel, '运行中的会话立即切换；新会话用这里的设置。'),
+    save,
+  );
+  wrap.append(form);
+
+  wrap.append(
+    sessionsBlock(
+      async () => {
+        await api('POST', `/api/agents/${enc(m.key)}/sessions`, {});
+        toast('已新建会话', true);
+        await afterSessionChange();
+      },
+      async (list) => {
+        const r = await api('GET', `/api/agents/${enc(m.key)}/sessions`);
+        list.replaceChildren();
+        const active = activeSessionId(m, r.sessions);
+        if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话，第一次发消息时会自动创建。'));
+        for (const x of r.sessions) {
+          list.append(
+            sessionRow(x.label || x.title || x.sessionId.slice(0, 8), when(x.updatedAt), x.sessionId === active, async () => {
+              await api('POST', `/api/agents/${enc(m.key)}/use`, { sessionId: x.sessionId });
+              await afterSessionChange();
+            }),
+          );
+        }
+      },
+    ),
+  );
+
+  const foot = el('div', 'dr-foot');
+  foot.append(
+    linkBtn(
+      '删除这个执行者',
+      async () => {
+        if (!confirm(`删除执行者「${m.id}」？\n\n只移除配置和进程，它的会话记录保留在磁盘上。`)) return;
+        const done = await confirmedAction(`删除执行者 ${m.id}`, (force) =>
+          api('DELETE', `/api/projects/${enc(state.project)}/instances/${enc(m.id)}${force ? '?force=1' : ''}`),
+        );
+        if (!done) return;
+        toggleDrawer(false);
+        await loadProjects();
+        await openMember(DISPATCHER);
+      },
+      'danger',
+    ),
+  );
+  wrap.append(foot);
   return wrap;
 }
 
@@ -439,60 +462,54 @@ async function dispatcherSettings() {
     renderHead();
     toast('调度器模型已切换', true);
   });
-  const modelBits = [sel];
-  if (m.hiddenWithoutCredentials) modelBits.push(el('div', 'dim', `另有 ${m.hiddenWithoutCredentials} 个模型因为没有配置凭据，没有列出。`));
-  wrap.append(section('模型', ...modelBits));
+  const form = el('div', 'form');
+  form.append(field('模型', sel, m.hiddenWithoutCredentials ? `另有 ${m.hiddenWithoutCredentials} 个模型没有配置凭据，没有列出。` : '选择后立即生效。'));
+  wrap.append(form);
 
-  const list = el('div', 'sess-list');
-  const newBtn = el('button', 'ghost', '新建会话');
-  newBtn.onclick = guard(async () => {
-    await api('POST', `/api/dispatcher/new${pq()}`);
-    toast('已新建会话', true);
-    await afterSessionChange();
-  });
-  const sessBox = section('会话', newBtn, list);
-  wrap.append(sessBox);
-  list.append(el('div', 'dim', '读取中…'));
-  api('GET', `/api/dispatcher/sessions${pq()}`).then((r) => {
-    list.replaceChildren();
-    if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话。'));
-    for (const s of r.sessions) {
-      list.append(
-        sessionItem(s.title || (s.sessionId ?? '').slice(0, 8), when(s.updatedAt), s.active, async () => {
-          await api('POST', `/api/dispatcher/use${pq()}`, { sessionFile: s.file });
-          await afterSessionChange();
-        }),
-      );
-    }
-  }).catch((e) => list.replaceChildren(el('div', 'dim', e.message)));
+  wrap.append(
+    sessionsBlock(
+      async () => {
+        await api('POST', `/api/dispatcher/new${pq()}`);
+        toast('已新建会话', true);
+        await afterSessionChange();
+      },
+      async (list) => {
+        const r = await api('GET', `/api/dispatcher/sessions${pq()}`);
+        list.replaceChildren();
+        if (!r.sessions.length) list.append(el('div', 'dim', '还没有会话。'));
+        for (const x of r.sessions) {
+          list.append(
+            sessionRow(x.title || (x.sessionId ?? '').slice(0, 8), when(x.updatedAt), x.active, async () => {
+              await api('POST', `/api/dispatcher/use${pq()}`, { sessionFile: x.file });
+              await afterSessionChange();
+            }),
+          );
+        }
+      },
+    ),
+  );
 
   // LLMs are shared by every project's dispatcher.
-  const form = el('form');
-  form.style.display = 'grid';
-  form.style.gap = '8px';
-  const fields = [
+  const lf = el('form', 'form');
+  for (const [n, ph] of [
     ['provider', '名称，例如 my-llm'],
     ['baseUrl', '接口地址，例如 https://api.x.com/v1'],
     ['apiKey', 'API key：写 $环境变量名 或直接填值'],
     ['model', '模型 id'],
-  ];
-  for (const [name, ph] of fields) {
-    const i = el('input');
-    i.name = name;
-    i.placeholder = ph;
+  ]) {
+    const i = textInput('', ph);
+    i.name = n;
     i.required = true;
-    i.autocomplete = 'off';
-    form.append(i);
+    lf.append(i);
   }
   const add = el('button', 'ghost', '添加并重启调度器');
-  form.append(add);
-  form.onsubmit = guard(async (e) => {
+  lf.append(add);
+  lf.onsubmit = guard(async (e) => {
     e.preventDefault();
-    const f = Object.fromEntries(new FormData(form));
+    const v = Object.fromEntries(new FormData(lf));
     add.disabled = true;
     try {
-      await api('POST', '/api/dispatcher/llms', { provider: f.provider, baseUrl: f.baseUrl, apiKey: f.apiKey, models: [{ id: f.model }] });
-      form.reset();
+      await api('POST', '/api/dispatcher/llms', { provider: v.provider, baseUrl: v.baseUrl, apiKey: v.apiKey, models: [{ id: v.model }] });
       toast('已添加，运行中的调度器已重启', true);
       await renderDrawer();
     } finally {
@@ -505,11 +522,9 @@ async function dispatcherSettings() {
       ? l.providers.map((p) => `${p.provider}  ${p.baseUrl}\n  ${p.models.map((x) => x.id).join(', ')}`).join('\n')
       : '还没有自定义 LLM。';
   });
-  const det = el('details');
-  det.append(el('summary', null, '添加 LLM（所有项目的调度器共用）'), el('div'));
-  det.lastChild.style.cssText = 'display:grid;gap:10px;margin-top:10px';
-  det.lastChild.append(form, llms);
-  wrap.append(section('', det));
+  const det = el('details', 'dr-more');
+  det.append(el('summary', null, '添加 LLM（所有项目的调度器共用）'), llms, lf);
+  wrap.append(det);
   return wrap;
 }
 
@@ -521,7 +536,12 @@ async function afterSessionChange() {
 
 // -- conversation -------------------------------------------------------------
 
+// While a conversation is being rebuilt it is drawn into `building` and swapped in at once, so the
+// scroll position never collapses to the top in between.
+let building = null;
+
 function lane() {
+  if (building) return building;
   let l = $('stream').querySelector('.lane');
   if (!l) {
     $('stream').replaceChildren();
@@ -531,29 +551,82 @@ function lane() {
   return l;
 }
 
-function scrollDown() {
+const nearBottom = () => {
   const s = $('stream');
-  s.scrollTop = s.scrollHeight;
+  return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+};
+
+/** Follow the conversation only if the reader is already at the bottom (or asked for it). */
+function scrollDown(force = false) {
+  if (building) return;
+  const s = $('stream');
+  if (force || s.dataset.stick !== '0') s.scrollTop = s.scrollHeight;
+}
+$('stream').addEventListener('scroll', () => {
+  $('stream').dataset.stick = nearBottom() ? '1' : '0';
+});
+
+/** Draw a whole conversation off-screen, then replace the old one without moving the reader. */
+function rebuild(draw, { keepPlace = true } = {}) {
+  const s = $('stream');
+  const stick = !keepPlace || nearBottom();
+  const top = s.scrollTop;
+  building = el('div', 'lane');
+  try {
+    draw();
+    s.replaceChildren(building);
+  } finally {
+    building = null;
+  }
+  s.scrollTop = stick ? s.scrollHeight : top;
+  s.dataset.stick = stick ? '1' : '0';
+}
+
+function setBody(body, text) {
+  body._raw = text;
+  if (body._frame) return;
+  body._frame = requestAnimationFrame(() => {
+    body._frame = 0;
+    body.replaceChildren(renderMarkdown(body._raw));
+    scrollDown();
+  });
 }
 
 function addMessage(role, text, who) {
   const m = el('div', `msg ${role}`);
   if (role !== 'user' && who) m.append(el('div', 'who', who));
-  const body = el('div', 'body', text);
+  const body = el('div', 'body');
+  if (role === 'assistant') {
+    body._raw = text;
+    body.append(renderMarkdown(text));
+  } else body.textContent = text;
   m.append(body);
   lane().append(m);
-  scrollDown();
+  scrollDown(role === 'user');
   return body;
 }
 
+const oneLine = (t, n) => {
+  const x = String(t).replace(/s+/g, ' ').trim();
+  return x.length > n ? `${x.slice(0, n)}…` : x;
+};
+
+/** Tool calls and their results are one plain list; each line opens to show the full text. */
 function addCall(name, detail, result) {
-  const d = el('details', 'call');
-  const s = el('summary');
-  s.append(el('b', null, name), el('span', null, result ? '返回' : '调用'));
-  d.append(s, el('pre', null, detail));
-  lane().append(d);
+  const l = lane();
+  let ul = l.lastElementChild;
+  if (!ul?.classList.contains('tools')) {
+    ul = el('ul', 'tools');
+    l.append(ul);
+  }
+  const li = el('li', result ? 'res' : '');
+  const d = el('details');
+  const sum = el('summary');
+  sum.append(el('b', null, result ? `↳ ${name}` : name), el('span', 'arg', oneLine(result ? detail : detail.replace(/[{}"]/g, ''), 100)));
+  d.append(sum, el('pre', null, detail));
+  li.append(d);
+  ul.append(li);
   scrollDown();
-  return d;
 }
 
 function emptyState() {
@@ -598,9 +671,7 @@ async function loadConversation() {
     const r = await api('GET', `/api/dispatcher/messages${pq()}`);
     if (seq !== convSeq) return;
     if (!r.messages.length) return emptyState();
-    $('stream').replaceChildren();
-    for (const msg of r.messages) renderPiMessage(msg);
-    scrollDown();
+    rebuild(() => r.messages.forEach(renderPiMessage));
     return;
   }
   const m = member(state.sel);
@@ -623,12 +694,16 @@ async function pullTranscript(seq = convSeq) {
   const r = await api('GET', `/api/agents/${enc(m.key)}/sessions/${enc(state.sessionId)}/transcript${q}`);
   if (seq !== convSeq) return;
   if (!r.entries.length && !state.lastSeq) return emptyState();
-  for (const e of r.entries) {
-    if (e.seq <= state.lastSeq) continue; // a overlapping pull already drew it
-    if (e.role === 'error') addMessage('error', e.error || e.text || '出错了', '出错');
-    else addMessage(e.role, e.text ?? '', m.id);
-    state.lastSeq = e.seq;
-  }
+  const draw = () => {
+    for (const e of r.entries) {
+      if (e.seq <= state.lastSeq) continue; // an overlapping pull already drew it
+      if (e.role === 'error') addMessage('error', e.error || e.text || '出错了', '出错');
+      else addMessage(e.role, e.text ?? '', m.id);
+      state.lastSeq = e.seq;
+    }
+  };
+  if (state.lastSeq) draw();
+  else rebuild(draw, { keepPlace: false });
 }
 
 async function openMember(key) {
@@ -752,8 +827,7 @@ function onDispatcherEvent(d) {
   if (!isDispatcher()) return;
   if (d.type === 'message_update' && d.kind === 'text_delta') {
     if (!state.streaming) state.streaming = addMessage('assistant', '', '调度器');
-    state.streaming.append(document.createTextNode(d.delta));
-    scrollDown();
+    setBody(state.streaming, (state.streaming._raw ?? '') + d.delta);
   } else if (d.type === 'tool_execution_start') {
     state.streaming = null;
     addCall(d.toolName, JSON.stringify(d.args ?? {}, null, 2));

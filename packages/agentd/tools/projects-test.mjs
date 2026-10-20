@@ -127,6 +127,16 @@ try {
   check('the change shows in the project listing', shown.role === 'changed role' && shown.preferModel === pick.value);
   await fails(call('project.updateInstance', { project: A, id: 'nope', role: 'x' }), /unknown instance/, 'updating an unknown instance is rejected');
 
+  // rename and move
+  await call('project.addInstance', { project: A, id: 'tmp', type: TYPE, dir: '.' });
+  const mv = await call('project.updateInstance', { project: A, id: 'tmp', name: 'tmp2', dir: 'server' });
+  check('rename + move returns the new key and dir', mv.key === `${A}~tmp2` && mv.dir === 'server', JSON.stringify(mv));
+  const after = (await call('projects')).projects.find((p) => p.id === A).instances;
+  check('old name is gone, new one lists', !after.some((i) => i.id === 'tmp') && after.some((i) => i.id === 'tmp2' && i.dir === 'server'));
+  await fails(call('project.updateInstance', { project: A, id: 'tmp2', name: 'srv' }), /already exists/, 'renaming onto an existing name is rejected');
+  await fails(call('project.updateInstance', { project: A, id: 'tmp2', dir: '..' }), /outside/, 'moving outside the root is rejected');
+  await call('project.removeInstance', { project: A, id: 'tmp2' });
+
   // 7. busy refusal
   const started = await call('run', { agent: `${A}~srv`, prompt: 'Count slowly from 1 to 200, one number per line.', async: true });
   await new Promise((res) => setTimeout(res, 1500));

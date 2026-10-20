@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const PORT = Number(process.env.WEB_PORT) || 5234;
 const BACKEND = new URL(process.env.BACKEND_URL || 'http://127.0.0.1:8787');
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 http
   .createServer(async (req, res) => {

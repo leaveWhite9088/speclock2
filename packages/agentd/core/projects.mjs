@@ -251,12 +251,35 @@ export async function probeSessions(projectId, type, dir = '.') {
   }
 }
 
-/** Change what an instance is for and which model it prefers. Directory and type are fixed. */
-export function updateInstance(projectId, id, { role, model }) {
+/**
+ * Edit an instance: role, preferred model, and (while idle) name and directory. The CLI type is fixed.
+ * A new name or directory restarts the process under the new identity; a new directory forgets the
+ * remembered session, because sessions belong to the directory they were made in.
+ */
+export async function updateInstance(projectId, id, { role, model, name, dir }) {
   const project = find(projectId);
   const inst = project.instances.find((i) => i.id === id);
   if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
-  const agent = pool.get(keyOf(projectId, id));
+  let agent = pool.get(keyOf(projectId, id));
+  const rename = name !== undefined && name !== id;
+  const relDir = dir !== undefined ? relative(project.root, resolveInside(project.root, dir || '.')).replace(/\\/g, '/') || '.' : inst.dir;
+  const moved = relDir !== inst.dir;
+  if (rename || moved) {
+    if (rename) {
+      checkId('instance', name);
+      if (project.instances.some((i) => i.id === name)) throw new Error(`instance "${name}" already exists in project "${projectId}"`);
+    }
+    if (agent.busy) throw new Error(`instance "${id}" is running a prompt; cancel it first`);
+    await agent.shutdown();
+    pool.delete(agent.name);
+    if (rename) inst.id = name;
+    if (moved) {
+      inst.dir = relDir;
+      inst.sessionId = null;
+    }
+    agent = register(project, inst);
+    id = inst.id;
+  }
   if (role !== undefined) {
     inst.role = role ? String(role).slice(0, 500) : null;
     agent.role = inst.role ?? agent.role;
@@ -266,7 +289,7 @@ export function updateInstance(projectId, id, { role, model }) {
     agent.preferModel = inst.model ?? defaultModelFor(inst.type);
   }
   save();
-  return { key: agent.name, id, role: inst.role, model: inst.model };
+  return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir };
 }
 
 function busyOf(agents) {

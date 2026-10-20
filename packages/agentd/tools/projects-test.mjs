@@ -129,6 +129,18 @@ try {
   check('the change shows in the project listing', shown.role === 'changed role' && shown.preferModel === pick.value);
   await fails(call('project.updateInstance', { project: A, id: 'nope', role: 'x' }), /unknown instance/, 'updating an unknown instance is rejected');
 
+  // a model changed in the settings must reach the process that is already running
+  const alt = cat.models.find((m) => m.value !== pick.value);
+  if (alt) {
+    await s.c.call('run', { agent: `${A}~srv`, prompt: 'Reply with exactly: ONE' });
+    await call('project.updateInstance', { project: A, id: 'srv', model: alt.value });
+    const st3 = await s.status(`${A}~srv`);
+    check('changing the model of a running instance takes effect', st3.model === alt.value, `${st3.model} (wanted ${alt.value})`);
+    await call('project.updateInstance', { project: A, id: 'srv', model: pick.value });
+    const st4 = await s.status(`${A}~srv`);
+    check('and changing it back takes effect again', st4.model === pick.value, `${st4.model} (wanted ${pick.value})`);
+  }
+
   // rename and move
   await call('project.addInstance', { project: A, id: 'tmp', type: TYPE, dir: '.' });
   const mv = await call('project.updateInstance', { project: A, id: 'tmp', name: 'tmp2', dir: 'server' });

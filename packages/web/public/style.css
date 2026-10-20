@@ -289,3 +289,6 @@ dialog form label > input, dialog form label > select { margin-top: 0; }
 .member .name .ctx{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted)}
 .member .name .ctx.warm{color:#b7791f}
 .member .name .ctx.hot{color:#c53030;font-weight:600}
+
+.tools li.run .arg{color:var(--accent,#3b82f6)}
+.tools li.fail b{color:#c53030}

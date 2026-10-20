@@ -316,7 +316,7 @@ export async function updateInstance(projectId, id, { role, model, name, dir }) 
   }
   if (model !== undefined) {
     inst.model = model ? String(model).slice(0, 200) : null;
-    agent.preferModel = inst.model ?? defaultModelFor(inst.type);
+    await agent.chooseModel(inst.model);
   }
   save();
   seedGuides(project);

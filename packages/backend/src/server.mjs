@@ -98,6 +98,7 @@ const routes = [
       }),
   ],
   ['POST', '/api/agents/:id/run', ({ params, body }) => startRun(params.id, body)],
+  ['GET', '/api/agents/:id/tail', ({ params }) => call('tail', { agent: params.id })],
   ['POST', '/api/agents/:id/cancel', ({ params }) => call('cancel', { agent: params.id })],
 
   // Projects. `?project=<id>` on the dispatcher routes picks that project's dispatcher;

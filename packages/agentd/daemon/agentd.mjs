@@ -46,6 +46,7 @@ import {
   readTranscript,
   aliveCount,
   MAX_PROCESSES,
+  seedContexts,
 } from '../core/agent-pool.mjs';
 import { Dispatcher } from '../core/dispatcher.mjs';
 import * as projects from '../core/projects.mjs';
@@ -676,6 +677,7 @@ server.listen(PORT ?? PIPE_NAME, () => {
   } catch (err) {
     log('could not publish endpoint file:', err.message);
   }
+  seedContexts(readReceipts(500)); // the newest figure of a session wins
   log(`listening on ${endpoint} (pid ${process.pid})`);
   log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
 });

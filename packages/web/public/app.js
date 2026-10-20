@@ -155,6 +155,7 @@ async function loadProjects() {
   $('limits').textContent = `进程 ${r.limits.alive}/${r.limits.maxProcesses}${g}，空闲 ${r.limits.idleMinutes} 分钟回收`;
   if (state.sel !== DISPATCHER && !member(state.sel)) state.sel = DISPATCHER;
   for (const i of members()) ensureCatalog(i.type);
+  syncLive();
   renderMembers();
   renderHead();
 }
@@ -755,7 +756,7 @@ function addMessage(role, text, who) {
 }
 
 const oneLine = (t, n) => {
-  const x = String(t).replace(/s+/g, ' ').trim();
+  const x = String(t).split(/[ \t\r\n]+/).join(' ').trim();
   return x.length > n ? `${x.slice(0, n)}…` : x;
 };
 
@@ -775,6 +776,28 @@ function addCall(name, detail, result) {
   li.append(d);
   ul.append(li);
   scrollDown();
+}
+
+/**
+ * An executor's tool call is recorded twice in the transcript, when it starts and when it ends.
+ * It is drawn as one line that is marked when the end arrives.
+ */
+const toolLines = new Map();
+function addTool(e) {
+  const done = e.status === 'completed' || e.status === 'failed';
+  let li = toolLines.get(e.toolCallId);
+  if (!li && done && !e.title) return; // an end without a start (a pull that began mid-call)
+  if (!li) {
+    addCall(e.title || e.kind || '工具', '', false);
+    const ul = lane().lastElementChild;
+    li = ul.lastElementChild;
+    li.querySelector('details').replaceChildren(li.querySelector('summary'));
+    toolLines.set(e.toolCallId, li);
+  }
+  li.classList.toggle('run', !done);
+  li.classList.toggle('fail', e.status === 'failed');
+  const mark = li.querySelector('.arg');
+  if (mark) mark.textContent = done ? (e.status === 'failed' ? '失败' : '') : '进行中…';
 }
 
 function emptyState() {
@@ -813,6 +836,8 @@ async function loadConversation() {
   const seq = ++convSeq;
   state.streaming = null;
   state.lastSeq = 0;
+  toolLines.clear();
+  state.live = null;
   state.sessionId = null;
   if (!state.project) return emptyState();
   if (isDispatcher()) {
@@ -835,6 +860,30 @@ async function loadConversation() {
   await pullTranscript(seq);
 }
 
+// While the selected executor works, its transcript is pulled every couple of seconds, so tool calls
+// show up as they happen and the text written so far is shown in a bubble that the final answer replaces.
+let liveTimer = null;
+function syncLive() {
+  const m = isDispatcher() ? null : member(state.sel);
+  if (!m?.busy) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    return;
+  }
+  if (liveTimer) return;
+  liveTimer = setInterval(async () => {
+    const cur = isDispatcher() ? null : member(state.sel);
+    if (!cur?.busy) return syncLive();
+    try {
+      await pullTranscript();
+      const t = await api('GET', `/api/agents/${enc(cur.key)}/tail`);
+      if (!t?.running || !t.text) return;
+      if (!state.live || !state.live.isConnected) state.live = addMessage('assistant', '', cur.id);
+      setBody(state.live, t.text);
+    } catch {}
+  }, 1500);
+}
+
 async function pullTranscript(seq = convSeq) {
   const m = member(state.sel);
   if (isDispatcher() || !m || !state.sessionId) return;
@@ -842,11 +891,16 @@ async function pullTranscript(seq = convSeq) {
   const r = await api('GET', `/api/agents/${enc(m.key)}/sessions/${enc(state.sessionId)}/transcript${q}`);
   if (seq !== convSeq) return;
   if (!r.entries.length && !state.lastSeq) return emptyState();
+  if (state.live && r.entries.some((e) => e.role === 'assistant' || e.role === 'error')) {
+    state.live.closest('.msg')?.remove();
+    state.live = null;
+  }
   const draw = () => {
     for (const e of r.entries) {
       if (e.seq <= state.lastSeq) continue; // an overlapping pull already drew it
       const echo = e.role === 'user' ? state.echoed.indexOf((e.text ?? '').trim()) : -1;
       if (echo >= 0) state.echoed.splice(echo, 1); // typed here and already on screen
+      else if (e.role === 'tool') addTool(e);
       else if (e.role === 'error') addMessage('error', e.error || e.text || '出错了', '出错');
       else addMessage(e.role, e.text ?? '', m.id);
       state.lastSeq = e.seq;
@@ -1012,7 +1066,13 @@ function connectEvents() {
   es.onerror = () => ($('conn').textContent = '重连中…');
   es.addEventListener('dispatcher.event', (m) => {
     const ev = JSON.parse(m.data);
-    if (ev.project && ev.project === state.project) onDispatcherEvent(ev.data ?? {});
+    if (ev.project && ev.project === state.project) {
+      // The conversation handler ignores events while an executor is open, but the list on the left
+      // still has to follow the dispatcher starting and finishing.
+      const t = ev.data?.type;
+      if (!isDispatcher() && (t === 'agent_start' || t === 'agent_settled' || t === 'dispatcher_exit')) loadProjects().catch(() => {});
+      onDispatcherEvent(ev.data ?? {});
+    }
     else loadProjects().catch(() => {});
   });
   for (const name of ['job.started', 'job.done', 'agent.exit']) {

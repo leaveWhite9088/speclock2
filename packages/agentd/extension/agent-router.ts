@@ -208,15 +208,23 @@ const runTool = defineTool({
 
 			try {
 				let result: any;
-				try {
-					const ev = await c.waitFor("job.done", (e: any) => e.jobId === started.jobId, 3 * 60 * 60_000);
+				// Wait for the job.done event, but look at the job itself every 15 s: an event lost on the way
+				// must not leave the dispatcher waiting for a run that finished long ago.
+				const deadline = Date.now() + 3 * 60 * 60_000;
+				while (!result) {
+					let ev: any = null;
+					try {
+						ev = await c.waitFor("job.done", (e: any) => e.jobId === started.jobId, 15_000);
+					} catch {
+						const snap = await c.call("tail", { agent, jobId: started.jobId }).catch(() => null);
+						if (snap && !snap.running) {
+							if (snap.metrics?.error) throw new Error(snap.metrics.error);
+							result = { text: snap.text, sessionId: snap.sessionId, stopReason: "end_turn", metrics: snap.metrics };
+						} else if (Date.now() > deadline) throw new Error("agent_run is still waiting after 3 hours");
+						continue;
+					}
 					if (ev.error) throw new Error(ev.error);
 					result = ev.result;
-				} catch (err) {
-					// Fallback: the event was lost — read the final state instead.
-					const snap = await c.call("tail", { agent, jobId: started.jobId }).catch(() => null);
-					if (!snap || snap.running) throw err;
-					result = { text: snap.text, sessionId: snap.sessionId, stopReason: "end_turn", metrics: snap.metrics };
 				}
 
 			const m = result.metrics;

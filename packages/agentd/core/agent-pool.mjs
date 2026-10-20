@@ -151,6 +151,21 @@ function noteSession(agent, sessionId, patch) {
 
 loadStore();
 
+/** Fill in sessions that finished a run before context figures were kept, from their receipts. */
+function seedContexts(receipts) {
+  let changed = false;
+  for (const r of [...receipts].reverse()) {
+    const c = r?.context;
+    if (!r?.agent || !r?.sessionId || c?.percent == null) continue;
+    const e = entry(r.agent, r.sessionId);
+    if (!e.context) {
+      e.context = { used: c.used ?? null, size: c.size ?? null, percent: c.percent };
+      changed = true;
+    }
+  }
+  if (changed) saveStore();
+}
+
 /** Options may be flat or grouped: {group, name, options: [...]}. */
 /** Compare directories regardless of slash style, case and trailing slash. */
 function normPath(p) {
@@ -686,6 +701,23 @@ class AcpClient {
     }
   }
 
+  /**
+   * The instance's model was changed in its settings. That is a deliberate choice, so it replaces
+   * what the current session had: applied now when the process is idle, else before the next prompt.
+   */
+  async chooseModel(value) {
+    this.preferModel = value ?? defaultModelFor(this.type);
+    const sid = this.sessionId ?? this.preferSession;
+    const cfg = sid ? store[this.name]?.[sid]?.config : null;
+    if (cfg?.model) {
+      delete cfg.model;
+      saveStore();
+    }
+    if (!this.child || !this.sessionId) return;
+    if (this.busy) this.modelDirty = true;
+    else await this._applyPreferredModel();
+  }
+
   /** Init + ensure an active session for `cwd`. */
   async ensureReady(cwd) {
     await this._init();
@@ -848,6 +880,10 @@ class AcpClient {
           this.preferSession = null;
         }
         await this.ensureReady(cwd);
+        if (this.modelDirty) {
+          this.modelDirty = false;
+          await this._applyPreferredModel();
+        }
         this.streamedText = '';
         run.sessionId = this.sessionId;
         run.model = this.currentModel();
@@ -1422,6 +1458,7 @@ function formatMetrics(m, agent) {
 }
 
 export {
+  seedContexts,
   AGENTS,
   BASE_CWD,
   CONFIG,

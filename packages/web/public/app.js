@@ -780,7 +780,9 @@ async function refreshDispatcher() {
 const input = $('input');
 const grow = () => {
   input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
+  // scrollHeight leaves out the 2px border; without it a full line would scroll instead of grow
+  input.style.height = `${Math.min(input.scrollHeight + 2, 220)}px`;
+  $('btn-send').disabled = !input.value.trim();
 };
 input.addEventListener('input', grow);
 input.addEventListener('keydown', (e) => {

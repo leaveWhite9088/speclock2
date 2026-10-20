@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { ContextRing } from '@/components/ui/context-ring';
 import { Tag } from '@/components/ui/tag';
 import { toast } from '@/components/ui/toast';
 import { useCatalog, useDispatcherModels, useSelectedMember } from '@/hooks/queries';
@@ -36,7 +37,6 @@ export function ChatHeader() {
       : { text: null, faint: true };
 
   let state = busy ? '工作中' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
-  if (context?.percent != null && alive) state += `，上下文 ${Math.round(context.percent)}%`;
 
   const retry = async () => {
     if (!member) return;
@@ -57,6 +57,7 @@ export function ChatHeader() {
         <Tag type={isDispatcher ? 'pi' : (member?.type ?? '')} llm={llm.text} faint={llm.faint} />
       </div>
       <div className="flex min-w-0 items-center gap-2.5">
+        <ContextRing c={context} />
         <span className="min-w-0 truncate text-[12.5px] text-muted">{starting ? '正在启动…' : state}</span>
         {member && !alive && member.lastError ? (
           <Button disabled={starting} onClick={() => void retry()}>

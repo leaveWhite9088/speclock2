@@ -48,7 +48,7 @@ import {
   MAX_PROCESSES,
   seedContexts,
 } from '../core/agent-pool.mjs';
-import { Dispatcher } from '../core/dispatcher.mjs';
+import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
 import * as projects from '../core/projects.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
@@ -422,7 +422,7 @@ const OPS = {
   projects: () => ({
     projects: projects.listProjects().map((p) => ({
       ...p,
-      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), context: dispatchers.get(p.id)?.child ? (dispatchers.get(p.id)?.context ?? null) : null },
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
     })),
     limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),

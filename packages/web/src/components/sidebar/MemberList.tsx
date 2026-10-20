@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { ContextRing } from '@/components/ui/context-ring';
 import { Dot, type DotState } from '@/components/ui/dot';
 import { Tag } from '@/components/ui/tag';
 import { useCatalog, useDispatcherModels, useProject } from '@/hooks/queries';
@@ -6,18 +7,6 @@ import { memberLlm } from '@/lib/format';
 import type { Context, Member } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { DISPATCHER, useUi } from '@/store';
-
-function Ctx({ c }: { c?: Context | null }) {
-  if (!c || c.percent == null) return null;
-  return (
-    <span
-      className={cn('ml-auto text-[11.5px] font-medium tabular-nums text-muted', c.percent >= 80 && 'text-warn', c.percent >= 95 && 'font-semibold text-danger')}
-      title={`上下文已用 ${c.used?.toLocaleString() ?? '?'} / ${c.size?.toLocaleString() ?? '?'}（${c.percent}%）`}
-    >
-      {Math.round(c.percent)}%
-    </span>
-  );
-}
 
 interface RowProps {
   id: string;
@@ -42,7 +31,7 @@ function Row({ id, name, role, type, llm, status, context }: RowProps) {
       <span className="col-span-2 flex min-w-0 items-center gap-2 font-semibold">
         <Dot state={status} />
         <span className="truncate">{name}</span>
-        <Ctx c={context} />
+        <ContextRing c={context} className="ml-auto" />
       </span>
       {role ? <span className="col-span-2 truncate pl-4 text-[12.5px] text-muted">{role}</span> : null}
       <Tag type={type} llm={llm.text} faint={llm.faint} className="col-span-2 mt-0.5 ml-4 justify-self-start" />

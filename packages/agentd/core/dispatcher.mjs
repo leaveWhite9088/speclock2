@@ -61,6 +61,15 @@ function firstUserText(file) {
   return null;
 }
 
+/** The last context figure saved for a dispatcher session directory, or null. */
+export function savedContext(sessionDir) {
+  try {
+    return JSON.parse(readFileSync(join(sessionDir, 'context.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export class Dispatcher {
   /**
    * @param {{ cwd: string, project?: string|null, sessionDir?: string, onEvent?: (ev: object) => void }} opts
@@ -203,6 +212,8 @@ export class Dispatcher {
       .then((rec) => {
         const c = rec?.data?.contextUsage;
         this.context = c && c.percent != null ? { used: c.tokens ?? null, size: c.contextWindow ?? null, percent: +c.percent.toFixed(1) } : null;
+        // Kept on disk so the figure is still there when the process is idle-reaped or the daemon restarts.
+        if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
       })
       .catch(() => {});
   }

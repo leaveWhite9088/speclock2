@@ -23,6 +23,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dshSessions } from './session-disk.mjs';
 import { AGENTS, buildInstance, defaultModelFor, listInstances, pool } from './agent-pool.mjs';
 
 export const SEP = '~';
@@ -262,6 +263,10 @@ export async function probeSessions(projectId, type, dir = '.') {
   const project = find(projectId);
   if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
   const abs = resolveInside(project.root, dir);
+  const taken0 = new Set(project.instances.map((i) => i.sessionId).filter(Boolean));
+  // Reading the CLI's own session folder takes milliseconds; starting the CLI takes seconds.
+  const disk = type === 'dsh' ? dshSessions(abs) : null;
+  if (disk) return { sessions: disk.sessions.filter((x) => !taken0.has(x.sessionId)), remoteError: null };
   const tmp = buildInstance({ id: `probe-${type}-s`, type, cwd: abs });
   try {
     const r = await tmp.listSessions();

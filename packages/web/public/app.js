@@ -911,22 +911,30 @@ async function refreshPickers() {
   const type = $('m-type').value;
   if (!type || !state.project) return;
   $('m-model').replaceChildren(opt('读取中…', ''));
-  $('m-session').replaceChildren(opt('读取中…', 'new'));
+  $('m-session').replaceChildren(opt('读取中，需要启动一次 CLI，约 10 秒…', 'new'));
   const dir = relDir($('m-dir').value);
-  const [models, sessions] = await Promise.all([
-    api('GET', `/api/models?type=${enc(type)}`).catch(() => ({ models: [] })),
-    api('GET', `/api/projects/${enc(state.project)}/sessions?type=${enc(type)}&dir=${enc(dir)}`).catch(() => ({ sessions: [] })),
-  ]);
-  if (seq !== pickerSeq) return;
-  if (models.models?.length) state.catalog[type] ??= models;
-  $('m-model').replaceChildren(
-    opt(models.default ? `默认（${modelName(type, models.default)}）` : '默认', ''),
-    ...models.models.map((m) => opt(m.name || m.value, m.value)),
-  );
-  $('m-session').replaceChildren(
-    opt('新建会话', 'new'),
-    ...sessions.sessions.map((s) => opt(`${s.title || s.sessionId.slice(0, 8)}，${when(s.updatedAt)}`, s.sessionId)),
-  );
+  // Models come from a cache and are usually instant; listing sessions starts a CLI and can take
+  // 10 s or more. Fill each picker as soon as its own answer arrives.
+  const models = api('GET', `/api/models?type=${enc(type)}`)
+    .catch(() => ({ models: [] }))
+    .then((r) => {
+      if (seq !== pickerSeq) return;
+      if (r.models?.length) state.catalog[type] ??= r;
+      $('m-model').replaceChildren(
+        opt(r.default ? `默认（${modelName(type, r.default)}）` : '默认', ''),
+        ...r.models.map((m) => opt(m.name || m.value, m.value)),
+      );
+    });
+  const sessions = api('GET', `/api/projects/${enc(state.project)}/sessions?type=${enc(type)}&dir=${enc(dir)}`)
+    .catch(() => ({ sessions: [] }))
+    .then((r) => {
+      if (seq !== pickerSeq) return;
+      $('m-session').replaceChildren(
+        opt('新建会话', 'new'),
+        ...r.sessions.map((x) => opt(`${x.title || x.sessionId.slice(0, 8)}，${when(x.updatedAt)}`, x.sessionId)),
+      );
+    });
+  await Promise.all([models, sessions]);
 }
 
 $('btn-newmember').onclick = guard(async () => {

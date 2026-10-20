@@ -1,5 +1,6 @@
 import { Chat } from '@/components/chat/Chat';
 import { ChatHeader } from '@/components/chat/ChatHeader';
+import { HandoffBar } from '@/components/chat/HandoffBar';
 import { Drawer } from '@/components/drawer/Drawer';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { useLiveEvents } from '@/hooks/useLiveEvents';
@@ -11,6 +12,7 @@ export default function App() {
       <Sidebar />
       <main className="relative flex min-h-0 min-w-0 flex-col">
         <ChatHeader />
+        <HandoffBar />
         <Chat />
       </main>
       <Drawer />

@@ -56,7 +56,7 @@
 **仓库是 monorepo，三层各一个包：**
 
 ```
-web（静态页）──/api──► backend（HTTP+SSE 薄网关）──agentd-client──► agentd ──► 实例 / 调度器
+web（React SPA）──/api──► backend（HTTP+SSE 薄网关）──agentd-client──► agentd ──► 实例 / 调度器
 ```
 
 backend 只是 agentd 的又一个客户端（和测试脚本、pi 扩展同级）：路由一对一映射到 agentd 操作，

@@ -1,0 +1,114 @@
+@import 'tailwindcss';
+
+/* Design tokens. Every colour on the page is one of these; components use the Tailwind names
+   below (bg-side, text-muted, border-line, ...) and never a raw colour. */
+:root {
+  --bg: #ffffff;
+  --side: #f7f8f9;
+  --raised: #ffffff;
+  --ink: #171a20;
+  --ink-2: #3a3f4a;
+  --muted: #7a818d;
+  --line: #eceef1;
+  --line-2: #dfe2e7;
+  --hover: #eff1f4;
+  --accent: #2f56e0;
+  --danger: #c0372b;
+  --warn: #b7791f;
+  --ok: #1f9255;
+  --bubble: #f1f3f6;
+  --code: #f4f5f7;
+  --mcode: #6d56e0;
+  --dsh: #2a74e8;
+  --pi: #1f9255;
+  --other: #707887;
+  --chip-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131519;
+    --side: #181b20;
+    --raised: #1d2026;
+    --ink: #eceef2;
+    --ink-2: #c5cad3;
+    --muted: #8a919d;
+    --line: #23272e;
+    --line-2: #2f343c;
+    --hover: #22262d;
+    --accent: #7b94ff;
+    --danger: #f28b82;
+    --warn: #e0a84f;
+    --ok: #62d394;
+    --bubble: #20242b;
+    --code: #1b1e24;
+    --mcode: #a99bff;
+    --dsh: #78adff;
+    --pi: #62d394;
+    --other: #98a0ad;
+    --chip-ink: #101216;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-side: var(--side);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-hover: var(--hover);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-bubble: var(--bubble);
+  --color-code: var(--code);
+  --color-mcode: var(--mcode);
+  --color-dsh: var(--dsh);
+  --color-pi: var(--pi);
+  --color-other: var(--other);
+  --color-chip-ink: var(--chip-ink);
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', 'SF Mono', Consolas, monospace;
+  --radius-sm: 6px;
+  --radius-md: 8px; /* every control */
+  --radius-lg: 12px; /* every floating surface */
+  --shadow-pop: 0 8px 28px rgba(18, 22, 33, 0.14);
+}
+
+@layer base {
+  * { border-color: var(--line); }
+  html, body, #root { height: 100%; margin: 0; }
+  body { font: 13.5px/1.5 var(--font-sans); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  ::selection { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  [hidden] { display: none !important; }
+}
+
+/* Rendered markdown (react-markdown output): the one place that styles bare tags. */
+.md { min-width: 0; max-width: 100%; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 0.55em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1em 0 0.35em; line-height: 1.35; font-weight: 650; font-size: 1em; }
+.md h1, .md h2, .md h3 { font-size: 1.12em; }
+.md h4 { font-size: 1.05em; }
+.md ul, .md ol { margin: 0 0 0.55em; padding-left: 1.4em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.1em 0; }
+.md li::marker { color: var(--muted); }
+.md a { color: var(--accent); text-underline-offset: 3px; text-decoration-line: underline; text-decoration-thickness: 1px; }
+.md code { font-family: var(--font-mono); background: var(--code); padding: 1px 5px; border-radius: var(--radius-sm); font-size: 0.86em; }
+.md pre { margin: 0 0 0.65em; background: var(--code); border-radius: var(--radius-md); padding: 9px 13px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+.md pre code { background: none; padding: 0; font-size: inherit; }
+.md blockquote { margin: 0 0 0.55em; padding: 0 0 0 12px; border-left: 2px solid var(--line-2); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 0.9em 0; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; margin: 0 0 0.65em; }
+.md th, .md td { border-bottom: 1px solid var(--line); padding: 4px 12px 4px 0; text-align: left; vertical-align: top; }
+.md th { color: var(--muted); font-weight: 600; }

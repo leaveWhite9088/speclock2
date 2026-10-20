@@ -1,0 +1,41 @@
+import type { Member, ModelCatalog } from './types';
+
+/**
+ * Directories are shown and typed relative to the project root: "./server", "./" for the root.
+ * An absolute path inside the root becomes its relative form; anything else is left for the backend to refuse.
+ */
+export function relDir(value: string | null | undefined, root?: string): string {
+  const fwd = (x: string) => x.trim().split(String.fromCharCode(92)).join('/');
+  const r = fwd(root ?? '').replace(/\/+$/, '');
+  let d = fwd(value ?? '');
+  if (r && d.toLowerCase() === r.toLowerCase()) d = '.';
+  else if (r && d.toLowerCase().startsWith(r.toLowerCase() + '/')) d = d.slice(r.length + 1);
+  while (d.startsWith('./')) d = d.slice(2);
+  d = d.replace(/\/+$/, '');
+  if (d === '' || d === '.') return './';
+  return d.startsWith('..') || /^([a-z]:|\/)/i.test(d) ? d : './' + d;
+}
+
+export function when(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export const oneLine = (t: string, n: number) => {
+  const x = t.split(/\s+/).join(' ').trim();
+  return x.length > n ? `${x.slice(0, n)}…` : x;
+};
+
+export function modelName(catalog: ModelCatalog | undefined, value: string | null | undefined): string | null {
+  if (!value) return null;
+  return catalog?.models.find((m) => m.value === value)?.name ?? value.split(':')[2] ?? value;
+}
+
+/** The model an executor will use: its own choice, else the preferred one, else the CLI default. */
+export function memberLlm(m: Member, catalog?: ModelCatalog) {
+  const value = m.model ?? m.preferModel ?? catalog?.default ?? null;
+  return { text: modelName(catalog, value), faint: !m.model };
+}

@@ -20,7 +20,7 @@ pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode /
 | --- | --- |
 | `packages/agentd` | 调度器：daemon、agent 池、pi 扩展、调度器 pi、测试。以下大部分内容都在讲它 |
 | `packages/backend` | 薄网关：HTTP + SSE，每个路由对应 agentd 的一个操作，自己不存状态 |
-| `packages/web` | 看板：纯静态页面（无构建），开发服务器把 `/api` 代理到 backend |
+| `packages/web` | 看板：React + TypeScript + Vite（Tailwind、Radix/shadcn 风格组件、TanStack Query、Zustand）；开发服务器把 `/api` 代理到 backend，`npm run build -w @speclock/web` 构建 |
 
 ```powershell
 npm install            # 仅用于建立 workspace 链接，没有第三方依赖

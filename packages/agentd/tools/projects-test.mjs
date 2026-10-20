@@ -15,7 +15,7 @@
  * Usage: node tools/projects-test.mjs [type]
  */
 
-import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Scheduler, check, stopDaemon } from './lib/scheduler.mjs';
@@ -66,6 +66,8 @@ try {
 
   // 2. lazy start
   await call('project.addInstance', { project: A, id: 'srv', type: TYPE, dir: './server', role: 'backend service' });
+  check('starter AGENTS.md is written at the root and in the executor dir', existsSync(join(rootA, 'AGENTS.md')) && existsSync(join(rootA, 'server', 'AGENTS.md')));
+  check('the executor one holds executor rules', /执行者规则/.test(readFileSync(join(rootA, 'server', 'AGENTS.md'), 'utf8')));
   let list = (await call('projects')).projects.find((p) => p.id === A);
   const row = list.instances.find((i) => i.id === 'srv');
   check('instance key is <project>~<id>', row?.key === `${A}~srv`, row?.key);

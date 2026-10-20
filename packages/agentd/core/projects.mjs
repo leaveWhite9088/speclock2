@@ -15,16 +15,38 @@
  * `<project>~<instance>`, so two projects can both have a `dsh-1`. Instances start
  * on first use and are stopped again when idle; their sessions stay on disk.
  *
- * The configuration lives in agentd's own data/projects.json. Nothing is written
- * into the project directory.
+ * The configuration lives in agentd's own data/projects.json. The only thing written
+ * into the project is a starter AGENTS.md (rules for the dispatcher at the root, for each
+ * executor in its directory), and only when that file does not exist yet.
  */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS, buildInstance, defaultModelFor, listInstances, pool } from './agent-pool.mjs';
 
 export const SEP = '~';
+
+const CONTEXTS = join(dirname(dirname(fileURLToPath(import.meta.url))), 'contexts');
+
+/**
+ * Starter AGENTS.md files. mcode and dsh read only the AGENTS.md of their own start directory
+ * (pi also reads parents), so every executor directory gets one of its own. Existing files are
+ * never touched: the user may have edited them.
+ */
+function seedGuides(project) {
+  const put = (dir, template) => {
+    try {
+      const file = join(dir, 'AGENTS.md');
+      if (!isDir(dir) || existsSync(file) || existsSync(join(dir, 'CLAUDE.md'))) return;
+      copyFileSync(join(CONTEXTS, template), file);
+    } catch (err) {
+      log('could not write AGENTS.md in', dir, err.message);
+    }
+  };
+  put(project.root, 'project.md');
+  for (const inst of project.instances) put(resolve(project.root, inst.dir), 'executor.md');
+}
 
 const DATA_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'data');
 const FILE = process.env.AGENTD_PROJECTS_FILE || join(DATA_DIR, 'projects.json');
@@ -113,6 +135,7 @@ function register(project, inst) {
       p.instances = (p.instances ?? []).filter((i) => i?.id && AGENTS[i.type]);
       projects.push(p);
       for (const inst of p.instances) register(p, inst);
+      seedGuides(p);
     }
   } catch (err) {
     log('projects file unreadable, ignoring:', err.message);
@@ -173,6 +196,7 @@ export function createProject({ id, name, root, instances = [] }) {
   try {
     for (const inst of instances) addInstance(id, inst, { persist: false });
     save();
+    seedGuides(project);
   } catch (err) {
     // All or nothing: undo a half-built project.
     for (const a of instancesOf(id)) pool.delete(a.name);
@@ -202,6 +226,7 @@ export function addInstance(projectId, { id, type, dir = '.', role = null, model
   project.instances.push(inst);
   const agent = register(project, inst);
   if (persist) save();
+  seedGuides(project);
   return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId };
 }
 
@@ -289,6 +314,7 @@ export async function updateInstance(projectId, id, { role, model, name, dir }) 
     agent.preferModel = inst.model ?? defaultModelFor(inst.type);
   }
   save();
+  seedGuides(project);
   return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir };
 }
 

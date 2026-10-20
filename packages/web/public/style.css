@@ -283,3 +283,5 @@ dialog form label > input, dialog form label > select { margin-top: 0; }
 #composer::before { display: none; }
 #composer button { border-radius: 10px; }
 #btn-abort { background: var(--hover); }
+
+.form .hint{grid-column:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

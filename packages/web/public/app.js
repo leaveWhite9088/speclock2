@@ -323,7 +323,11 @@ $('btn-retry').onclick = retryStart;
 const field = (label, control, hint) => {
   const l = el('label');
   l.append(el('span', null, label), control);
-  if (hint) l.append(el('small', 'dim', hint));
+  if (hint) {
+    const h = el('small', 'dim hint', hint);
+    h.title = hint;
+    l.append(h);
+  }
   return l;
 };
 const textInput = (value, placeholder) => {
@@ -500,7 +504,7 @@ async function executorSettings() {
     [
       { name: 'name', label: '名称', control: name, saved: m.id },
       { name: 'role', label: '用途', control: role, saved: m.role ?? '' },
-      { name: 'dir', label: '目录', control: dir, saved: relDir(m.dir), normalize: relDir, hint: `相对项目根目录：${project()?.root ?? ''}` },
+      { name: 'dir', label: '目录', control: dir, saved: relDir(m.dir), normalize: relDir },
       { name: 'model', label: '模型', control: sel, saved: cur },
     ],
     '提交修改',
@@ -591,6 +595,12 @@ async function dispatcherSettings() {
   });
   const form = el('div', 'form');
   form.append(field('模型', sel, m.hiddenWithoutCredentials ? `另有 ${m.hiddenWithoutCredentials} 个模型没有配置凭据，没有列出。` : '选择后立即生效。'));
+  const root = project()?.root;
+  if (root) {
+    const r = el('div', 'dim hint', root);
+    r.title = root;
+    form.append(field('根目录', r));
+  }
   wrap.append(form);
 
   wrap.append(

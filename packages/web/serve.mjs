@@ -2,7 +2,7 @@
  * Dev server for the dashboard: serves public/ and proxies /api to the backend.
  * Same-origin for the browser, so the backend needs no CORS. Local only.
  *
- * Env: WEB_PORT (default 5173), BACKEND_URL (default http://127.0.0.1:8787)
+ * Env: WEB_PORT (default 5234), BACKEND_URL (default http://127.0.0.1:8787)
  */
 
 import http from 'node:http';
@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PORT = Number(process.env.WEB_PORT) || 5173;
+const PORT = Number(process.env.WEB_PORT) || 5234;
 const BACKEND = new URL(process.env.BACKEND_URL || 'http://127.0.0.1:8787');
 const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };

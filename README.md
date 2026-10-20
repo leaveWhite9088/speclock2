@@ -24,8 +24,8 @@ pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode /
 
 ```powershell
 npm install            # 仅用于建立 workspace 链接，没有第三方依赖
-npm run backend        # http://127.0.0.1:8787，首次请求时自动拉起 agentd
-npm run web            # http://127.0.0.1:5173，打开这个
+npm run backend        # http://127.0.0.1:8787（`BACKEND_PORT` 可改），首次请求时自动拉起 agentd
+npm run web            # http://127.0.0.1:5234，打开这个（环境变量 `WEB_PORT` 可改）
 npm test               # agentd 全部回归
 npm test -w @speclock/backend   # 网关测试
 ```

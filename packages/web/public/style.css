@@ -262,3 +262,7 @@ dialog p { margin: 0; }
   .lane, .empty { padding-left: 14px; padding-right: 14px; }
   #composer { width: calc(100% - 28px); }
 }
+
+/* composer: a clearly visible edge */
+#composer { border: 1.5px solid color-mix(in srgb, var(--ink) 38%, var(--bg)); box-shadow: 0 2px 4px rgba(18, 22, 33, 0.08), 0 10px 28px rgba(18, 22, 33, 0.1); }
+#composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), 0 10px 28px rgba(18, 22, 33, 0.1); }

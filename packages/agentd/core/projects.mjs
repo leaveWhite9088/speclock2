@@ -36,9 +36,9 @@ const CONTEXTS = join(dirname(dirname(fileURLToPath(import.meta.url))), 'context
  * never touched: the user may have edited them.
  */
 function seedGuides(project) {
-  const put = (dir, template) => {
+  const put = (dir, template, name = 'AGENTS.md') => {
     try {
-      const file = join(dir, 'AGENTS.md');
+      const file = join(dir, name);
       if (!isDir(dir) || existsSync(file) || existsSync(join(dir, 'CLAUDE.md'))) return;
       copyFileSync(join(CONTEXTS, template), file);
     } catch (err) {
@@ -48,13 +48,13 @@ function seedGuides(project) {
   put(project.root, 'project.md');
   for (const inst of project.instances) {
     const dir = resolve(project.root, inst.dir);
-    put(dir, 'executor.md');
+    put(dir, 'executor.md', inst.type === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
     seedSkills(dir, inst.type);
   }
 }
 
-/** Where each CLI looks for project skills. mcode reads `.minimax/skills`; dsh and pi read `.agents/skills`. */
-const SKILL_ROOT = { mcode: '.minimax/skills' };
+/** Where each CLI looks for project skills. Others (dsh, pi, codex) read `.agents/skills`. */
+const SKILL_ROOT = { mcode: '.minimax/skills', claude: '.claude/skills', opencode: '.opencode/skills' };
 const DEFAULT_SKILL_ROOT = '.agents/skills';
 const SKILLS_SRC = join(dirname(CONTEXTS), 'skills');
 

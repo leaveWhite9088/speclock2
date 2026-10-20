@@ -304,6 +304,7 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
 - **交接**：换新会话，和压缩是两回事，上下文占比本身不触发。调度器只能 `propose_handoff`；系统也会在客观信号
   （同一会话压缩 ≥3 次、连续失败 ≥3 次）出现时自动提出。之后必须由人：生成交接文档 → 查看并可修改 →
   确认，才会开新会话。交接文档由内置 `handoff` skill 写到 `<执行者目录>/.agentd/HANDOFF.md`。
+- **支持的 CLI**：mcode、dsh、pi、opencode（原生 ACP）、claude 和 codex（经官方适配器 `@agentclientprotocol/claude-agent-acp`、`codex-acp`，全局安装在 Node 目录）。注册表在 `core/pool/config.mjs`；claude 用 `CLAUDE.md`、技能放 `.claude/skills`，opencode 技能放 `.opencode/skills`，codex 与 dsh、pi 一样用 `.agents/skills`。opencode 没有压缩命令。
 - **skills**：随执行者目录写入（mcode 为 `.minimax/skills`，其他为 `.agents/skills`），来源 `packages/agentd/skills/`。
 
 ---

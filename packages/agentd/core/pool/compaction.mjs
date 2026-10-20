@@ -8,7 +8,7 @@ import { entry, noteSession, saved } from './store.mjs';
  * a "compact" slash command; pi's ACP adapter turns "/compact" into pi's own compact command. dsh offers none
  * over ACP, so it has no entry and a compaction threshold does nothing for it.
  */
-export const COMPACT_PROMPT = { mcode: '/compact', pi: '/compact' };
+export const COMPACT_PROMPT = { mcode: '/compact', pi: '/compact', claude: '/compact', codex: '/compact' };
 export const canCompact = (type) => Boolean(COMPACT_PROMPT[type]);
 
 /** How full the conversation is: the live figure while running, else the last one saved for the session. */

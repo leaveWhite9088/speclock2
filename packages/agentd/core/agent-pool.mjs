@@ -1,7 +1,7 @@
 /**
  * Agent pool: the scheduler core.
  *
- * Holds one resident ACP process per agent (mcode / dsh / pi), owns the session registry (labels, model choice,
+ * Holds one resident ACP process per agent (mcode / dsh / pi / opencode / claude / codex), owns the session registry (labels, model choice,
  * live set) and the run/job bookkeeping used for streaming and metrics. The parts live in ./pool/:
  *
  *   config      constants, the CLI registry, agentd.config.json

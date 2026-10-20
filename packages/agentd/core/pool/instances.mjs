@@ -43,7 +43,7 @@ export function buildInstance({ id, type, cwd, project = null, shortId = id, rol
     role,
     label: `${base.label} (${shortId})`,
     defaultCwd: cwd,
-    env: type === 'pi' ? { PI_SESSION_DIR: join(DATA_DIR, 'pi-sessions', id) } : undefined,
+    env: { ...base.env, ...(type === 'pi' ? { PI_SESSION_DIR: join(DATA_DIR, 'pi-sessions', id) } : {}) },
   };
   return new AcpClient(id, spec);
 }

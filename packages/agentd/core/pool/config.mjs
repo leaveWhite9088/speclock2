@@ -37,6 +37,29 @@ export const AGENTS = {
     description: 'DeepSeek Harness agent. Fast startup and short answers.',
     defaultCwd: process.env.AGENTD_CWD_DSH || null,
   },
+  opencode: {
+    label: 'OpenCode',
+    cmd: `${NODE_MODULES}/opencode-ai/bin/opencode.exe`,
+    args: ['acp'],
+    description: 'OpenCode. Speaks ACP natively; many providers; no compaction command over ACP.',
+    defaultCwd: process.env.AGENTD_CWD_OPENCODE || null,
+  },
+  claude: {
+    label: 'Claude Code',
+    cmd: NODE_BIN,
+    args: [`${NODE_MODULES}/@agentclientprotocol/claude-agent-acp/dist/index.js`],
+    // Use the installed Claude Code (and its login), not the copy bundled with the adapter.
+    env: { CLAUDE_CODE_EXECUTABLE: `${NODE_MODULES}/@anthropic-ai/claude-code/bin/claude.exe` },
+    description: 'Claude Code through the ACP adapter. Needs `claude auth login` once on this machine.',
+    defaultCwd: process.env.AGENTD_CWD_CLAUDE || null,
+  },
+  codex: {
+    label: 'Codex',
+    cmd: NODE_BIN,
+    args: [`${NODE_MODULES}/@agentclientprotocol/codex-acp/dist/index.js`],
+    description: 'OpenAI Codex through the ACP adapter. Uses the ChatGPT login of the Codex app.',
+    defaultCwd: process.env.AGENTD_CWD_CODEX || null,
+  },
   pi: {
     label: 'independent process',
     cmd: NODE_BIN,

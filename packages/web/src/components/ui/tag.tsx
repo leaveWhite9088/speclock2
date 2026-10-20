@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-const HARNESS: Record<string, string> = { mcode: 'bg-mcode', dsh: 'bg-dsh', pi: 'bg-pi' };
+const HARNESS: Record<string, string> = { mcode: 'bg-mcode', dsh: 'bg-dsh', pi: 'bg-pi', opencode: 'bg-opencode', claude: 'bg-claude', codex: 'bg-codex' };
 
 /** CLI × LLM chip: who is running (coloured) and which model it uses. */
 export function Tag({ type, llm, faint, className }: { type: string; llm?: string | null; faint?: boolean; className?: string }) {

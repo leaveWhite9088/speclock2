@@ -73,7 +73,7 @@ async function closeDaemon(): Promise<void> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Instance ids known to the daemon: mcode, dsh, pi and any created instance. */
+/** Instance ids known to the daemon: the built-in types and any created instance. */
 async function agentNames(c: Daemon): Promise<string[]> {
 	const { agents } = await c.call("agents");
 	return agents.map((a: any) => a.name);
@@ -82,7 +82,7 @@ async function agentNames(c: Daemon): Promise<string[]> {
 const agentParam = Type.Optional(
 	Type.String({
 		description:
-			'Which agent instance to use: mcode, dsh, pi, or the id of an instance from agent_instances. Default "mcode".',
+			'Which agent instance to use: a type name, or the id of an instance from agent_instances. Default "mcode".',
 	}),
 );
 
@@ -149,7 +149,7 @@ const runTool = defineTool({
 	name: "agent_run",
 	label: "Agent run",
 	description:
-		"Send a prompt to a resident coding agent (mcode, dsh, or pi) and get its answer. " +
+		"Send a prompt to a resident coding agent (mcode, dsh, pi, opencode, claude or codex) and get its answer. " +
 		"Call agent_instances first: each instance has a role that says what it is for. " +
 		"The agent process stays alive between calls; follow-ups reuse the same conversation. Sessions and directories are managed by the user, not by you. " +
 		"Progress streams into the transcript while it runs.",
@@ -405,7 +405,7 @@ const instancesTool = defineTool({
 	name: "agent_instances",
 	label: "Agent instances",
 	description:
-		"List agent instances: the built-in mcode, dsh and pi, and any created ones. " +
+		"List agent instances: the built-in ones (mcode, dsh, pi, opencode, claude, codex), and any created ones. " +
 		"Each instance is one resident process pinned to one directory.",
 	parameters: Type.Object({}),
 	async execute() {
@@ -426,11 +426,11 @@ const createInstanceTool = defineTool({
 	name: "agent_instance_create",
 	label: "Agent instance create",
 	description:
-		"Create another instance of mcode, dsh or pi, pinned to a directory. " +
+		"Create another instance of a CLI type, pinned to a directory. " +
 		"Use it when work must run in a different project than the existing instances.",
 	parameters: Type.Object({
 		id: Type.String({ description: "New instance id: a-z, 0-9, - or _, starts with a letter." }),
-		type: Type.String({ description: "mcode, dsh or pi." }),
+		type: Type.String({ description: "mcode, dsh, pi, opencode, claude or codex." }),
 		cwd: Type.String({
 			description: "Directory the instance works in. Inside a project, relative to the project root.",
 		}),

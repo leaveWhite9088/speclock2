@@ -21,6 +21,9 @@
   --mcode: #6d56e0;
   --dsh: #2a74e8;
   --pi: #1f9255;
+  --opencode: #0e8a8a;
+  --claude: #c2570c;
+  --codex: #4b5563;
   --other: #707887;
   --chip-ink: #ffffff;
 }
@@ -44,6 +47,9 @@
     --mcode: #a99bff;
     --dsh: #78adff;
     --pi: #62d394;
+    --opencode: #5fd3d0;
+    --claude: #f0a070;
+    --codex: #aeb6c4;
     --other: #98a0ad;
     --chip-ink: #101216;
   }
@@ -68,6 +74,9 @@
   --color-mcode: var(--mcode);
   --color-dsh: var(--dsh);
   --color-pi: var(--pi);
+  --color-opencode: var(--opencode);
+  --color-claude: var(--claude);
+  --color-codex: var(--codex);
   --color-other: var(--other);
   --color-chip-ink: var(--chip-ink);
   --font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', system-ui, sans-serif;

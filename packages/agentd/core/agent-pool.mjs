@@ -60,6 +60,13 @@ const AGENTS = {
   },
 };
 
+/** A prompt is cancelled when the agent is silent this long (tool calls in progress do not count as silence). */
+export const IDLE_RUN_MS = 300_000;
+/** Hard ceiling for one prompt, however active the agent is. */
+const MAX_RUN_MS = Number(process.env.AGENTD_MAX_RUN_MS) || 2 * 60 * 60_000;
+/** How long a cancelled prompt gets to wrap up before it is abandoned. */
+const CANCEL_GRACE_MS = 15_000;
+
 const log = (...a) => process.stderr.write(`[agent-pool] ${a.join(' ')}\n`);
 
 const DEFAULT_AGENT = process.env.AGENTD_DEFAULT_AGENT || 'mcode';
@@ -221,6 +228,8 @@ class AcpClient {
     // -- streaming / metrics --
     /** Active run: { jobId, startedAt, firstChunkAt, text, chunks, context, cost, tokens } */
     this.run = null;
+    this.lastSignal = Date.now();
+    this.openTools = new Set();
     /** Completed runs, newest last. Bounded. */
     this.jobs = new Map();
     /** Progress sink set by whichever front end is attached (daemon broadcasts it). */
@@ -353,6 +362,7 @@ class AcpClient {
     if (msg.method === 'session/update') {
       const u = msg.params?.update;
       if (!u) return;
+      this._noteSignal(u);
 
       if (u.sessionUpdate === 'agent_message_chunk' && u.content?.text) {
         this.streamedText += u.content.text;
@@ -470,25 +480,72 @@ class AcpClient {
     }
   }
 
-  _request(method, params, { timeoutMs = 300_000 } = {}) {
+  _request(method, params, { timeoutMs = 300_000, idleMs = null } = {}) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`ACP ${method} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+      const clear = () => {
+        clearTimeout(timer);
+        clearInterval(watch);
+      };
+      let timer = null;
+      let watch = null;
+      let expired = null;
+      const fail = (message) => {
+        // The agent is told to stop first. Dropping the wait alone would leave it working,
+        // and the next prompt to the same session would then be refused as "already in flight".
+        expired = new Error(message);
+        clear();
+        if (method === 'session/prompt' && params?.sessionId) {
+          this._write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: params.sessionId } });
+        }
+        timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(expired);
+        }, method === 'session/prompt' ? CANCEL_GRACE_MS : 0);
+      };
+      if (idleMs) {
+        // No fixed deadline. The prompt fails when the agent has said nothing for `idleMs`, and
+        // waiting on a running tool (a build, a long command) is not silence. `timeoutMs` stays
+        // as the hard ceiling for the whole prompt.
+        this.lastSignal = Date.now();
+        this.openTools.clear();
+        const started = Date.now();
+        watch = setInterval(() => {
+          if (Date.now() - started > timeoutMs) fail(`ACP ${method} timed out: still running after ${Math.round(timeoutMs / 60000)} min, cancelled`);
+          else if (!this.openTools.size && Date.now() - this.lastSignal > idleMs) {
+            fail(`ACP ${method} timed out: no activity for ${Math.round(idleMs / 1000)}s, cancelled`);
+          }
+        }, Math.max(100, Math.min(5_000, idleMs / 4)));
+      } else {
+        timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`ACP ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
       this.pending.set(id, {
         resolve: (v) => {
-          clearTimeout(timer);
-          resolve(v);
+          clear();
+          if (expired) reject(expired);
+          else resolve(v);
         },
         reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
+          clear();
+          reject(expired ?? e);
         },
       });
       this._write({ jsonrpc: '2.0', id, method, params });
     });
+  }
+
+  /** Any update from the agent is a sign of life; open tool calls mean it is waiting on something. */
+  _noteSignal(u) {
+    this.lastSignal = Date.now();
+    const id = u.toolCallId ?? null;
+    if (u.sessionUpdate === 'tool_call' && id && u.status !== 'completed' && u.status !== 'failed') this.openTools.add(id);
+    else if (u.sessionUpdate === 'tool_call_update' && id) {
+      if (u.status === 'completed' || u.status === 'failed') this.openTools.delete(id);
+      else if (u.status === 'in_progress' || u.status === 'pending') this.openTools.add(id);
+    }
   }
 
   _enqueue(task) {
@@ -807,7 +864,7 @@ class AcpClient {
         const res = await this._request(
           'session/prompt',
           { sessionId: this.sessionId, prompt: [{ type: 'text', text }] },
-          { timeoutMs },
+          { timeoutMs: MAX_RUN_MS, idleMs: timeoutMs },
         );
 
         run.stopReason = res?.stopReason ?? null;
@@ -927,6 +984,9 @@ class AcpClient {
       logFile: run.logFile,
       error: run.error,
     };
+
+    // Kept per session, so an idle executor still shows how full its conversation is.
+    if (run.context && run.sessionId) noteSession(this.name, run.sessionId, { context: run.context });
 
     const attention = this._deriveAttention(run, metrics);
     metrics.attention = attention;
@@ -1287,6 +1347,14 @@ async function removeInstance(id) {
   return { id, removed: true };
 }
 
+/** How full the conversation is: the live figure while running, else the last one saved for the session. */
+function contextOf(a) {
+  const live = a.child && a.lastUsage?.percent != null ? a.lastUsage : null;
+  const saved = store[a.name]?.[a.sessionId ?? a.preferSession]?.context ?? null;
+  const c = live ?? saved;
+  return c && c.percent != null ? { used: c.used, size: c.size, percent: c.percent } : null;
+}
+
 /** One row per instance, for dashboards and the `instances` op. */
 function listInstances() {
   return [...pool.values()].map((a) => ({
@@ -1304,6 +1372,7 @@ function listInstances() {
     alive: Boolean(a.child),
     busy: a.busy,
     lastError: a.child ? null : (a.lastError ?? null),
+    context: contextOf(a),
     sessionId: a.sessionId,
     model: a.currentModel(),
   }));

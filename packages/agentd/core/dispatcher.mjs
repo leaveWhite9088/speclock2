@@ -80,6 +80,7 @@ export class Dispatcher {
     this.pending = new Map();
     this.spawnCount = 0;
     this.streaming = false;
+    this.context = null;
     this.lastError = null;
     this.stderrTail = '';
     /** Session file to return to after a restart. */
@@ -162,6 +163,7 @@ export class Dispatcher {
         log(`could not return to the previous session: ${err.message}`);
       }
     }
+    this._refreshContext();
   }
 
   _onRecord(line) {
@@ -187,9 +189,22 @@ export class Dispatcher {
     }
 
     if (rec.type === 'agent_start') this.streaming = true;
-    if (rec.type === 'agent_settled') this.streaming = false;
+    if (rec.type === 'agent_settled') {
+      this.streaming = false;
+      this._refreshContext();
+    }
 
     this.onEvent(compact(rec));
+  }
+
+  /** How full the conversation is, from pi's own session statistics. Never throws. */
+  _refreshContext() {
+    this.command('get_session_stats')
+      .then((rec) => {
+        const c = rec?.data?.contextUsage;
+        this.context = c && c.percent != null ? { used: c.tokens ?? null, size: c.contextWindow ?? null, percent: +c.percent.toFixed(1) } : null;
+      })
+      .catch(() => {});
   }
 
   _write(obj) {

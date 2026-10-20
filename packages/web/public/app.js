@@ -13,6 +13,7 @@ import { renderMarkdown } from './md.mjs';
 const DISPATCHER = '@dispatcher';
 
 const state = {
+  echoed: [], // messages typed on this page, drawn at once; the transcript pull must not draw them again
   project: localStorage.getItem('project') ?? '',
   projects: [],
   sel: DISPATCHER, // DISPATCHER or an instance key
@@ -234,12 +235,21 @@ $('btn-delete').onclick = guard(async () => {
 
 // -- sidebar ------------------------------------------------------------------
 
-function memberRow(key, name, role, type, llm, status) {
+function ctxChip(c) {
+  if (!c || c.percent == null) return null;
+  const e = el('span', `ctx${c.percent >= 95 ? ' hot' : c.percent >= 80 ? ' warm' : ''}`, `${Math.round(c.percent)}%`);
+  e.title = `上下文已用 ${c.used?.toLocaleString() ?? '?'} / ${c.size?.toLocaleString() ?? '?'}（${c.percent}%）`;
+  return e;
+}
+
+function memberRow(key, name, role, type, llm, status, ctx) {
   const b = el('button', 'member');
   b.type = 'button';
   b.setAttribute('aria-current', String(state.sel === key));
   const n = el('span', 'name');
   n.append(el('span', `dot${status === 'busy' ? ' busy' : status === 'on' ? ' on' : ''}`), el('span', null, name));
+  const chip = ctxChip(ctx);
+  if (chip) n.append(chip);
   b.append(n);
   if (role) b.append(el('span', 'role', role));
   b.append(tag(type, llm.text, llm.faint));
@@ -260,12 +270,12 @@ function renderMembers() {
   const p = project();
   const d = state.dispatcher.state;
   box.append(
-    memberRow(DISPATCHER, '调度器', '听你的需求，决定让谁去做', 'pi', dispatcherLlm(), p?.dispatcher?.busy ? 'busy' : p?.dispatcher?.alive ? 'on' : ''),
+    memberRow(DISPATCHER, '调度器', '听你的需求，决定让谁去做', 'pi', dispatcherLlm(), p?.dispatcher?.busy ? 'busy' : p?.dispatcher?.alive ? 'on' : '', p?.dispatcher?.context),
   );
   if (members().length) box.append(el('div', 'sep'));
   for (const i of members()) {
     const llm = instanceLlm(i);
-    box.append(memberRow(i.key, i.id, i.role, i.type, llm, i.busy ? 'busy' : i.alive ? 'on' : ''));
+    box.append(memberRow(i.key, i.id, i.role, i.type, llm, i.busy ? 'busy' : i.alive ? 'on' : '', i.context));
   }
   void d;
 }
@@ -291,7 +301,9 @@ function renderHead() {
   $('head-tag').replaceChildren(tag(dsp ? 'pi' : (m?.type ?? ''), llm.text, llm.faint));
   const busy = dsp ? project()?.dispatcher?.busy : m?.busy;
   const alive = dsp ? project()?.dispatcher?.alive : m?.alive;
-  $('head-state').textContent = busy ? '工作中' : alive ? '待命' : m?.lastError ? `启动失败：${m.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
+  $('head-state').textContent = busy ? '工作中' : alive ? '待命' : m?.lastError ? `启动失败：${m.lastError.slice(0, 80)}` : '未启动，发消息时才会启动'
+  const hc = dsp ? project()?.dispatcher?.context : m?.context;
+  if (hc?.percent != null && alive) $('head-state').textContent += `，上下文 ${Math.round(hc.percent)}%`;
   $('btn-retry').hidden = !(m && !alive && m.lastError);
   $('input').placeholder = dsp ? '告诉调度器要做什么（Enter 发送，Shift+Enter 换行）' : `直接对 ${m?.id ?? ''} 说话（Enter 发送，Shift+Enter 换行）`;
   $('btn-abort').hidden = !busy;
@@ -833,7 +845,9 @@ async function pullTranscript(seq = convSeq) {
   const draw = () => {
     for (const e of r.entries) {
       if (e.seq <= state.lastSeq) continue; // an overlapping pull already drew it
-      if (e.role === 'error') addMessage('error', e.error || e.text || '出错了', '出错');
+      const echo = e.role === 'user' ? state.echoed.indexOf((e.text ?? '').trim()) : -1;
+      if (echo >= 0) state.echoed.splice(echo, 1); // typed here and already on screen
+      else if (e.role === 'error') addMessage('error', e.error || e.text || '出错了', '出错');
       else addMessage(e.role, e.text ?? '', m.id);
       state.lastSeq = e.seq;
     }
@@ -893,6 +907,7 @@ $('composer').onsubmit = guard(async (e) => {
     const m = member(state.sel);
     if (!$('stream').querySelector('.lane')) lane();
     addMessage('user', text);
+    state.echoed.push(text);
     await api('POST', `/api/agents/${enc(m.key)}/run`, { prompt: text, sessionId: state.sessionId || undefined });
   }
   await loadProjects();

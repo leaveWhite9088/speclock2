@@ -101,7 +101,7 @@ label { display: block; font-size: 12px; color: var(--muted); }
 .member:hover { background: var(--hover); }
 .member[aria-current="true"] { background: var(--sel); box-shadow: 0 0 0 1px var(--line); }
 .member .name { font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.member .name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member .name span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member .role { grid-column: 1 / -1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 16px; }
 .sep { height: 1px; background: var(--line); margin: 6px 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); flex: none; }
@@ -285,3 +285,7 @@ dialog form label > input, dialog form label > select { margin-top: 0; }
 #btn-abort { background: var(--hover); }
 
 .form .hint{grid-column:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.member .name .ctx{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.member .name .ctx.warm{color:#b7791f}
+.member .name .ctx.hot{color:#c53030;font-weight:600}

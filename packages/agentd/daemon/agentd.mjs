@@ -419,7 +419,7 @@ const OPS = {
   projects: () => ({
     projects: projects.listProjects().map((p) => ({
       ...p,
-      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy) },
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), context: dispatchers.get(p.id)?.child ? (dispatchers.get(p.id)?.context ?? null) : null },
     })),
     limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),

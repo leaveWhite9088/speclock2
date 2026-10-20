@@ -163,7 +163,7 @@ const runTool = defineTool({
 		model: Type.Optional(
 			Type.String({ description: "Model value from agent_models to apply first." }),
 		),
-		timeout: Type.Optional(Type.String({ description: 'e.g. "30s", "5m". Default "5m".' })),
+		timeout: Type.Optional(Type.String({ description: 'Give up after this much silence from the agent, e.g. "30s", "5m". Default "5m". A running tool call (build, long command) is not silence, and the agent keeps going as long as it reports progress.' })),
 		reset: Type.Optional(Type.Boolean({ description: "Start a fresh conversation first." })),
 	}),
 
@@ -209,7 +209,7 @@ const runTool = defineTool({
 			try {
 				let result: any;
 				try {
-					const ev = await c.waitFor("job.done", (e: any) => e.jobId === started.jobId, timeoutMs + 60_000);
+					const ev = await c.waitFor("job.done", (e: any) => e.jobId === started.jobId, 3 * 60 * 60_000);
 					if (ev.error) throw new Error(ev.error);
 					result = ev.result;
 				} catch (err) {

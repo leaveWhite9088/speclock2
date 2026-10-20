@@ -396,6 +396,24 @@ async function handle(method, params, id) {
       const onText = (delta) => emitChunk(sid, delta);
       rpc.textListeners.push(onText);
 
+      // "/compact" is pi's own compact command, not a message for the model.
+      if (text === '/compact') {
+        try {
+          await rpc.command('compact', {}, 600_000);
+          const stats = await rpc.command('get_session_stats', {}, 30_000).catch(() => null);
+          const ctx = stats?.contextUsage;
+          if (ctx) notify('session/update', { sessionId: sid, update: { sessionUpdate: 'usage_update', used: ctx.tokens ?? null, size: ctx.contextWindow ?? null } });
+          emitChunk(sid, '已压缩对话。');
+          reply(id, { stopReason: 'end_turn' });
+        } catch (err) {
+          replyError(id, -32000, `compact failed: ${err.message}`);
+        } finally {
+          const i = rpc.textListeners.indexOf(onText);
+          if (i >= 0) rpc.textListeners.splice(i, 1);
+        }
+        return;
+      }
+
       try {
         const settled = rpc.waitSettled();
         const r = await rpc.command('prompt', { message: text });

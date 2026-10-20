@@ -117,7 +117,7 @@ const routes = [
   [
     'PATCH',
     '/api/projects/:id/instances/:iid',
-    ({ params, body }) => call('project.updateInstance', { project: params.id, id: params.iid, role: body.role, model: body.model, name: body.name, dir: body.dir }),
+    ({ params, body }) => call('project.updateInstance', { project: params.id, id: params.iid, role: body.role, model: body.model, name: body.name, dir: body.dir, compactAt: body.compactAt }),
   ],
   ['POST', '/api/agents/:id/start', ({ params }) => call('start', { agent: params.id })],
   ['POST', '/api/agents/:id/use', ({ params, body }) => call('use', { agent: params.id, sessionId: body.sessionId })],

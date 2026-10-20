@@ -28,7 +28,7 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
 
   let current = m.model ?? m.preferModel ?? '';
   if (current === catalog?.default) current = '';
-  const saved = { name: m.id, role: m.role ?? '', model: current };
+  const saved = { name: m.id, role: m.role ?? '', model: current, compactK: m.compactAt ? String(Math.round(m.compactAt / 1000)) : '' };
   const dirLabel = relDir(m.dir, root);
   const draft = useDraft(`draft:instance:${projectId}:${m.id}`, saved);
   const v = draft.values;
@@ -49,6 +49,7 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
     if (v.name !== m.id) patch.name = v.name;
     if (v.role !== (m.role ?? '')) patch.role = v.role;
     if (v.model !== current) patch.model = v.model || null;
+    if (v.compactK.trim() !== saved.compactK) patch.compactAt = v.compactK.trim() ? Number(v.compactK) * 1000 : null;
     try {
       const r = await api<{ key: string }>('PATCH', `/api/projects/${enc(projectId)}/instances/${enc(m.id)}`, patch);
       draft.clear();
@@ -93,6 +94,9 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
         </Field>
         <Field label="模型">
           <Select filled={v.model !== saved.model} value={v.model} onChange={(x) => draft.set({ model: x })} options={options} />
+        </Field>
+        <Field label="压缩" hint={m.canCompact === false ? '这个 CLI 没有压缩命令，设置不会生效' : `超过多少 K tokens 自动压缩，留空为不压缩${m.compactions ? `（这个会话已压缩 ${m.compactions} 次）` : ''}`}>
+          <Input type="number" min={10} step={1} disabled={m.canCompact === false} placeholder="例如 256" filled={v.compactK.trim() !== saved.compactK} value={v.compactK} onChange={(e) => draft.set({ compactK: e.target.value })} />
         </Field>
         <DraftActions dirty={draft.dirty} valid={Boolean(v.name.trim())} submitText="提交修改" onUndo={draft.undo} />
       </form>

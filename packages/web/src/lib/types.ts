@@ -19,6 +19,10 @@ export interface Member {
   busy: boolean;
   lastError?: string | null;
   context?: Context | null;
+  /** Compact the conversation once it holds this many tokens; null for never. */
+  compactAt?: number | null;
+  canCompact?: boolean;
+  compactions?: number;
 }
 
 export interface DispatcherInfo {

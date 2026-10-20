@@ -148,6 +148,7 @@ function register(project, inst) {
     role: inst.role ?? null,
     model: inst.model ?? null,
     sessionId: inst.sessionId ?? null,
+    compactAt: inst.compactAt ?? null,
     // The instance comes back to the session it last used, also after a daemon restart.
     onSession: (sid) => {
       inst.sessionId = sid;
@@ -240,7 +241,15 @@ export function createProject({ id, name, root, instances = [] }) {
   return listProjects().find((p) => p.id === id);
 }
 
-export function addInstance(projectId, { id, type, dir = '.', role = null, model = null, sessionId = null }, { persist = true } = {}) {
+/** A token count (or null for "never"). */
+function cleanCompactAt(v) {
+  if (v == null || v === '' || v === 0) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 10_000) throw new Error('compactAt must be a token count of at least 10000, or empty for never');
+  return Math.round(n);
+}
+
+export function addInstance(projectId, { id, type, dir = '.', role = null, model = null, sessionId = null, compactAt = null }, { persist = true } = {}) {
   const project = find(projectId);
   checkId('instance', id);
   if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
@@ -256,12 +265,13 @@ export function addInstance(projectId, { id, type, dir = '.', role = null, model
     model: model ? String(model).slice(0, 200) : null,
     // "new" (or nothing) means: start a fresh session on first use.
     sessionId: sessionId && sessionId !== 'new' ? String(sessionId).slice(0, 200) : null,
+    compactAt: cleanCompactAt(compactAt),
   };
   project.instances.push(inst);
   const agent = register(project, inst);
   if (persist) save();
   seedGuides(project);
-  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId };
+  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId, compactAt: inst.compactAt };
 }
 
 // -- probes: what can I pick before the instance exists? -----------------------------
@@ -318,7 +328,7 @@ export async function probeSessions(projectId, type, dir = '.') {
  * Edit an instance: role, preferred model, and (while idle) name. The CLI type and the directory are fixed.
  * A new name restarts the process under the new identity.
  */
-export async function updateInstance(projectId, id, { role, model, name, dir }) {
+export async function updateInstance(projectId, id, { role, model, name, dir, compactAt }) {
   const project = find(projectId);
   const inst = project.instances.find((i) => i.id === id);
   if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
@@ -342,13 +352,17 @@ export async function updateInstance(projectId, id, { role, model, name, dir }) 
     inst.role = role ? String(role).slice(0, 500) : null;
     agent.role = inst.role ?? agent.role;
   }
+  if (compactAt !== undefined) {
+    inst.compactAt = cleanCompactAt(compactAt);
+    agent.compactAt = inst.compactAt;
+  }
   if (model !== undefined) {
     inst.model = model ? String(model).slice(0, 200) : null;
     await agent.chooseModel(inst.model);
   }
   save();
   seedGuides(project);
-  return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir };
+  return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir, compactAt: inst.compactAt };
 }
 
 function busyOf(agents) {

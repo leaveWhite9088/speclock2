@@ -33,6 +33,14 @@ const LABELS_FILE =
 const RUNS_DIR =
   process.env.AGENTD_RUNS_DIR || join(dirname(dirname(fileURLToPath(import.meta.url))), 'data', 'runs');
 
+/**
+ * How to compact a conversation, per CLI type. The CLI does the compacting; we only say when. mcode advertises
+ * a "compact" slash command; pi's ACP adapter turns "/compact" into pi's own compact command. dsh offers none
+ * over ACP, so it has no entry and a compaction threshold does nothing for it.
+ */
+const COMPACT_PROMPT = { mcode: '/compact', pi: '/compact' };
+export const canCompact = (type) => Boolean(COMPACT_PROMPT[type]);
+
 /** Registry: add an entry to support another ACP-capable CLI. */
 const AGENTS = {
   mcode: {
@@ -205,6 +213,10 @@ class AcpClient {
     /** Session to come back to: the one chosen at creation, then whichever was last active. */
     this.preferSession = spec.sessionId ?? null;
     this.onSession = spec.onSession ?? null;
+    /** Compact the conversation once it holds this many tokens (null: never). Checked when a run ends. */
+    this.compactAt = spec.compactAt ?? null;
+    this.onCompact = null;
+    this._compacting = false;
     /** Last time work was queued or finished, for idle recycling. */
     this.lastActive = Date.now();
     /** Set while we stop the process on purpose, so it is not reported as a crash. */
@@ -863,6 +875,32 @@ class AcpClient {
    * report the job id before the run finishes (async / streaming mode).
    */
   /** Front ends register one sink; it receives (jobId, progressPayload). */
+  /**
+   * Past the configured size, ask the CLI to compact: only between runs, never while the executor works, and not
+   * again when the last compaction did not bring the conversation down (it would only loop).
+   */
+  async _maybeCompact() {
+    const cmd = COMPACT_PROMPT[this.type];
+    const ctx = contextOf(this);
+    if (!cmd || !this.compactAt || this._compacting || this.busy || !this.sessionId || ctx?.used == null) return;
+    const limit = ctx.size ? Math.min(this.compactAt, Math.floor(ctx.size * 0.9)) : this.compactAt;
+    if (ctx.used < limit) return;
+    const e = entry(this.name, this.sessionId);
+    if (e.lastCompactUsed != null && ctx.used >= e.lastCompactUsed * 0.9 && e.compactedAt && Date.now() - e.compactedAt < 30 * 60_000) return;
+    this._compacting = true;
+    const sessionId = this.sessionId;
+    try {
+      await this.startPrompt(cmd, { timeoutMs: 600_000 }).done;
+      const after = contextOf(this);
+      noteSession(this.name, sessionId, { compactions: (e.compactions ?? 0) + 1, compactedAt: Date.now(), lastCompactUsed: ctx.used });
+      this.onCompact?.({ agent: this.name, sessionId, before: ctx, after, threshold: limit });
+    } catch (err) {
+      log(`[${this.name}] compaction failed: ${err.message}`);
+    } finally {
+      this._compacting = false;
+    }
+  }
+
   setProgressSink(fn) {
     this.progressSink = fn;
   }
@@ -912,12 +950,14 @@ class AcpClient {
           stopReason: run.stopReason,
           model: run.model,
         });
-        return {
+        const out = {
           text: this.streamedText.trim(),
           stopReason: res?.stopReason,
           sessionId: this.sessionId,
           metrics: this._finishRun(run),
         };
+        if (text !== COMPACT_PROMPT[this.type]) setTimeout(() => void this._maybeCompact(), 0);
+        return out;
       } catch (err) {
         run.error = err.message;
         // Record the failure and any partial answer, so the transcript has no gap.
@@ -1335,7 +1375,7 @@ function saveInstances() {
   }
 }
 
-function buildInstance({ id, type, cwd, project = null, shortId = id, role = null, model = null, sessionId = null, onSession = null }) {
+function buildInstance({ id, type, cwd, project = null, shortId = id, role = null, model = null, sessionId = null, onSession = null, compactAt = null }) {
   const base = AGENTS[type];
   const spec = {
     ...base,
@@ -1343,6 +1383,7 @@ function buildInstance({ id, type, cwd, project = null, shortId = id, role = nul
     model,
     sessionId,
     onSession,
+    compactAt,
     custom: true,
     project,
     shortId,
@@ -1426,6 +1467,9 @@ function listInstances() {
     busy: a.busy,
     lastError: a.child ? null : (a.lastError ?? null),
     context: contextOf(a),
+    compactAt: a.compactAt,
+    canCompact: canCompact(a.type),
+    compactions: store[a.name]?.[a.sessionId ?? a.preferSession]?.compactions ?? 0,
     sessionId: a.sessionId,
     model: a.currentModel(),
   }));

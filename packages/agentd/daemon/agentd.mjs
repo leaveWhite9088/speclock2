@@ -183,6 +183,7 @@ function eventsSince(afterId, limit = 500) {
 function wireAgent(agent) {
   agent.setProgressSink((jobId, p) => publishEpehemeral(jobId, p));
   // An unexpected exit is a health event even when no run is in flight.
+  agent.onCompact = (info) => publish(allocEvent('agent.compacted', info));
   agent.onExit = (info) => {
     publish(allocEvent('agent.exit', { ...info }));
   };
@@ -448,8 +449,8 @@ const OPS = {
     return p;
   },
 
-  'project.addInstance': ({ project, id, type, dir, role, model, sessionId }) => {
-    const r = projects.addInstance(project, { id, type, dir, role, model, sessionId });
+  'project.addInstance': ({ project, id, type, dir, role, model, sessionId, compactAt }) => {
+    const r = projects.addInstance(project, { id, type, dir, role, model, sessionId, compactAt });
     wireAgent(pool.get(r.key));
     return r;
   },
@@ -461,9 +462,10 @@ const OPS = {
   'project.sessions': ({ project, type, dir }) => projects.probeSessions(project, type, dir),
 
   /** Edit an instance: role and preferred model. A running instance with a session switches model now. */
-  'project.updateInstance': async ({ project, id, role, model, name, dir }) => {
-    const r = await projects.updateInstance(project, id, { role, model, name, dir });
+  'project.updateInstance': async ({ project, id, role, model, name, dir, compactAt }) => {
+    const r = await projects.updateInstance(project, id, { role, model, name, dir, compactAt });
     const agent = pool.get(r.key);
+    wireAgent(agent);
     if (model && agent.child && agent.sessionId && !agent.busy) {
       await agent.setConfigOption('model', model, agent.sessionId).catch(() => {});
     }

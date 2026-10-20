@@ -92,7 +92,7 @@ child.stdout.on('data', (chunk) => {
       const u = msg.params?.update;
       const text =
         msg.method === 'session/update'
-          ? `${u?.sessionUpdate ?? '?'} ${(u?.content?.text ?? u?.title ?? '').slice(0, 60)}`
+          ? `${u?.sessionUpdate ?? '?'} ${u?.availableCommands ? JSON.stringify(u.availableCommands.map((x) => x.name)) : (u?.content?.text ?? u?.title ?? '').slice(0, 60)}`
           : JSON.stringify(msg.params ?? {}).slice(0, 100);
       console.log(`${elapsed()} <- ${kind} ${msg.method} ${text}`);
       // Answer server-initiated permission requests so nothing hangs.

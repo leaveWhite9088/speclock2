@@ -46,7 +46,7 @@ try {
 
     const row = (await call('projects')).projects.find((p) => p.id === P).instances.find((i) => i.id === t);
     check(`${t}: context figure is reported`, row?.context?.used > 0, JSON.stringify(row?.context));
-    check(`${t}: canCompact is ${['claude', 'codex'].includes(t)}`, row?.canCompact === ['claude', 'codex'].includes(t));
+    check(`${t}: canCompact is ${['claude', 'codex', 'opencode'].includes(t)}`, row?.canCompact === ['claude', 'codex', 'opencode'].includes(t));
 
     const r2 = await s.run(key(t), 'What word was in the file you just created? Reply with only that word.', { timeoutMs: 240_000 });
     check(`${t}: second turn remembers the first`, r2.text.includes(`BANANA-${t}`) && r2.sessionId === sessions[t], JSON.stringify(r2.text.trim().slice(0, 60)));

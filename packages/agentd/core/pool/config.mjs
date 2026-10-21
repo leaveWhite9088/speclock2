@@ -53,7 +53,7 @@ export const AGENTS = {
     label: 'OpenCode',
     cmd: `${NODE_MODULES}/opencode-ai/bin/opencode.exe`,
     args: ['acp'],
-    description: 'OpenCode. Speaks ACP natively; many providers; no compaction command over ACP.',
+    description: 'OpenCode. Speaks ACP natively; many providers.',
     defaultCwd: process.env.AGENTD_CWD_OPENCODE || null,
   },
   claude: {

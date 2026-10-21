@@ -102,8 +102,20 @@ export class Dispatcher {
 
   // -- process ------------------------------------------------------------
 
-  async ensureStarted() {
-    if (this.child) return;
+  /**
+   * Resolves when the process is up AND back on its previous conversation. Callers that arrive while it is still
+   * starting wait for the same start, so none of them reads the empty default conversation.
+   */
+  ensureStarted() {
+    if (this._starting) return this._starting;
+    if (this.child) return Promise.resolve();
+    this._starting = this._start().finally(() => {
+      this._starting = null;
+    });
+    return this._starting;
+  }
+
+  async _start() {
     mkdirSync(this.cwd, { recursive: true });
     mkdirSync(this.sessionDir, { recursive: true });
 

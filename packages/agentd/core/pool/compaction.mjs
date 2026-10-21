@@ -5,10 +5,11 @@ import { entry, noteSession, saved } from './store.mjs';
 
 /**
  * How to compact a conversation, per CLI type. The CLI does the compacting; we only say when. mcode advertises
- * a "compact" slash command; pi's ACP adapter turns "/compact" into pi's own compact command. dsh offers none
+ * a "compact" slash command; pi's ACP adapter turns "/compact" into pi's own compact command; claude, codex and opencode accept
+ * "/compact" too (opencode does not advertise it, but it works). dsh offers none
  * over ACP, so it has no entry and a compaction threshold does nothing for it.
  */
-export const COMPACT_PROMPT = { mcode: '/compact', pi: '/compact', claude: '/compact', codex: '/compact' };
+export const COMPACT_PROMPT = { mcode: '/compact', pi: '/compact', claude: '/compact', codex: '/compact', opencode: '/compact' };
 export const canCompact = (type) => Boolean(COMPACT_PROMPT[type]);
 
 /** How full the conversation is: the live figure while running, else the last one saved for the session. */

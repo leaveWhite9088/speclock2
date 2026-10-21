@@ -62,7 +62,9 @@ export const AGENTS = {
     args: [`${NODE_MODULES}/@agentclientprotocol/claude-agent-acp/dist/index.js`],
     // Use the installed Claude Code, and the `env` block of the user's own ~/.claude/settings.json (endpoint, model, token):
     // the adapter does not read that block itself, so without it the CLI reports "not logged in".
-    env: { CLAUDE_CODE_EXECUTABLE: `${NODE_MODULES}/@anthropic-ai/claude-code/bin/claude.exe`, ...claudeSettingsEnv() },
+    env: { CLAUDE_CODE_EXECUTABLE: `${NODE_MODULES}/@anthropic-ai/claude-code/bin/claude.exe` },
+    // Read again at every process start, so a profile switched with cc-switch applies the next time the executor starts.
+    envFn: claudeSettingsEnv,
     description: 'Claude Code through the ACP adapter. Uses the endpoint and login configured in ~/.claude/settings.json.',
     defaultCwd: process.env.AGENTD_CWD_CLAUDE || null,
   },

@@ -101,7 +101,7 @@ export class AcpClient {
     // The pi adapter reads its start directory from AGENTD_BASE_CWD, so each pi
     // instance gets its own. Custom pi instances also get their own session dir,
     // because the adapter keeps a session map file there.
-    const env = { ...process.env, ...(this.spec.env ?? {}) };
+    const env = { ...process.env, ...(this.spec.env ?? {}), ...(this.spec.envFn?.() ?? {}) };
     if (this.type === 'pi' && this.spec.defaultCwd) env.AGENTD_BASE_CWD = this.spec.defaultCwd;
 
     const child = spawn(this.spec.cmd, this.spec.args, {

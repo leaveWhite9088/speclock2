@@ -29,9 +29,21 @@ export const oneLine = (t: string, n: number) => {
   return x.length > n ? `${x.slice(0, n)}…` : x;
 };
 
+/**
+ * A model value of the form "provider/id" gets its provider in front: the same model name can come from two
+ * platforms. Names that already carry a platform ("Anthropic/Claude Opus") are left alone.
+ */
+export function modelLabel(value: string, name?: string | null): string {
+  const label = name || value;
+  const slash = value.indexOf('/');
+  if (slash <= 0 || label.includes('/')) return label;
+  return `${value.slice(0, slash)} · ${label}`;
+}
+
 export function modelName(catalog: ModelCatalog | undefined, value: string | null | undefined): string | null {
   if (!value) return null;
-  return catalog?.models.find((m) => m.value === value)?.name ?? value.split(':')[2] ?? value;
+  const found = catalog?.models.find((m) => m.value === value);
+  return found ? modelLabel(found.value, found.name) : (value.split(':')[2] ?? value);
 }
 
 /** The model an executor will use: its own choice, else the preferred one, else the CLI default. */

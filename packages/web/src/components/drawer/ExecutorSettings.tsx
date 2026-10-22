@@ -10,7 +10,7 @@ import { useCatalog, useExecutorSessions } from '@/hooks/queries';
 import { useDraft } from '@/hooks/useDraft';
 import { useForceable } from '@/hooks/useForceable';
 import { api, enc } from '@/lib/api';
-import { modelName, relDir, when } from '@/lib/format';
+import { modelLabel, modelName, relDir, when } from '@/lib/format';
 import type { Member, Session } from '@/lib/types';
 import { DISPATCHER, useUi } from '@/store';
 import { SessionList } from './SessionList';
@@ -33,7 +33,7 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
   const draft = useDraft(`draft:instance:${projectId}:${m.id}`, saved);
   const v = draft.values;
 
-  const options = [{ value: '', label: catalog?.default ? `默认（${modelName(catalog, catalog.default)}）` : '默认' }, ...(catalog?.models ?? []).map((x) => ({ value: x.value, label: x.name || x.value }))];
+  const options = [{ value: '', label: catalog?.default ? `默认（${modelName(catalog, catalog.default)}）` : '默认' }, ...(catalog?.models ?? []).map((x) => ({ value: x.value, label: modelLabel(x.value, x.name) }))];
   // The saved choice must show even when the model list could not be read.
   if (current && !options.some((o) => o.value === current)) options.push({ value: current, label: modelName(catalog, current) ?? current });
 

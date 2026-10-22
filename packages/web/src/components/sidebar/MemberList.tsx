@@ -3,7 +3,7 @@ import { ContextRing } from '@/components/ui/context-ring';
 import { Dot, type DotState } from '@/components/ui/dot';
 import { Tag } from '@/components/ui/tag';
 import { useCatalog, useDispatcherModels, useProject } from '@/hooks/queries';
-import { memberLlm } from '@/lib/format';
+import { memberLlm, modelLabel } from '@/lib/format';
 import type { Context, Member } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { DISPATCHER, useUi } from '@/store';
@@ -67,7 +67,7 @@ export function MemberList() {
         name="调度器"
         role="听你的需求，决定让谁去做"
         type="pi"
-        llm={{ text: models?.current ? (dName?.name ?? models.current) : null, faint: !models?.current }}
+        llm={{ text: models?.current ? (dName ? modelLabel(dName.value, dName.name) : models.current) : null, faint: !models?.current }}
         status={d?.busy ? 'busy' : d?.alive ? 'on' : 'idle'}
         context={d?.context}
       />

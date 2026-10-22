@@ -6,7 +6,7 @@ import { Tag } from '@/components/ui/tag';
 import { toast } from '@/components/ui/toast';
 import { useCatalog, useDispatcherModels, useSelectedMember } from '@/hooks/queries';
 import { api, enc } from '@/lib/api';
-import { memberLlm } from '@/lib/format';
+import { memberLlm, modelLabel } from '@/lib/format';
 import { useUi } from '@/store';
 
 export function ChatHeader() {
@@ -31,7 +31,7 @@ export function ChatHeader() {
   const alive = isDispatcher ? d?.alive : member?.alive;
   const context = isDispatcher ? d?.context : member?.context;
   const llm = isDispatcher
-    ? { text: models?.models.find((x) => x.value === models.current)?.name ?? models?.current ?? null, faint: !models?.current }
+    ? { text: (() => { const x = models?.models.find((y) => y.value === models.current); return x ? modelLabel(x.value, x.name) : (models?.current ?? null); })(), faint: !models?.current }
     : member
       ? memberLlm(member, catalog)
       : { text: null, faint: true };

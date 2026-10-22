@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
 import { useCatalog, useDirs, useInstanceTypes, useProbeSessions, useProject } from '@/hooks/queries';
 import { api, enc } from '@/lib/api';
-import { modelName, relDir, when } from '@/lib/format';
+import { modelLabel, modelName, relDir, when } from '@/lib/format';
 import { useUi } from '@/store';
 
 const EMPTY = { id: '', type: '', dir: '', role: '', model: '', sessionId: 'new' };
@@ -88,7 +88,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
               placeholder={modelsLoading ? '读取中…' : undefined}
               options={[
                 { value: '', label: catalog?.default ? `默认（${modelName(catalog, catalog.default)}）` : '默认' },
-                ...(catalog?.models ?? []).map((m) => ({ value: m.value, label: m.name || m.value })),
+                ...(catalog?.models ?? []).map((m) => ({ value: m.value, label: modelLabel(m.value, m.name) })),
               ]}
             />
           </Field>

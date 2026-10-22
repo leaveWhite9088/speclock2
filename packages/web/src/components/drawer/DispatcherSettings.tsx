@@ -8,7 +8,7 @@ import { toast } from '@/components/ui/toast';
 import { useDispatcherModels, useDispatcherSessions, useLlms, useProject } from '@/hooks/queries';
 import { useDraft } from '@/hooks/useDraft';
 import { api, enc, pq } from '@/lib/api';
-import { when } from '@/lib/format';
+import { modelLabel, when } from '@/lib/format';
 import { useUi } from '@/store';
 import { SessionList } from './SessionList';
 import { DraftActions, SectionHead } from './parts';
@@ -97,7 +97,7 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
           label="模型"
           hint={models?.hiddenWithoutCredentials ? `另有 ${models.hiddenWithoutCredentials} 个模型没有配置凭据，没有列出。` : '选择后立即生效。'}
         >
-          <Select filled={changed} value={models?.current ?? ''} onChange={(v) => void setModel(v)} disabled={switching || !models} options={(models?.models ?? []).map((x) => ({ value: x.value, label: x.name || x.value }))} />
+          <Select filled={changed} value={models?.current ?? ''} onChange={(v) => void setModel(v)} disabled={switching || !models} options={(models?.models ?? []).map((x) => ({ value: x.value, label: modelLabel(x.value, x.name) }))} />
         </Field>
         {project?.root ? (
           <Field label="根目录">

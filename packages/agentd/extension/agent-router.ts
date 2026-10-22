@@ -16,6 +16,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { connect } from "../client/agentd-client.mjs";
+import { fitReply } from "../core/reply.mjs";
 
 type Daemon = Awaited<ReturnType<typeof connect>>;
 
@@ -152,7 +153,7 @@ const runTool = defineTool({
 		"Send a prompt to a resident coding agent (mcode, dsh, pi, opencode, claude or codex) and get its answer. " +
 		"Call agent_instances first: each instance has a role that says what it is for. " +
 		"The agent process stays alive between calls; follow-ups reuse the same conversation. Sessions and directories are managed by the user, not by you. " +
-		"Progress streams into the transcript while it runs.",
+		"Progress streams into the transcript while it runs. A long reply comes back as its start and end, with the path of a file holding the full text.",
 	parameters: Type.Object({
 		prompt: Type.String({ description: "Task or question for the agent." }),
 		agent: agentParam,
@@ -220,17 +221,21 @@ const runTool = defineTool({
 				}
 
 			const m = result.metrics;
+			// A long reply would sit in the dispatcher's conversation for good: it gets the start and the end.
+			const reply = fitReply(started.jobId, result.text);
 			return {
 				content: [
 					{
 						type: "text",
-						text: `${result.text || "(no text output)"}\n\n---\n${fullMetrics(m)}`,
+						text: `${reply.text || "(no text output)"}\n\n---\n${fullMetrics(m)}`,
 					},
 				],
 				details: {
 					agent,
 					sessionId: result.sessionId,
 					stopReason: result.stopReason,
+					replyFile: reply.file,
+					replyOmitted: reply.omitted,
 					...m,
 				},
 			};

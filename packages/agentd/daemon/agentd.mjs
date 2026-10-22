@@ -53,6 +53,7 @@ import * as projects from '../core/projects.mjs';
 import { EPOCH, RING_MAX, addClient, allocEvent, dropClient, eventsSince, publish, publishEphemeral, publishLive, subscribe, unsubscribe } from './events.mjs';
 import { scopeArgs, viewRows } from './guard.mjs';
 import { appendReceipt, readReceipts } from './receipts.mjs';
+import { clearInterrupted, journalEnd, journalStart, reconcileJournal } from '../core/journal.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -67,6 +68,17 @@ const IDLE_INSTANCE_MS = Number(process.env.AGENTD_INSTANCE_IDLE_MIN || CONFIG?.
 
 const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 const startedAt = new Date().toISOString();
+
+// Tasks the last daemon never finished: record them now, announce them once the socket is up.
+const lostJobs = reconcileJournal();
+for (const j of lostJobs) {
+  const error = 'the daemon stopped while this task was queued or running; the executor may have done part of it';
+  appendReceipt(
+    j.agent,
+    { sessionId: null, metrics: { jobId: j.jobId, outcome: 'interrupted', error, health: 'error', attention: [{ code: 'interrupted', severity: 'error', source: 'system', text: error }] } },
+    j.prompt,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Progress sink: every agent forwards its stream updates to subscribers.
@@ -369,6 +381,8 @@ const OPS = {
     // and the `done` event would be broadcast to nobody.
     if (wantSub && sock) subscribe(sock, started.jobId);
 
+    journalStart({ jobId: started.jobId, agent: a.name, project: a.project, prompt });
+    clearInterrupted(a.name);
     publish(
       allocEvent('job.started', {
         jobId: started.jobId,
@@ -379,6 +393,7 @@ const OPS = {
     );
 
     const finish = (result, error) => {
+      journalEnd(started.jobId);
       const ev = allocEvent('job.done', {
         jobId: started.jobId,
         agent: a.name,
@@ -541,6 +556,8 @@ server.listen(PORT ?? PIPE_NAME, () => {
     log('could not publish endpoint file:', err.message);
   }
   seedContexts(readReceipts(500)); // the newest figure of a session wins
+  for (const j of lostJobs) publish(allocEvent('job.interrupted', { ...j }));
+  if (lostJobs.length) log(`interrupted by the last shutdown: ${lostJobs.map((j) => `${j.agent}/${j.jobId}`).join(', ')}`);
   log(`listening on ${endpoint} (pid ${process.pid})`);
   log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
 });

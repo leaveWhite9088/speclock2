@@ -483,7 +483,11 @@ export default function agentRouter(pi: ExtensionAPI) {
 				roster = instances
 					.map(
 						(i: any) =>
-							`- ${i.id} [${i.type}] ${i.busy ? "busy" : i.alive ? "running" : "idle"}, dir ${i.cwd ?? "(base)"}${i.role ? `, role: ${i.role}` : ""}`,
+							`- ${i.id} [${i.type}] ${i.busy ? "busy" : i.alive ? "running" : "idle"}, dir ${i.cwd ?? "(base)"}${i.role ? `, role: ${i.role}` : ""}` +
+							(i.unstable ? "\n  ! UNSTABLE: its process had to be killed several times lately; it refuses tasks until a person recovers it. Do not send it work." : "") +
+							(i.interrupted
+								? `\n  ! INTERRUPTED: its last task (${i.interrupted.startedAt}${i.interrupted.prompt ? `, "${String(i.interrupted.prompt).slice(0, 80)}"` : ""}) was cut off when the daemon stopped, so it may have done only part of it. Check its files before deciding whether to send the task again, and tell the user.`
+								: ""),
 					)
 					.join("\n");
 			} catch {

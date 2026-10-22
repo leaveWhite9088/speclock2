@@ -36,7 +36,7 @@ export function ChatHeader() {
       ? memberLlm(member, catalog)
       : { text: null, faint: true };
 
-  let state = member?.unstable ? '不稳定：最近多次被强制结束，已暂停派活' : busy ? '工作中' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
+  let state = member?.unstable ? '不稳定：最近多次被强制结束，已暂停派活' : busy ? '工作中' : member?.interrupted ? '上次任务因服务重启被中断，可能只做了一半，请先检查文件' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
 
   const retry = async () => {
     if (!member) return;

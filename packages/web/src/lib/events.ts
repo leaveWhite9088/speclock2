@@ -1,6 +1,6 @@
 /** Live events from the backend (SSE), fanned out to whoever listens. */
 
-export type LiveName = 'dispatcher.event' | 'job.started' | 'job.done' | 'agent.exit' | 'agent.forced-stop' | 'agent.recovered' | 'handoff.changed' | 'agent.compacted';
+export type LiveName = 'dispatcher.event' | 'job.started' | 'job.done' | 'agent.exit' | 'agent.forced-stop' | 'agent.recovered' | 'job.interrupted' | 'handoff.changed' | 'agent.compacted';
 export interface LiveEvent {
   name: LiveName;
   /** dispatcher.event: the project it belongs to */

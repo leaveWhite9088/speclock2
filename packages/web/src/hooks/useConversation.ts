@@ -13,6 +13,28 @@ interface PiMessage {
   role: string;
   content?: unknown;
   toolName?: string;
+  toolCallId?: string;
+  isError?: boolean;
+  details?: { attempt?: number; maxAttempts?: number };
+}
+
+type Dispatch = Extract<Item, { kind: 'dispatch' }>;
+
+const argOf = (a: unknown) => (a ?? {}) as { agent?: string; prompt?: string };
+
+/** The task tag the dispatcher tool prints after every result and error: "[task t-1, attempt 2 of 3, job j]". */
+const TAG = /\[task [^,\]]+, attempt (\d+) of (\d+)/;
+
+/** A dispatch line once its result is in. */
+function settle(it: Dispatch, text: string, isError: boolean, details?: { attempt?: number; maxAttempts?: number }): Dispatch {
+  const tag = TAG.exec(text);
+  return {
+    ...it,
+    state: isError ? 'fail' : 'done',
+    attempt: details?.attempt ?? (tag ? Number(tag[1]) : it.attempt),
+    maxAttempts: details?.maxAttempts ?? (tag ? Number(tag[2]) : it.maxAttempts),
+    reply: text.slice(0, 4000),
+  };
 }
 
 /** The dispatcher's history (pi's own message format) as view items. */
@@ -21,12 +43,22 @@ function fromPi(messages: PiMessage[], next: () => string): Item[] {
   for (const msg of messages) {
     if (msg.role === 'user') out.push({ id: next(), kind: 'user', text: textOf(msg.content) });
     else if (msg.role === 'assistant') {
-      for (const c of (msg.content ?? []) as { type: string; text?: string; name?: string; arguments?: unknown }[]) {
+      for (const c of (msg.content ?? []) as { type: string; text?: string; name?: string; id?: string; arguments?: unknown }[]) {
         if (c.type === 'text' && c.text?.trim()) out.push({ id: next(), kind: 'assistant', text: c.text, who: '调度器' });
-        else if (c.type === 'toolCall') out.push({ id: next(), kind: 'tool', name: c.name ?? 'tool', detail: JSON.stringify(c.arguments ?? {}, null, 2), result: false });
+        else if (c.type === 'toolCall' && c.name === 'agent_run') {
+          const a = argOf(c.arguments);
+          out.push({ id: next(), kind: 'dispatch', agent: a.agent ?? '默认执行者', prompt: a.prompt ?? '', state: 'run', toolCallId: c.id });
+        } else if (c.type === 'toolCall') out.push({ id: next(), kind: 'tool', name: c.name ?? 'tool', detail: JSON.stringify(c.arguments ?? {}, null, 2), result: false });
       }
+    } else if (msg.role === 'toolResult' && msg.toolName === 'agent_run') {
+      const at = out.findIndex((i) => i.kind === 'dispatch' && i.toolCallId === msg.toolCallId);
+      if (at >= 0) out[at] = settle(out[at] as Dispatch, textOf(msg.content), Boolean(msg.isError), msg.details);
     } else if (msg.role === 'toolResult') out.push({ id: next(), kind: 'tool', name: msg.toolName ?? 'tool', detail: textOf(msg.content).slice(0, 1500), result: true });
   }
+  // A dispatch with no result that the conversation has moved past never came back (the daemon stopped meanwhile).
+  out.forEach((it, i) => {
+    if (it.kind === 'dispatch' && it.state === 'run' && out.slice(i + 1).some((x) => x.kind === 'user')) out[i] = { ...it, state: 'fail', reply: '没有收到结果：执行过程被中断了。' };
+  });
   return out;
 }
 
@@ -73,7 +105,7 @@ export function useConversation(project: string, sel: string, member: Member | u
       if (e.role === 'user') {
         const at = echoed.current.indexOf((e.text ?? '').trim());
         if (at >= 0) echoed.current.splice(at, 1); // typed here and already on screen
-        else itemsRef.current.push({ id: next(), kind: 'user', text: e.text ?? '' });
+        else itemsRef.current.push({ id: next(), kind: 'user', text: e.text ?? '', note: (e.attempt ?? 1) > 1 ? `第 ${e.attempt} 次尝试` : undefined });
       } else if (e.role === 'tool') {
         // A tool call is recorded when it starts and again when it ends; it is drawn once and marked when the end arrives.
         const done = e.status === 'completed' || e.status === 'failed';
@@ -148,6 +180,16 @@ export function useConversation(project: string, sel: string, member: Member | u
     () =>
       onLive((ev) => {
         if (ev.name === 'job.done' && ev.agent === sel && !isDispatcher) return void pull().catch(() => {});
+        if (ev.name === 'job.started' && isDispatcher && ev.attempt && ev.agent?.startsWith(`${project}~`)) {
+          // The attempt number is known as soon as the run starts: put it on the line that is waiting for it.
+          const short = ev.agent.slice(project.length + 1);
+          const at = itemsRef.current.findIndex((i) => i.kind === 'dispatch' && i.state === 'run' && i.attempt === undefined && i.agent === short);
+          if (at >= 0) {
+            itemsRef.current[at] = { ...(itemsRef.current[at] as Dispatch), attempt: ev.attempt, maxAttempts: ev.maxAttempts };
+            commit();
+          }
+          return;
+        }
         if (ev.name !== 'dispatcher.event' || !isDispatcher || ev.project !== project) return;
         const d = ev.data ?? {};
         const last = itemsRef.current.at(-1);
@@ -156,7 +198,15 @@ export function useConversation(project: string, sel: string, member: Member | u
           else itemsRef.current.push({ id: next(), kind: 'assistant', text: d.delta ?? '', who: '调度器', live: true });
         } else if (d.type === 'tool_execution_start') {
           if (last?.kind === 'assistant') itemsRef.current[itemsRef.current.length - 1] = { ...last, live: false };
-          itemsRef.current.push({ id: next(), kind: 'tool', name: d.toolName ?? 'tool', detail: JSON.stringify(d.args ?? {}, null, 2), result: false });
+          if (d.toolName === 'agent_run') {
+            const a = argOf(d.args);
+            itemsRef.current.push({ id: next(), kind: 'dispatch', agent: a.agent ?? '默认执行者', prompt: a.prompt ?? '', state: 'run', toolCallId: d.toolCallId });
+          } else itemsRef.current.push({ id: next(), kind: 'tool', name: d.toolName ?? 'tool', detail: JSON.stringify(d.args ?? {}, null, 2), result: false });
+        } else if (d.type === 'tool_execution_end' && d.result && d.toolName === 'agent_run') {
+          const text = textOf(d.result.content ?? d.result);
+          let at = itemsRef.current.findIndex((i) => i.kind === 'dispatch' && d.toolCallId && i.toolCallId === d.toolCallId);
+          if (at < 0) at = itemsRef.current.findIndex((i) => i.kind === 'dispatch' && i.state === 'run');
+          if (at >= 0) itemsRef.current[at] = settle(itemsRef.current[at] as Dispatch, text, Boolean(d.isError), d.result.details);
         } else if (d.type === 'tool_execution_end' && d.result) {
           itemsRef.current.push({ id: next(), kind: 'tool', name: d.toolName ?? 'tool', detail: textOf(d.result.content ?? d.result).slice(0, 1500), result: true });
         } else if (d.type === 'agent_settled') {

@@ -19,6 +19,7 @@ export function Message({ item }: { item: Say }) {
       >
         {item.kind === 'assistant' ? <Markdown text={item.text} /> : item.text}
       </div>
+      {item.kind === 'user' && item.note ? <div className="text-[11.5px] text-warn">{item.note}</div> : null}
     </div>
   );
 }

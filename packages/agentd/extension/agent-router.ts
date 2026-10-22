@@ -161,6 +161,13 @@ const runTool = defineTool({
 			Type.String({ description: "Model value from agent_models to apply first." }),
 		),
 		timeout: Type.Optional(Type.String({ description: 'Give up after this much silence from the agent, e.g. "30s", "5m". Default "5m". A running tool call (build, long command) is not silence, and the agent keeps going as long as it reports progress.' })),
+		retry_of: Type.Optional(
+			Type.String({
+				description:
+					"When you send a task again because an earlier attempt failed, the task id or job id of that attempt (printed at the end of every result and error). " +
+					"A task is not sent more than 3 times in total; after that, stop and tell the user.",
+			}),
+		),
 	}),
 
 	async execute(_toolCallId, params, signal, onUpdate) {
@@ -172,11 +179,15 @@ const runTool = defineTool({
 			prompt: params.prompt,
 			model: params.model,
 			timeoutMs,
+			retryOf: params.retry_of,
 			async: true,
 			// Subscribe server-side before the run starts, so a fast agent cannot
 			// finish before we are listening.
 			subscribe: true,
 		});
+		// Printed after every result and error, so a retry can name what it retries.
+		const tag = `[task ${started.taskId}, attempt ${started.attempt} of ${started.maxAttempts}, job ${started.jobId}]`;
+		const failure = (message: string) => new Error(`${message}\n${tag}`);
 
 		const off = c.on("progress", (ev: any) => {
 			if (ev.jobId !== started.jobId) return;
@@ -211,12 +222,12 @@ const runTool = defineTool({
 					} catch {
 						const snap = await c.call("tail", { agent, jobId: started.jobId }).catch(() => null);
 						if (snap && !snap.running) {
-							if (snap.metrics?.error) throw new Error(snap.metrics.error);
+							if (snap.metrics?.error) throw failure(snap.metrics.error);
 							result = { text: snap.text, sessionId: snap.sessionId, stopReason: "end_turn", metrics: snap.metrics };
-						} else if (Date.now() > deadline) throw new Error("agent_run is still waiting after 3 hours");
+						} else if (Date.now() > deadline) throw failure("agent_run is still waiting after 3 hours");
 						continue;
 					}
-					if (ev.error) throw new Error(ev.error);
+					if (ev.error) throw failure(ev.error);
 					result = ev.result;
 				}
 
@@ -227,11 +238,14 @@ const runTool = defineTool({
 				content: [
 					{
 						type: "text",
-						text: `${reply.text || "(no text output)"}\n\n---\n${fullMetrics(m)}`,
+						text: `${reply.text || "(no text output)"}\n\n---\n${fullMetrics(m)}\n${tag}`,
 					},
 				],
 				details: {
 					agent,
+					taskId: started.taskId,
+					attempt: started.attempt,
+					maxAttempts: started.maxAttempts,
 					sessionId: result.sessionId,
 					stopReason: result.stopReason,
 					replyFile: reply.file,
@@ -511,7 +525,9 @@ ${roster}
 ` +
 					"You are the dispatcher. Hands-on work (writing files, code, drawings, running commands) goes to the executor whose role fits it, through agent_run; " +
 					"do it yourself only when no executor fits, and say so. Pick by role and directory from the list above. " +
-					"This list is newer than anything agent_instances returned earlier in the conversation.",
+					"This list is newer than anything agent_instances returned earlier in the conversation. " +
+					"If a task fails you may send it again, passing retry_of (the task id printed with the failure). A task is sent at most 3 times in total: " +
+					"after that, tell the user what happened instead of trying again.",
 			};
 		});
 	}

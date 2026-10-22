@@ -54,6 +54,7 @@ import { EPOCH, RING_MAX, addClient, allocEvent, dropClient, eventsSince, publis
 import { scopeArgs, viewRows } from './guard.mjs';
 import { appendReceipt, readReceipts } from './receipts.mjs';
 import { clearInterrupted, journalEnd, journalStart, reconcileJournal } from '../core/journal.mjs';
+import { endRun, planRun, recordRun } from '../core/tasks.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -72,11 +73,14 @@ const startedAt = new Date().toISOString();
 // Tasks the last daemon never finished: record them now, announce them once the socket is up.
 const lostJobs = reconcileJournal();
 for (const j of lostJobs) {
+  endRun(j.jobId, 'interrupted');
   const error = 'the daemon stopped while this task was queued or running; the executor may have done part of it';
   appendReceipt(
     j.agent,
     { sessionId: null, metrics: { jobId: j.jobId, outcome: 'interrupted', error, health: 'error', attention: [{ code: 'interrupted', severity: 'error', source: 'system', text: error }] } },
     j.prompt,
+    null,
+    j,
   );
 }
 
@@ -369,23 +373,28 @@ const OPS = {
    * immediately and should `subscribe` to stream progress.
    */
   run: async (
-    { agent, prompt, cwd, timeoutMs, reset, sessionId, model, async: isAsync, subscribe: wantSub },
+    { agent, prompt, cwd, timeoutMs, reset, sessionId, model, async: isAsync, subscribe: wantSub, retryOf },
     sock,
   ) => {
     const a = getAgent(agent);
+    // Which task is this an attempt at? Refused here when the task has used up its attempts.
+    const plan = planRun({ agent: a.name, prompt, retryOf });
+    const task = { taskId: plan.taskId, attempt: plan.attempt, retryOf: plan.retryOf, maxAttempts: plan.maxAttempts };
     if (model) await a.setConfigOption('model', model, sessionId);
-    const started = a.startPrompt(prompt, { timeoutMs, cwd, reset, sessionId });
+    const started = a.startPrompt(prompt, { timeoutMs, cwd, reset, sessionId, meta: { taskId: task.taskId, attempt: task.attempt, retryOf: task.retryOf } });
+    recordRun(plan, started.jobId);
 
     // Subscribe before the run can finish. A fast agent could otherwise complete
     // between the caller receiving the jobId and its separate subscribe call,
     // and the `done` event would be broadcast to nobody.
     if (wantSub && sock) subscribe(sock, started.jobId);
 
-    journalStart({ jobId: started.jobId, agent: a.name, project: a.project, prompt });
+    journalStart({ jobId: started.jobId, agent: a.name, project: a.project, prompt, ...task });
     clearInterrupted(a.name);
     publish(
       allocEvent('job.started', {
         jobId: started.jobId,
+        ...task,
         agent: a.name,
         sessionId: a.sessionId,
         prompt: typeof prompt === 'string' ? prompt.slice(0, 160) : null,
@@ -394,8 +403,10 @@ const OPS = {
 
     const finish = (result, error) => {
       journalEnd(started.jobId);
+      endRun(started.jobId, error ? (error.metrics?.outcome ?? 'failed') : (result?.metrics?.outcome ?? 'done'));
       const ev = allocEvent('job.done', {
         jobId: started.jobId,
+        ...task,
         agent: a.name,
         ...(error
           ? { error: error.message, metrics: error.metrics ?? { error: error.message, attention: [], health: 'error' } }
@@ -407,6 +418,7 @@ const OPS = {
         error ? { metrics: ev.metrics, sessionId: error.sessionId ?? null } : result,
         prompt,
         ev.id,
+        task,
       );
       publish(ev);
       const failed = !!error || !!result?.metrics?.error;
@@ -418,13 +430,13 @@ const OPS = {
 
     if (isAsync) {
       started.done.then((r) => finish(r)).catch((e) => finish(null, e));
-      return { jobId: started.jobId, async: true };
+      return { jobId: started.jobId, async: true, ...task };
     }
 
     try {
       const r = await started.done;
       const ev = finish(r);
-      return { ...r, jobId: started.jobId, receipt: ev.receipt };
+      return { ...r, jobId: started.jobId, ...task, receipt: ev.receipt };
     } catch (e) {
       finish(null, e);
       throw e;

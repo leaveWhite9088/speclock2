@@ -7,7 +7,20 @@ export interface LiveEvent {
   project?: string;
   /** job.*: the executor key */
   agent?: string;
-  data?: { type?: string; kind?: string; delta?: string; toolName?: string; args?: unknown; result?: { content?: unknown }; code?: number };
+  /** job.*: which attempt at its task this run is */
+  attempt?: number;
+  maxAttempts?: number;
+  data?: {
+    type?: string;
+    kind?: string;
+    delta?: string;
+    toolName?: string;
+    toolCallId?: string;
+    args?: unknown;
+    isError?: boolean;
+    result?: { content?: unknown; details?: { attempt?: number; maxAttempts?: number } };
+    code?: number;
+  };
 }
 
 type Handler = (e: LiveEvent) => void;

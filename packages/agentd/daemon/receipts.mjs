@@ -7,12 +7,15 @@ import { fileURLToPath } from 'node:url';
 const RECEIPTS_FILE = process.env.AGENTD_RECEIPTS_FILE || join(dirname(dirname(fileURLToPath(import.meta.url))), 'data', 'receipts.jsonl');
 const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 
-export function appendReceipt(agent, result, prompt, eventId = null) {
+export function appendReceipt(agent, result, prompt, eventId = null, task = {}) {
   const m = result?.metrics ?? {};
   const receipt = {
     ts: new Date().toISOString(),
     eventId,
     jobId: m.jobId ?? null,
+    taskId: task.taskId ?? null,
+    attempt: task.attempt ?? null,
+    retryOf: task.retryOf ?? null,
     agent,
     sessionId: result?.sessionId ?? null,
     status: m.outcome ?? (m.error ? 'failed' : m.stopReason === 'cancelled' ? 'cancelled' : 'done'),

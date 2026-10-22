@@ -757,7 +757,7 @@ export class AcpClient {
    * Start a prompt and return `{ jobId, done }` immediately, so the caller can
    * report the job id before the run finishes (async / streaming mode).
    */
-  startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId } = {}) {
+  startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId, meta = null } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const done = this._enqueue(async () => {
       if (this.unstable) {
@@ -799,6 +799,7 @@ export class AcpClient {
         appendEntry(this.name, this.sessionId, {
           role: 'user',
           jobId,
+          ...meta,
           text,
           model: run.model,
         });
@@ -814,6 +815,7 @@ export class AcpClient {
         appendEntry(this.name, this.sessionId, {
           role: 'assistant',
           jobId,
+          ...meta,
           text: this.streamedText.trim(),
           stopReason: run.stopReason,
           model: run.model,
@@ -834,6 +836,7 @@ export class AcpClient {
         appendEntry(this.name, run.sessionId, {
           role: 'error',
           jobId,
+          ...meta,
           text: run.text.trim() || null,
           error: err.message,
         });

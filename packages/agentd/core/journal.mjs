@@ -24,8 +24,8 @@ function append(rec) {
   }
 }
 
-export const journalStart = ({ jobId, agent, project, prompt }) =>
-  append({ kind: 'start', jobId, agent, project: project ?? null, prompt: typeof prompt === 'string' ? prompt.slice(0, 160) : null });
+export const journalStart = ({ jobId, agent, project, prompt, taskId = null, attempt = null, retryOf = null }) =>
+  append({ kind: 'start', jobId, agent, project: project ?? null, prompt: typeof prompt === 'string' ? prompt.slice(0, 160) : null, taskId, attempt, retryOf });
 
 export const journalEnd = (jobId) => append({ kind: 'end', jobId });
 
@@ -76,7 +76,7 @@ export function reconcileJournal() {
   } catch {
     return [];
   }
-  const lost = [...open.values()].map((r) => ({ jobId: r.jobId, agent: r.agent, project: r.project, prompt: r.prompt, startedAt: r.ts }));
+  const lost = [...open.values()].map((r) => ({ jobId: r.jobId, agent: r.agent, project: r.project, prompt: r.prompt, startedAt: r.ts, taskId: r.taskId ?? null, attempt: r.attempt ?? null, retryOf: r.retryOf ?? null }));
   try {
     writeFileSync(FILE, '', 'utf8');
   } catch (err) {

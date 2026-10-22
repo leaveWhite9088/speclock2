@@ -96,9 +96,14 @@ export interface TranscriptEntry {
   title?: string;
   kind?: string;
   status?: string;
+  /** The task this run belongs to, and which attempt it is. */
+  taskId?: string;
+  attempt?: number;
 }
 
 /** What the conversation view draws, top to bottom. */
 export type Item =
-  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean }
+  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean; note?: string }
+  /** A task the dispatcher handed to an executor (its agent_run call and result as one line). */
+  | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string }
   | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail' };

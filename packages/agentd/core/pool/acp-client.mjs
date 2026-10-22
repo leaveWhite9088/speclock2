@@ -46,7 +46,8 @@ export class AcpClient {
     this.nextId = 1;
 
     this.sessionId = null;
-    this.cwd = BASE_CWD;
+    /** Where it works. Before the first start this is the directory it will start in, not the global base. */
+    this.cwd = spec.defaultCwd || BASE_CWD;
     this.initPromise = null;
 
     this.streamedText = '';

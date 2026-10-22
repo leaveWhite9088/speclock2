@@ -52,6 +52,8 @@ await s.c.call('instance.create', { id: 'x1', type: 'nope', cwd }).then(
 );
 
 // 2. own directory
+const before = await s.status(id);
+check('before its first start, status already shows its own directory', norm(before.cwd) === norm(cwd), before.cwd);
 const r = await s.run(id, 'Reply with exactly: INSTANCE');
 check('instance answers', /INSTANCE/i.test(r.text), JSON.stringify(r.text.trim().slice(0, 30)));
 const st = await s.status(id);

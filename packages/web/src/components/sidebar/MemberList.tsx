@@ -26,7 +26,7 @@ function Row({ id, name, role, type, llm, status, context }: RowProps) {
       type="button"
       aria-current={current}
       onClick={() => select(id)}
-      className={cn('grid w-full grid-cols-[1fr_auto] items-center gap-x-2 gap-y-0.5 rounded-md border border-transparent px-2.5 py-2 text-left hover:bg-hover', current && 'border-line bg-raised')}
+      className={cn('grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 rounded-md border border-transparent px-2.5 py-2 text-left hover:bg-hover', current && 'border-line bg-raised')}
     >
       <span className="col-span-2 flex min-w-0 items-center gap-2 font-semibold">
         <Dot state={status} />
@@ -34,7 +34,7 @@ function Row({ id, name, role, type, llm, status, context }: RowProps) {
         <ContextRing c={context} className="ml-auto" />
       </span>
       {role ? <span className="col-span-2 truncate pl-4 text-[12.5px] text-muted">{role}</span> : null}
-      <Tag type={type} llm={llm.text} faint={llm.faint} className="col-span-2 mt-0.5 ml-4 justify-self-start" />
+      <Tag type={type} llm={llm.text} faint={llm.faint} className="col-span-2 mt-0.5 ml-4 max-w-[calc(100%-1rem)] justify-self-start" />
     </button>
   );
 }

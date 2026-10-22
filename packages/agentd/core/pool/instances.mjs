@@ -110,6 +110,7 @@ export function listInstances() {
     cwd: a.spec.defaultCwd ?? null,
     alive: Boolean(a.child),
     busy: a.busy,
+    unstable: a.unstable,
     lastError: a.child ? null : (a.lastError ?? null),
     context: contextOf(a),
     compactAt: a.compactAt,

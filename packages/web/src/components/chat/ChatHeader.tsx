@@ -36,7 +36,7 @@ export function ChatHeader() {
       ? memberLlm(member, catalog)
       : { text: null, faint: true };
 
-  let state = busy ? '工作中' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
+  let state = member?.unstable ? '不稳定：最近多次被强制结束，已暂停派活' : busy ? '工作中' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
 
   const retry = async () => {
     if (!member) return;
@@ -50,6 +50,16 @@ export function ChatHeader() {
     await qc.invalidateQueries({ queryKey: ['projects'] });
   };
 
+  const recover = async () => {
+    if (!member) return;
+    try {
+      await api('POST', `/api/agents/${enc(member.key)}/recover`);
+    } catch (e) {
+      toast((e as Error).message);
+    }
+    await qc.invalidateQueries({ queryKey: ['projects'] });
+  };
+
   return (
     <header className="flex min-h-[52px] items-center justify-between gap-4 px-6 py-2.5">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -59,6 +69,7 @@ export function ChatHeader() {
       <div className="flex min-w-0 items-center gap-2.5">
         <ContextRing c={context} />
         <span className="min-w-0 truncate text-[12.5px] text-muted">{starting ? '正在启动…' : state}</span>
+        {member?.unstable ? <Button onClick={() => void recover()}>恢复</Button> : null}
         {member && !alive && member.lastError ? (
           <Button disabled={starting} onClick={() => void retry()}>
             重试启动

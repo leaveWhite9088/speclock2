@@ -16,7 +16,7 @@ export function useLiveEvents() {
     es.onopen = () => setConn('on');
     es.onerror = () => setConn('off');
     const refresh = () => void qc.invalidateQueries({ queryKey: ['projects'] });
-    const names: LiveName[] = ['dispatcher.event', 'job.started', 'job.done', 'agent.exit', 'handoff.changed', 'agent.compacted'];
+    const names: LiveName[] = ['dispatcher.event', 'job.started', 'job.done', 'agent.exit', 'agent.forced-stop', 'agent.recovered', 'handoff.changed', 'agent.compacted'];
     for (const name of names) {
       es.addEventListener(name, (m) => {
         const payload = JSON.parse((m as MessageEvent<string>).data) as Omit<LiveEvent, 'name'> & { data?: LiveEvent['data'] };

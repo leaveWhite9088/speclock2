@@ -124,6 +124,7 @@ const routes = [
   ['POST', '/api/handoffs/:id/apply', ({ params, body }) => call('handoff.apply', { id: params.id, text: body.text })],
   ['POST', '/api/handoffs/:id/cancel', ({ params }) => call('handoff.cancel', { id: params.id })],
   ['POST', '/api/agents/:id/start', ({ params }) => call('start', { agent: params.id })],
+  ['POST', '/api/agents/:id/recover', ({ params }) => call('agent.recover', { agent: params.id })],
   ['POST', '/api/agents/:id/use', ({ params, body }) => call('use', { agent: params.id, sessionId: body.sessionId })],
   [
     'DELETE',

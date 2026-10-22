@@ -229,7 +229,7 @@ mcode 原生保留模型选择；dsh 和 pi 重启后回退默认。所以 pool 
 agent 不参与，全部由调度器推断：协议结果、自己的计时器、agent 上报的上下文占用。
 
 ```
-run_failed / timeout / refused / agent_restarted   → error
+run_failed / timeout / forced_stop / refused / agent_restarted   → error
 context_pressure / cancelled / empty_output        → warn
 slow_run                                           → info
 ```
@@ -239,6 +239,30 @@ slow_run                                           → info
 
 `durationHistory` 每个 agent 保留最近 20 次，用于判断 `slow_run`（超过 p95 两倍）；
 它只在运行结束时写入，读取指标不会污染基线。
+
+### 超时、取消与强制结束
+
+先礼貌地问一下，不行就杀掉（思路同 Celery 的软超时 / 硬超时）：
+
+```
+执行者沉默 5 分钟（`timeout`；正在跑的工具调用不算沉默）  或  总时长超过 2 小时
+  → 发 session/cancel                       软超时：请它停下来
+  → 等 15 秒（AGENTD_CANCEL_GRACE_MS）
+  → 它结束了：任务记为 timeout
+  → 还没结束：杀掉整棵进程树（Windows 用 taskkill /T /F），任务记为 timeout + forced
+下一次派发：自动重启进程，回到同一个会话
+```
+
+- 只杀直接子进程不够：适配器、真正的 CLI、它启动的工具是三层进程，卡住的构建会留下来。
+  `tools/forced-stop-test.mjs` 用「脱离父进程的孙进程」验证这一点。
+- 强制结束不算崩溃：不发 `agent.exit`，发 `agent.forced-stop`（带次数）。
+- 每个任务有明确终态 `outcome`：`done / failed / timeout / cancelled`（另有 `unstable`，见下），
+  回执的 `status` 取自它；`forced` 表示是靠杀进程收尾的。
+- 熔断：同一个执行者 30 分钟内被强制结束 3 次，就标记 `unstable`，之后的派发立刻失败并说明原因，
+  不再启动进程，直到人点「恢复」（`POST /api/agents/:id/recover`，调度器无权调用）。
+  次数和窗口在 `agentd.config.json` 的 `limits.forcedStopLimit` / `limits.forcedStopWindowMin`。
+- 强制结束可能让一次文件写入停在一半；错误信息会提醒调度器先检查再重派。
+- 尚未做：`cancel` 按任务号取消、取消排队中的任务（现在 `cancel` 取消的是该执行者当前在跑的那个）。
 
 ---
 

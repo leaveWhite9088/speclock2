@@ -5,8 +5,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from 'node:path';
 import { appendEntry } from '../transcripts.mjs';
 import { COMPACT_PROMPT, maybeCompact } from './compaction.mjs';
-import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from './config.mjs';
+import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDOW_MS, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from './config.mjs';
 import { modelName, runMetrics } from './metrics.mjs';
+import { killTree } from './process.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from './registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from './store.mjs';
 
@@ -84,6 +85,12 @@ export class AcpClient {
     this.durationHistory = [];
     /** Called when the agent process exits unexpectedly. */
     this.onExit = null;
+    /** Times (ms) this process had to be killed because it ignored a cancel; drives the `unstable` flag. */
+    this.forcedStops = [];
+    /** Children we killed on purpose, so their `close` is not reported as a crash. */
+    this.killed = new WeakSet();
+    /** Called when a process is killed for ignoring a cancel. */
+    this.onForcedStop = null;
   }
 
   // -- process ------------------------------------------------------------
@@ -114,6 +121,7 @@ export class AcpClient {
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
+      if (this.child !== child) return; // output of a process we already dropped
       this.buf += chunk;
       let i;
       while ((i = this.buf.indexOf('\n')) !== -1) {
@@ -144,6 +152,7 @@ export class AcpClient {
 
     child.on('close', (code) => {
       log(`[${this.name}] child closed (code=${code})`);
+      if (this.killed.has(child)) return; // already cleaned up by _forceStop
       // A replacement process may already be running (stopped, then used again at once).
       if (this.child && this.child !== child) {
         this.stopping = false;
@@ -339,12 +348,19 @@ export class AcpClient {
         // The agent is told to stop first. Dropping the wait alone would leave it working,
         // and the next prompt to the same session would then be refused as "already in flight".
         expired = new Error(message);
+        expired.kind = 'timeout';
         clear();
         if (method === 'session/prompt' && params?.sessionId) {
           this._write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: params.sessionId } });
         }
         timer = setTimeout(() => {
           this.pending.delete(id);
+          // Still no answer after the grace period: the agent is stuck and would refuse every later prompt as
+          // "already in flight". Stop the process; the next task starts a fresh one in the same session.
+          if (method === 'session/prompt' && this._forceStop(`no answer ${CANCEL_GRACE_MS / 1000}s after the cancel`)) {
+            expired.forced = true;
+            expired.message += `; it did not answer the cancel, so its process was stopped (a new one starts with the next task). Check what it was working on before sending the task again`;
+          }
           reject(expired);
         }, method === 'session/prompt' ? CANCEL_GRACE_MS : 0);
       };
@@ -391,6 +407,44 @@ export class AcpClient {
       if (u.status === 'completed' || u.status === 'failed') this.openTools.delete(id);
       else if (u.status === 'in_progress' || u.status === 'pending') this.openTools.add(id);
     }
+  }
+
+  /**
+   * Kill the process for good, because it ignored a cancel. State is reset here rather than in `close`, so a task
+   * that arrives before the old process has finished dying starts a clean one.
+   */
+  _forceStop(reason) {
+    const child = this.child;
+    if (!child) return false;
+    log(`[${this.name}] stopping the process: ${reason}`);
+    this.killed.add(child);
+    this.child = null;
+    this.initPromise = null;
+    this.sessionId = null;
+    this.live.clear();
+    for (const { reject } of this.pending.values()) reject(new Error(`${this.name} process was stopped`));
+    this.pending.clear();
+    killTree(child);
+    const now = Date.now();
+    this.forcedStops = [...this.forcedStops.filter((t) => now - t < FORCED_STOP_WINDOW_MS), now];
+    try {
+      this.onForcedStop?.({ agent: this.name, reason, forcedStops: this.forcedStops.length, unstable: this.unstable });
+    } catch {
+      /* listener errors must not break the pool */
+    }
+    return true;
+  }
+
+  /** Killed too often lately: it gets no more work until `recover()`. */
+  get unstable() {
+    const now = Date.now();
+    return this.forcedStops.filter((t) => now - t < FORCED_STOP_WINDOW_MS).length >= FORCED_STOP_LIMIT;
+  }
+
+  /** A person looked at it: forget the recent kills. */
+  recover() {
+    this.forcedStops = [];
+    return { agent: this.name, unstable: false };
   }
 
   _enqueue(task) {
@@ -705,6 +759,22 @@ export class AcpClient {
   startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const done = this._enqueue(async () => {
+      if (this.unstable) {
+        const err = new Error(
+          `${this.name} is marked unstable: its process had to be killed ${this.forcedStops.length} times in the last ${Math.round(FORCED_STOP_WINDOW_MS / 60_000)} min. ` +
+            'It gets no more tasks until a person has looked at it and recovered it.',
+        );
+        err.kind = 'unstable';
+        err.metrics = {
+          jobId,
+          error: err.message,
+          outcome: 'unstable',
+          forced: false,
+          health: 'error',
+          attention: [{ code: 'unstable', severity: 'error', source: 'system', text: err.message }],
+        };
+        throw err;
+      }
       const run = this._beginRun(jobId);
       try {
         if (sessionId && sessionId !== this.sessionId) {
@@ -757,6 +827,8 @@ export class AcpClient {
         return out;
       } catch (err) {
         run.error = err.message;
+        run.errorKind = err.kind ?? null;
+        run.forced = Boolean(err.forced);
         // Record the failure and any partial answer, so the transcript has no gap.
         appendEntry(this.name, run.sessionId, {
           role: 'error',
@@ -971,6 +1043,8 @@ export class AcpClient {
       pid: this.child?.pid ?? null,
       agentInfo: this.agentInfo,
       lastError: this.lastError,
+      unstable: this.unstable,
+      forcedStops: this.forcedStops.length,
       lastJobId: lastRun?.jobId ?? null,
       attention: lastAttention,
       health: lastAttention.some((a) => a.severity === 'error')
@@ -998,7 +1072,7 @@ export class AcpClient {
     this.stopping = true;
     try {
       this.child.stdin.end();
-      this.child.kill();
+      killTree(this.child);
     } catch {
       /* ignore */
     }

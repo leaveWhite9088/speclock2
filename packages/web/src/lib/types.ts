@@ -17,6 +17,8 @@ export interface Member {
   preferSession: string | null;
   alive: boolean;
   busy: boolean;
+  /** Its process had to be killed several times lately; it takes no work until a person recovers it. */
+  unstable?: boolean;
   lastError?: string | null;
   context?: Context | null;
   /** Compact the conversation once it holds this many tokens; null for never. */

@@ -78,6 +78,8 @@ function wireAgent(agent) {
     publish(allocEvent('agent.compacted', info));
     suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次从约 ${info.before?.used} 降到 ${info.after?.used} token`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
   };
+  // Killed for ignoring a cancel: the person should know, and may need to recover it.
+  agent.onForcedStop = (info) => publish(allocEvent('agent.forced-stop', { ...info }));
   // An unexpected exit is a health event even when no run is in flight.
   agent.onExit = (info) => {
     publish(allocEvent('agent.exit', { ...info }));
@@ -433,6 +435,13 @@ const OPS = {
   wait: ({ agent, jobId }) => getAgent(agent).tail(jobId),
 
   cancel: ({ agent }) => getAgent(agent).cancel(),
+
+  /** A person has looked at an executor marked unstable: let it take work again. */
+  'agent.recover': ({ agent }) => {
+    const r = getAgent(agent).recover();
+    publish(allocEvent('agent.recovered', { agent }));
+    return r;
+  },
 
   subscribe: ({ jobId }, sock) => {
     if (jobId) subscribe(sock, jobId);

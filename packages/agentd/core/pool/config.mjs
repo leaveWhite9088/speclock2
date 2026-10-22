@@ -91,7 +91,7 @@ export const IDLE_RUN_MS = 300_000;
 /** Hard ceiling for one prompt, however active the agent is. */
 export const MAX_RUN_MS = Number(process.env.AGENTD_MAX_RUN_MS) || 2 * 60 * 60_000;
 /** How long a cancelled prompt gets to wrap up before it is abandoned. */
-export const CANCEL_GRACE_MS = 15_000;
+export const CANCEL_GRACE_MS = Number(process.env.AGENTD_CANCEL_GRACE_MS) || 15_000;
 
 export const log = (...a) => process.stderr.write(`[agent-pool] ${a.join(' ')}\n`);
 
@@ -136,6 +136,13 @@ export let CONFIG = {};
     }
   }
 })();
+
+/**
+ * An executor whose process had to be killed this many times within the window is marked unstable and gets no
+ * more work until a person recovers it. `limits.forcedStopLimit` / `limits.forcedStopWindowMin` in agentd.config.json.
+ */
+export const FORCED_STOP_LIMIT = Number(CONFIG?.limits?.forcedStopLimit) || 3;
+export const FORCED_STOP_WINDOW_MS = (Number(CONFIG?.limits?.forcedStopWindowMin) || 30) * 60_000;
 
 /** Compare directories regardless of slash style, case and trailing slash. */
 export function normPath(p) {

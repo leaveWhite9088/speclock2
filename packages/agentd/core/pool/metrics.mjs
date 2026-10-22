@@ -33,6 +33,9 @@ export function runMetrics(agent, run) {
     cost: run.cost,
     logFile: run.logFile,
     error: run.error,
+    // How the run ended: done, failed, timeout, cancelled. `forced`: the process had to be killed to end it.
+    outcome: outcomeOf(run),
+    forced: Boolean(run.forced),
   };
 
   // Kept per session, so an idle executor still shows how full its conversation is.
@@ -47,6 +50,11 @@ export function runMetrics(agent, run) {
       : 'ok';
 
   return metrics;
+}
+
+function outcomeOf(run) {
+  if (run.error) return run.errorKind ?? (/timed out|did not finish within/i.test(run.error) ? 'timeout' : 'failed');
+  return run.stopReason === 'cancelled' ? 'cancelled' : 'done';
 }
 
 /**
@@ -69,6 +77,7 @@ function deriveAttention(agent, run, m) {
     }
   }
 
+  if (run.forced) add('forced_stop', 'error', 'the agent ignored the cancel; its process was stopped and restarts with the next task');
   if (m.stopReason === 'refusal') add('refused', 'error', 'agent refused the task');
   if (m.stopReason === 'cancelled') add('cancelled', 'warn', 'run was cancelled before finishing');
 

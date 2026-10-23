@@ -146,6 +146,8 @@ class PiRpc {
       '--session-dir',
       SESSION_DIR,
     ];
+    // Rules from agentd, given as extra system instructions instead of a file in the project.
+    if (process.env.AGENTD_APPEND_SYSTEM_PROMPT_FILE) args.push('--append-system-prompt', process.env.AGENTD_APPEND_SYSTEM_PROMPT_FILE);
     log(`spawning pi rpc (cwd=${this.cwd})`);
     const child = spawn(NODE_BIN, args, {
       cwd: this.cwd,

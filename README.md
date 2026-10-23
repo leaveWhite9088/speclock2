@@ -38,6 +38,25 @@ claude 的接口地址、模型和密钥读取你自己的 `~/.claude/settings.j
 - opencode、claude 的参数和可读标题在工具开始之后的更新里才给，agentd 会把这些更新合并起来再写进记录。
 - 只有这些改动之后的运行才有这些详情，旧的运行记录里没有。
 
+### 给 agent 的规则怎么交进去（实测）
+
+规则（执行者能做什么、不能做什么、怎么汇报）不写进你的项目，不碰项目自己的 `AGENTS.md` / `CLAUDE.md`，
+而是启动进程或开会话时，通过各个 CLI 自己的「额外系统提示」入口交给它。规则文本放在 agentd 自己的 `data/rules/` 下。
+探针：`node packages/agentd/tools/system-prompt-probe.mjs`（给每种 CLI 一条「每次回复结尾加暗号」的规则，
+在空目录里问两次：新会话一次，进程停掉再恢复会话一次）。
+
+| CLI | 入口 | 新会话 | 恢复会话后 | 项目里留下的文件 |
+| --- | --- | --- | --- | --- |
+| mcode | `mcode acp --append-system-prompt-file <文件>` | ✓ | ✓ | 0 |
+| pi | `--append-system-prompt <文件>`（适配器加到 pi 命令行） | ✓ | ✓ | 0 |
+| claude | `session/new` 的 `_meta.systemPrompt.append` | ✓ | ✓ | 0 |
+| codex | `session/new` 的 `_meta.jetbrains.air.customInstructions` | ✓ | ✓ | 0 |
+| opencode | 环境变量 `OPENCODE_CONFIG_CONTENT` 里的 `instructions` | ✓ | ✓ | 0 |
+| dsh | 没有入口：规则放在每个会话第一条消息前面（压缩后再补一次） | ✓ | ✓ | 0 |
+
+这只验证了「规则能送到、重启后还在」，用的是一条很简单的规则；复杂规则（比如「不要 git push」）遵不遵守，
+取决于模型，而且规则始终是提示词层面的约束，不是强制。
+
 架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，踩过的坑和实测数据见 [LESSONS.md](LESSONS.md)。
 
 ## 仓库结构（npm workspaces）

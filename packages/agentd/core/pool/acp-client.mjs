@@ -8,6 +8,7 @@ import { COMPACT_PROMPT, maybeCompact } from './compaction.mjs';
 import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDOW_MS, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from './config.mjs';
 import { modelName, runMetrics } from './metrics.mjs';
 import { killTree } from './process.mjs';
+import { injectionFor } from './system-prompt.mjs';
 import { inputText, outputText } from './tool-text.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from './registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from './store.mjs';
@@ -93,6 +94,29 @@ export class AcpClient {
     this.killed = new WeakSet();
     /** Called when a process is killed for ignoring a cancel. */
     this.onForcedStop = null;
+    /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
+    this.rules = spec.systemPrompt ?? null;
+    this._injection = null;
+    /** Sessions whose first prompt already carried the rules (only for a CLI with no other channel). */
+    this.primed = new Set();
+  }
+
+  /** How the rules reach this CLI. Worked out once; writes the rules file in agentd's data directory. */
+  _inj() {
+    return (this._injection ??= injectionFor(this.type, this.rules, this.name));
+  }
+
+  /** The `_meta` of session requests, for the CLIs that take the rules there. */
+  _meta() {
+    const meta = this._inj().meta;
+    return meta ? { _meta: meta } : {};
+  }
+
+  /** A CLI with no channel gets the rules in front of the first prompt of a session, and again after a compaction. */
+  _withRules(text) {
+    if (!this._inj().prefix || !this.sessionId || this.primed.has(this.sessionId)) return text;
+    this.primed.add(this.sessionId);
+    return `${this.rules.trim()}\n\n---\n\n${text}`;
   }
 
   // -- process ------------------------------------------------------------
@@ -110,10 +134,11 @@ export class AcpClient {
     // The pi adapter reads its start directory from AGENTD_BASE_CWD, so each pi
     // instance gets its own. Custom pi instances also get their own session dir,
     // because the adapter keeps a session map file there.
-    const env = { ...process.env, ...(this.spec.env ?? {}), ...(this.spec.envFn?.() ?? {}) };
+    const inj = this._inj();
+    const env = { ...process.env, ...(this.spec.env ?? {}), ...(this.spec.envFn?.() ?? {}), ...inj.env };
     if (this.type === 'pi' && this.spec.defaultCwd) env.AGENTD_BASE_CWD = this.spec.defaultCwd;
 
-    const child = spawn(this.spec.cmd, this.spec.args, {
+    const child = spawn(this.spec.cmd, [...this.spec.args, ...inj.args], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       env,
@@ -648,7 +673,7 @@ export class AcpClient {
     }
 
     const t0 = Date.now();
-    const sess = await this._request('session/new', { cwd: wantCwd, mcpServers: [] });
+    const sess = await this._request('session/new', { cwd: wantCwd, mcpServers: [], ...this._meta() });
     this.sessionId = sess?.sessionId;
     this.cwd = wantCwd;
     if (this.sessionId) this.live.add(this.sessionId);
@@ -684,7 +709,7 @@ export class AcpClient {
     }
 
     try {
-      const res = await this._request('session/resume', { sessionId, cwd: wantCwd });
+      const res = await this._request('session/resume', { sessionId, cwd: wantCwd, ...this._meta() });
       this.sessionId = res?.sessionId ?? sessionId;
       this.cwd = wantCwd;
       this.models = res?.models ?? this.models;
@@ -833,7 +858,7 @@ export class AcpClient {
 
         const res = await this._request(
           'session/prompt',
-          { sessionId: this.sessionId, prompt: [{ type: 'text', text }] },
+          { sessionId: this.sessionId, prompt: [{ type: 'text', text: this._withRules(text) }] },
           { timeoutMs: MAX_RUN_MS, idleMs: timeoutMs },
         );
 

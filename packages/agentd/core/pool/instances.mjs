@@ -29,7 +29,7 @@ function saveInstances() {
   }
 }
 
-export function buildInstance({ id, type, cwd, project = null, shortId = id, role = null, model = null, sessionId = null, onSession = null, compactAt = null }) {
+export function buildInstance({ id, type, cwd, project = null, shortId = id, role = null, model = null, sessionId = null, onSession = null, compactAt = null, systemPrompt = null }) {
   const base = AGENTS[type];
   const spec = {
     ...base,
@@ -38,6 +38,7 @@ export function buildInstance({ id, type, cwd, project = null, shortId = id, rol
     sessionId,
     onSession,
     compactAt,
+    systemPrompt,
     custom: true,
     project,
     shortId,

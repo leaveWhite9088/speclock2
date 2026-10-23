@@ -35,6 +35,7 @@ export async function maybeCompact(agent) {
   const sessionId = agent.sessionId;
   try {
     await agent.startPrompt(cmd, { timeoutMs: 600_000 }).done;
+    agent.primed.delete(sessionId); // the rules may have been compacted away: send them again with the next prompt
     const after = contextOf(agent);
     noteSession(agent.name, sessionId, { compactions: (e.compactions ?? 0) + 1, compactedAt: Date.now(), lastCompactUsed: ctx.used });
     agent.onCompact?.({ agent: agent.name, sessionId, before: ctx, after, threshold: limit, compactions: (e.compactions ?? 0) + 1 });

@@ -55,6 +55,7 @@ import { scopeArgs, viewRows } from './guard.mjs';
 import { appendReceipt, readReceipts } from './receipts.mjs';
 import { clearInterrupted, journalEnd, journalStart, reconcileJournal } from '../core/journal.mjs';
 import { endRun, planRun, recordRun } from '../core/tasks.mjs';
+import { appendEntry, findJobSession } from '../core/transcripts.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -82,6 +83,18 @@ for (const j of lostJobs) {
     null,
     j,
   );
+  // The executor's own conversation must say so too: without this the person sees their message and then nothing.
+  const sid = findJobSession(j.agent, j.jobId);
+  if (sid) {
+    appendEntry(j.agent, sid, {
+      role: 'error',
+      jobId: j.jobId,
+      taskId: j.taskId,
+      attempt: j.attempt,
+      interrupted: true,
+      error: '这次任务因服务重启被中断，没有得到回复。执行者可能已经做了一部分，请先检查文件，再决定要不要重发。',
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { ChevronRight } from 'lucide-react';
+import { useProject } from '@/hooks/queries';
 import { runLabel, useActivity } from '@/hooks/useActivity';
 import { useUi } from '@/store';
 import { oneLine, took } from '@/lib/format';
@@ -14,7 +15,11 @@ type Dispatch = Extract<Item, { kind: 'dispatch' }>;
 export function DispatchLine({ item }: { item: Dispatch }) {
   const retry = (item.attempt ?? 1) > 1;
   const project = useUi((s) => s.project);
-  const live = useActivity(item.state === 'run' ? `${project}~${item.agent}` : undefined);
+  const dispatcher = useProject()?.dispatcher;
+  // A dispatch waits for its result only while the dispatcher is in a turn. If the dispatcher is idle and there is
+  // still no result, the daemon stopped meanwhile and the result will never come.
+  const lost = item.state === 'run' && dispatcher != null && !dispatcher.busy;
+  const live = useActivity(item.state === 'run' && !lost ? `${project}~${item.agent}` : undefined);
   const status = live ? runLabel(live) : '进行中…';
   return (
     <details className="group -my-1 text-[12.5px] text-muted">
@@ -28,7 +33,9 @@ export function DispatchLine({ item }: { item: Dispatch }) {
             第 {item.attempt} 次尝试{item.maxAttempts ? `（共 ${item.maxAttempts} 次）` : ''}
           </span>
         ) : null}
-        {item.state === 'run' ? (
+        {lost ? (
+          <span className="shrink-0 text-danger">已中断：没有收到结果</span>
+        ) : item.state === 'run' ? (
           <span className="shrink-0 text-accent">{status}</span>
         ) : item.state === 'fail' ? (
           <span className="shrink-0 text-danger">失败{item.tookMs != null ? ` · 用时 ${took(item.tookMs)}` : ''}</span>
@@ -41,6 +48,9 @@ export function DispatchLine({ item }: { item: Dispatch }) {
           <div className="text-[11.5px]">任务</div>
           <pre className="m-0 max-h-40 overflow-auto rounded-md bg-code px-3 py-2 font-mono text-xs leading-[1.55] wrap-anywhere whitespace-pre-wrap text-ink-2">{item.prompt}</pre>
         </div>
+        {lost ? (
+          <div className="text-danger">服务中途停止了，这个任务没有返回结果。执行者可能已经做了一部分，请先检查文件，再决定要不要重发。</div>
+        ) : null}
         {item.reply ? (
           <div>
             <div className="text-[11.5px]">{item.state === 'fail' ? '失败原因' : '回复'}</div>

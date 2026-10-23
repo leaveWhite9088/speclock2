@@ -15,7 +15,7 @@
  * run that went through agentd.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,6 +24,27 @@ const DIR = process.env.AGENTD_TRANSCRIPTS_DIR || join(ROOT, 'data', 'transcript
 
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._~-]/g, '_');
 const fileFor = (instance, sessionId) => join(DIR, safe(instance), `${safe(sessionId)}.jsonl`);
+
+/**
+ * The session a run was recorded in, found by its job id (the run's prompt is written to the transcript once the
+ * session is known). Looks at the instance's most recently written sessions only. Null when nothing was recorded.
+ */
+export function findJobSession(instance, jobId) {
+  try {
+    const dir = join(DIR, safe(instance));
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 8);
+    for (const { f } of files) {
+      if (readFileSync(join(dir, f), 'utf8').includes(`"jobId":"${jobId}"`)) return f.slice(0, -'.jsonl'.length);
+    }
+  } catch {
+    /* no transcripts for this instance */
+  }
+  return null;
+}
 
 /** Append one entry. Best-effort: a failed write never breaks a run. */
 export function appendEntry(instance, sessionId, entry) {

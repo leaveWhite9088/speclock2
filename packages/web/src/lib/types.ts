@@ -108,6 +108,8 @@ export interface TranscriptEntry {
   /** The task this run belongs to, and which attempt it is. */
   taskId?: string;
   attempt?: number;
+  /** error: the daemon stopped while this task ran (there is no real duration) */
+  interrupted?: boolean;
 }
 
 /** What the conversation view draws, top to bottom. */

@@ -12,13 +12,14 @@
  * No agent runs, so no CLI and no tokens are involved.
  */
 
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'agentd-journal-'));
 process.env.AGENTD_JOURNAL_FILE = join(dir, 'journal.jsonl');
 process.env.AGENTD_RECEIPTS_FILE = join(dir, 'receipts.jsonl');
+process.env.AGENTD_TRANSCRIPTS_DIR = join(dir, 'transcripts');
 const { check, Scheduler, stopDaemon } = await import('./lib/scheduler.mjs');
 const J = await import('../core/journal.mjs');
 
@@ -50,6 +51,12 @@ writeFileSync(
     .map((r) => JSON.stringify({ ts: new Date().toISOString(), ...r }))
     .join('\n') + '\n',
 );
+// the executor's conversation, where the lost task's prompt was written before the daemon died
+mkdirSync(join(dir, 'transcripts', 'dsh'), { recursive: true });
+writeFileSync(
+  join(dir, 'transcripts', 'dsh', 'S1.jsonl'),
+  JSON.stringify({ ts: new Date().toISOString(), role: 'user', jobId: 'lost-1', text: 'rebuild the login module' }) + '\n',
+);
 await stopDaemon();
 let s = await Scheduler.open();
 const receipts = async () => (await s.receipts(50)).receipts.filter((r) => r.jobId === 'lost-1' || r.jobId === 'done-1');
@@ -59,6 +66,10 @@ check('the finished task is not recorded again', !rs.some((r) => r.jobId === 'do
 const row = async () => (await s.c.call('instances')).instances.find((i) => i.id === 'dsh');
 check('the executor shows the notice', (await row())?.interrupted?.jobId === 'lost-1', JSON.stringify((await row())?.interrupted));
 
+const convo = async () => (await s.c.call('transcript', { agent: 'dsh', sessionId: 'S1' })).entries;
+const err = (await convo()).filter((e) => e.role === 'error');
+check('the executor conversation says the task was interrupted', err.length === 1 && err[0].interrupted === true && err[0].jobId === 'lost-1' && /中断/.test(err[0].error), JSON.stringify(err.map((e) => e.error?.slice(0, 20))));
+
 const { pid } = await s.hello();
 s.close();
 process.kill(pid); // an unclean stop
@@ -67,6 +78,7 @@ s = await Scheduler.open();
 rs = await receipts();
 check('a second restart does not record it again', rs.length === 1, String(rs.length));
 check('the notice survives the restart', (await row())?.interrupted?.jobId === 'lost-1');
+check('the conversation gets the message once, not on every restart', (await convo()).filter((e) => e.role === 'error').length === 1);
 
 s.close();
 await stopDaemon(); // so the next start uses the normal files again

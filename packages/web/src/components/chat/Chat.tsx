@@ -4,12 +4,14 @@ import { useConversation } from '@/hooks/useConversation';
 import type { Item } from '@/lib/types';
 import { Composer } from './Composer';
 import { DispatchLine } from './DispatchLine';
+import { ThoughtBlock } from './ThoughtBlock';
 import { Message } from './Message';
 import { ToolGroup } from './ToolGroup';
 
 type Block =
   | { kind: 'say'; item: Extract<Item, { kind: 'user' | 'assistant' | 'error' }> }
   | { kind: 'dispatch'; item: Extract<Item, { kind: 'dispatch' }> }
+  | { kind: 'thought'; item: Extract<Item, { kind: 'thought' }> }
   | { kind: 'tools'; id: string; tools: Extract<Item, { kind: 'tool' }>[] };
 
 /** Consecutive tool items become one collapsible group. */
@@ -17,6 +19,7 @@ function blocks(items: Item[]): Block[] {
   const out: Block[] = [];
   for (const item of items) {
     if (item.kind === 'dispatch') out.push({ kind: 'dispatch', item });
+    else if (item.kind === 'thought') out.push({ kind: 'thought', item });
     else if (item.kind !== 'tool') out.push({ kind: 'say', item });
     else {
       const last = out.at(-1);
@@ -70,7 +73,7 @@ export function Chat() {
         ) : (
           <div className="mx-auto grid max-w-[740px] grid-cols-[minmax(0,1fr)] gap-3.5 px-6 pt-1.5 pb-16 *:min-w-0">
             {list.map((b) =>
-              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
+              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} /> : b.kind === 'thought' ? <ThoughtBlock key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
             )}
           </div>
         )}

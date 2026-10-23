@@ -20,7 +20,7 @@ export interface Member {
   /** Its process had to be killed several times lately; it takes no work until a person recovers it. */
   unstable?: boolean;
   /** The running task, if any: when it started (epoch ms) and what it is doing. */
-  activity?: { startedAt: number; tool: string | null; toolCalls: number; openTools: number } | null;
+  activity?: { startedAt: number; tool: string | null; toolCalls: number; openTools: number; thinking?: number } | null;
   /** Its last task was cut off by a daemon shutdown; cleared when it gets new work. */
   interrupted?: { jobId: string; startedAt: string; prompt: string | null } | null;
   lastError?: string | null;
@@ -91,7 +91,14 @@ export interface Llm {
 /** One row of an executor's transcript. */
 export interface TranscriptEntry {
   seq: number;
-  role: 'user' | 'assistant' | 'tool' | 'error';
+  role: 'user' | 'assistant' | 'tool' | 'error' | 'thought';
+  ts?: string;
+  jobId?: string;
+  /** tool: what it was given / what it returned (shortened) */
+  input?: string | null;
+  output?: string | null;
+  /** thought: size of the whole reasoning */
+  chars?: number;
   text?: string;
   error?: string;
   toolCallId?: string;
@@ -105,7 +112,9 @@ export interface TranscriptEntry {
 
 /** What the conversation view draws, top to bottom. */
 export type Item =
-  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean; note?: string }
+  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean; note?: string; tookMs?: number; tookLabel?: string }
+  /** The reasoning an executor wrote before answering. */
+  | { id: string; kind: 'thought'; text: string; chars?: number }
   /** A task the dispatcher handed to an executor (its agent_run call and result as one line). */
-  | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string }
+  | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string; startedAt?: number; tookMs?: number }
   | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail' };

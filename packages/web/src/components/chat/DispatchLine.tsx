@@ -1,7 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { runLabel, useActivity } from '@/hooks/useActivity';
 import { useUi } from '@/store';
-import { oneLine } from '@/lib/format';
+import { oneLine, took } from '@/lib/format';
 import type { Item } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -22,7 +22,7 @@ export function DispatchLine({ item }: { item: Dispatch }) {
         <ChevronRight className="size-3 shrink-0 transition-transform group-open:rotate-90" />
         <span className="shrink-0">派发给</span>
         <b className="shrink-0 font-mono text-xs font-semibold text-ink-2">{item.agent}</b>
-        <span className="min-w-0 truncate">{oneLine(item.prompt, 80)}</span>
+        <span className="min-w-0 max-w-[40%] shrink truncate">{oneLine(item.prompt, 40)}</span>
         {retry ? (
           <span className={cn('shrink-0 rounded-sm border px-1.5 text-[11px] leading-[18px]', item.attempt === item.maxAttempts ? 'border-danger text-danger' : 'border-warn text-warn')}>
             第 {item.attempt} 次尝试{item.maxAttempts ? `（共 ${item.maxAttempts} 次）` : ''}
@@ -30,7 +30,11 @@ export function DispatchLine({ item }: { item: Dispatch }) {
         ) : null}
         {item.state === 'run' ? (
           <span className={cn('max-w-[60%] shrink truncate', status?.quiet ? 'text-warn' : 'text-accent')}>{status?.text ?? '进行中…'}</span>
-        ) : item.state === 'fail' ? <span className="shrink-0 text-danger">失败</span> : null}
+        ) : item.state === 'fail' ? (
+          <span className="shrink-0 text-danger">失败{item.tookMs != null ? ` · 用时 ${took(item.tookMs)}` : ''}</span>
+        ) : item.tookMs != null ? (
+          <span className="shrink-0">用时 {took(item.tookMs)}</span>
+        ) : null}
       </summary>
       <div className="mt-0.5 ml-4 grid gap-1.5 border-l border-line-2 pl-2.5">
         <div>

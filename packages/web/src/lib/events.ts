@@ -12,6 +12,7 @@ export interface LiveEvent {
   tool?: string | null;
   toolCalls?: number;
   openTools?: number;
+  thinkingChars?: number;
   /** job.*: which attempt at its task this run is */
   attempt?: number;
   maxAttempts?: number;

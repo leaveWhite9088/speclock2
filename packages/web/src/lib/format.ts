@@ -24,6 +24,15 @@ export function when(iso?: string | null): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** A duration for people: "0.8 秒", "12 秒", "2 分 5 秒". */
+export function took(ms: number): string {
+  const s = ms / 1000;
+  if (s < 1) return `${s.toFixed(1)} 秒`;
+  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)} 秒`;
+  const m = Math.floor(s / 60);
+  return `${m} 分 ${Math.round(s - m * 60)} 秒`;
+}
+
 export const oneLine = (t: string, n: number) => {
   const x = t.split(/\s+/).join(' ').trim();
   return x.length > n ? `${x.slice(0, n)}…` : x;

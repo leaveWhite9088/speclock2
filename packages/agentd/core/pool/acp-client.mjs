@@ -8,6 +8,7 @@ import { COMPACT_PROMPT, maybeCompact } from './compaction.mjs';
 import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDOW_MS, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from './config.mjs';
 import { modelName, runMetrics } from './metrics.mjs';
 import { killTree } from './process.mjs';
+import { inputText, outputText } from './tool-text.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from './registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from './store.mjs';
 
@@ -271,6 +272,7 @@ export class AcpClient {
             title: u.title ?? null,
             kind: u.kind ?? null,
             status: u.status ?? 'started',
+            input: inputText(u.rawInput),
           });
         } else if (
           u.sessionUpdate === 'tool_call_update' &&
@@ -283,6 +285,7 @@ export class AcpClient {
             title: u.title ?? null,
             kind: u.kind ?? null,
             status: u.status,
+            output: outputText(u),
           });
         }
       }
@@ -333,6 +336,7 @@ export class AcpClient {
     if (!run) return;
     if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
     run.thoughtChars += text.length;
+    if (run.thought.length < 20_000) run.thought += text;
 
     this._progress(run);
   }
@@ -822,6 +826,9 @@ export class AcpClient {
 
         run.stopReason = res?.stopReason ?? null;
         noteSession(this.name, this.sessionId, { updatedAt: new Date().toISOString() });
+        if (run.thought.trim()) {
+          appendEntry(this.name, this.sessionId, { role: 'thought', jobId, ...meta, text: run.thought.trim().slice(0, 12_000), chars: run.thoughtChars });
+        }
         appendEntry(this.name, this.sessionId, {
           role: 'assistant',
           jobId,
@@ -875,6 +882,7 @@ export class AcpClient {
       text: '',
       chunks: 0,
       thoughtChars: 0,
+      thought: '',
       sessionId: this.sessionId,
       model: this.currentModel(),
       context: null,

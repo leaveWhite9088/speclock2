@@ -12,6 +12,8 @@ export interface Activity {
   toolCalls: number;
   /** Tool calls still open: it is waiting on something, not idle. */
   openTools: number;
+  /** Characters of reasoning so far. */
+  thinking: number;
 }
 
 interface UiState {

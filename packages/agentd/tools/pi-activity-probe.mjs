@@ -38,6 +38,9 @@ try {
   check('the transcript has the tool calls', tools.some((e) => e.status === 'in_progress' && /write|bash|edit/i.test(e.title ?? '')), tools.length + ' entries');
   check('and their ends', tools.some((e) => e.status === 'completed' || e.status === 'failed'));
   check('every call has an id', tools.every((e) => e.toolCallId));
+  check('a call records what it was given', tools.some((e) => e.status === 'in_progress' && e.input), JSON.stringify(tools[0]?.input)?.slice(0, 50));
+  check('and what it returned', tools.some((e) => e.status === 'completed' && e.output), JSON.stringify(tools.find((e) => e.status === 'completed')?.output)?.slice(0, 50));
+  check('the reasoning is kept in the transcript', t.entries.some((e) => e.role === 'thought' && e.text), String(t.entries.filter((e) => e.role === 'thought').length));
   check('reasoning was counted', (r.metrics?.thinkingChars ?? 0) > 0, `thinkingChars ${r.metrics?.thinkingChars}`);
   console.log(`  progress events: ${progress.length}, first after ${progress[0] ? progress[0].at - t0 : '-'} ms of ${Date.now() - t0} ms`);
 } finally {

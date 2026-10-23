@@ -1,3 +1,4 @@
+import { took } from '@/lib/format';
 import type { Item } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { Markdown } from './Markdown';
@@ -20,6 +21,7 @@ export function Message({ item }: { item: Say }) {
         {item.kind === 'assistant' ? <Markdown text={item.text} /> : item.text}
       </div>
       {item.kind === 'user' && item.note ? <div className="text-[11.5px] text-warn">{item.note}</div> : null}
+      {item.kind !== 'user' && item.tookMs != null ? <div className="text-[11.5px] text-muted">{item.tookLabel ?? '用时'} {took(item.tookMs)}</div> : null}
     </div>
   );
 }

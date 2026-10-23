@@ -24,7 +24,7 @@ export function useLiveEvents() {
         const key = (payload as { agent?: string }).agent;
         if (name === 'progress' || name === 'job.started' || name === 'job.done') {
           if (key) {
-            const p = payload as { elapsedMs?: number; tool?: string | null; toolCalls?: number; openTools?: number };
+            const p = payload as { elapsedMs?: number; tool?: string | null; toolCalls?: number; openTools?: number; thinkingChars?: number };
             const now = Date.now();
             if (name === 'job.done') setActivity(key, null);
             else {
@@ -35,6 +35,7 @@ export function useLiveEvents() {
                 tool: p.tool ?? prev?.tool ?? null,
                 toolCalls: p.toolCalls ?? prev?.toolCalls ?? 0,
                 openTools: p.openTools ?? prev?.openTools ?? 0,
+                thinking: p.thinkingChars ?? prev?.thinking ?? 0,
               });
             }
           }

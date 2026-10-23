@@ -387,7 +387,41 @@ export class Dispatcher {
   async messages() {
     await this.ensureStarted();
     const data = await this.command('get_messages', {}, 60_000);
-    return { messages: data?.messages ?? [] };
+    return { messages: data?.messages ?? [], turns: await this._turns() };
+  }
+
+  /**
+   * How long each turn took, read from the session file: pi's own message times are when a message started, the
+   * file's record times are when it was finished. A turn runs from a user message to the last record before the next.
+   * @returns {{ at: number, tookMs: number }[]} `at` is the user message's own timestamp, which is how a view finds its turn
+   */
+  async _turns() {
+    try {
+      const file = (await this.state())?.sessionFile;
+      if (!file) return [];
+      const turns = [];
+      let cur = null;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        let rec;
+        try {
+          rec = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (rec.type !== 'message' || !rec.message) continue;
+        const end = Date.parse(rec.timestamp);
+        if (rec.message.role === 'user') {
+          cur = { at: rec.message.timestamp, tookMs: 0, start: end };
+          turns.push(cur);
+        } else if (cur && Number.isFinite(end)) cur.tookMs = end - cur.start;
+      }
+      // The turn still running has no end yet.
+      if (this.streaming) turns.pop();
+      return turns.filter((t) => t.tookMs > 0).map(({ at, tookMs }) => ({ at, tookMs }));
+    } catch {
+      return [];
+    }
   }
 
   _labels() {

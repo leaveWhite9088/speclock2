@@ -365,7 +365,13 @@ function emitActivity(sessionId, rec) {
     lastToolPing = Date.now();
     update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' });
   } else if (rec.type === 'tool_execution_end') {
-    update({ sessionUpdate: 'tool_call_update', toolCallId, status: rec.isError ? 'failed' : 'completed' });
+    const out = (Array.isArray(rec.result?.content) ? rec.result.content : []).map((c) => c?.text ?? '').filter(Boolean).join(String.fromCharCode(10));
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      status: rec.isError ? 'failed' : 'completed',
+      ...(out ? { content: [{ type: 'content', content: { type: 'text', text: out } }] } : {}),
+    });
   }
 }
 

@@ -15,7 +15,9 @@ interface PiMessage {
   toolName?: string;
   toolCallId?: string;
   isError?: boolean;
-  details?: { attempt?: number; maxAttempts?: number };
+  timestamp?: number;
+  durationMs?: number;
+  details?: { attempt?: number; maxAttempts?: number; durationMs?: number };
 }
 
 type Dispatch = Extract<Item, { kind: 'dispatch' }>;
@@ -26,7 +28,7 @@ const argOf = (a: unknown) => (a ?? {}) as { agent?: string; prompt?: string };
 const TAG = /\[task [^,\]]+, attempt (\d+) of (\d+)/;
 
 /** A dispatch line once its result is in. */
-function settle(it: Dispatch, text: string, isError: boolean, details?: { attempt?: number; maxAttempts?: number }): Dispatch {
+function settle(it: Dispatch, text: string, isError: boolean, details?: { attempt?: number; maxAttempts?: number; durationMs?: number }, durationMs?: number): Dispatch {
   const tag = TAG.exec(text);
   return {
     ...it,
@@ -34,27 +36,42 @@ function settle(it: Dispatch, text: string, isError: boolean, details?: { attemp
     attempt: details?.attempt ?? (tag ? Number(tag[1]) : it.attempt),
     maxAttempts: details?.maxAttempts ?? (tag ? Number(tag[2]) : it.maxAttempts),
     reply: text.slice(0, 4000),
+    tookMs: details?.durationMs ?? durationMs ?? (it.startedAt ? Date.now() - it.startedAt : undefined),
   };
 }
 
 /** The dispatcher's history (pi's own message format) as view items. */
-function fromPi(messages: PiMessage[], next: () => string): Item[] {
+function fromPi(messages: PiMessage[], turns: { at: number; tookMs: number }[], next: () => string): Item[] {
   const out: Item[] = [];
+  // How long a turn took goes under its last answer.
+  let lastSay = -1;
+  let turnTook: number | undefined;
+  const closeTurn = () => {
+    if (turnTook != null && lastSay >= 0) out[lastSay] = { ...(out[lastSay] as Extract<Item, { kind: 'user' | 'assistant' | 'error' }>), tookMs: turnTook, tookLabel: '本轮用时' };
+    lastSay = -1;
+    turnTook = undefined;
+  };
   for (const msg of messages) {
-    if (msg.role === 'user') out.push({ id: next(), kind: 'user', text: textOf(msg.content) });
-    else if (msg.role === 'assistant') {
+    if (msg.role === 'user') {
+      closeTurn();
+      turnTook = turns.find((t) => t.at === msg.timestamp)?.tookMs;
+      out.push({ id: next(), kind: 'user', text: textOf(msg.content) });
+    } else if (msg.role === 'assistant') {
       for (const c of (msg.content ?? []) as { type: string; text?: string; name?: string; id?: string; arguments?: unknown }[]) {
-        if (c.type === 'text' && c.text?.trim()) out.push({ id: next(), kind: 'assistant', text: c.text, who: '调度器' });
-        else if (c.type === 'toolCall' && c.name === 'agent_run') {
+        if (c.type === 'text' && c.text?.trim()) {
+          out.push({ id: next(), kind: 'assistant', text: c.text, who: '调度器' });
+          lastSay = out.length - 1;
+        } else if (c.type === 'toolCall' && c.name === 'agent_run') {
           const a = argOf(c.arguments);
           out.push({ id: next(), kind: 'dispatch', agent: a.agent ?? '默认执行者', prompt: a.prompt ?? '', state: 'run', toolCallId: c.id });
         } else if (c.type === 'toolCall') out.push({ id: next(), kind: 'tool', name: c.name ?? 'tool', detail: JSON.stringify(c.arguments ?? {}, null, 2), result: false });
       }
     } else if (msg.role === 'toolResult' && msg.toolName === 'agent_run') {
       const at = out.findIndex((i) => i.kind === 'dispatch' && i.toolCallId === msg.toolCallId);
-      if (at >= 0) out[at] = settle(out[at] as Dispatch, textOf(msg.content), Boolean(msg.isError), msg.details);
+      if (at >= 0) out[at] = settle(out[at] as Dispatch, textOf(msg.content), Boolean(msg.isError), msg.details, msg.durationMs);
     } else if (msg.role === 'toolResult') out.push({ id: next(), kind: 'tool', name: msg.toolName ?? 'tool', detail: textOf(msg.content).slice(0, 1500), result: true });
   }
+  closeTurn();
   // A dispatch with no result that the conversation has moved past never came back (the daemon stopped meanwhile).
   out.forEach((it, i) => {
     if (it.kind === 'dispatch' && it.state === 'run' && out.slice(i + 1).some((x) => x.kind === 'user')) out[i] = { ...it, state: 'fail', reply: '没有收到结果：执行过程被中断了。' };
@@ -79,6 +96,7 @@ export function useConversation(project: string, sel: string, member: Member | u
   const lastSeq = useRef(0);
   const sessionId = useRef<string | null>(null);
   const echoed = useRef<string[]>([]);
+  const starts = useRef(new Map<string, number>()); // job id -> when its prompt was recorded
   const memberRef = useRef(member);
   memberRef.current = member;
 
@@ -102,6 +120,9 @@ export function useConversation(project: string, sel: string, member: Member | u
     for (const e of r.entries) {
       if (e.seq <= lastSeq.current) continue; // an overlapping pull already took it
       lastSeq.current = e.seq;
+      const at0 = e.ts ? Date.parse(e.ts) : NaN;
+      if (e.role === 'user' && e.jobId && Number.isFinite(at0)) starts.current.set(e.jobId, at0);
+      const tookMs = e.jobId && starts.current.has(e.jobId) && Number.isFinite(at0) ? at0 - (starts.current.get(e.jobId) as number) : undefined;
       if (e.role === 'user') {
         const at = echoed.current.indexOf((e.text ?? '').trim());
         if (at >= 0) echoed.current.splice(at, 1); // typed here and already on screen
@@ -111,10 +132,15 @@ export function useConversation(project: string, sel: string, member: Member | u
         const done = e.status === 'completed' || e.status === 'failed';
         const state: 'run' | 'done' | 'fail' = !done ? 'run' : e.status === 'failed' ? 'fail' : 'done';
         const at = itemsRef.current.findIndex((i) => i.kind === 'tool' && i.toolCallId === e.toolCallId);
-        if (at >= 0) itemsRef.current[at] = { ...(itemsRef.current[at] as Extract<Item, { kind: 'tool' }>), state };
-        else if (e.title || !done) itemsRef.current.push({ id: next(), kind: 'tool', name: e.title || e.kind || '工具', detail: '', result: false, toolCallId: e.toolCallId, state });
-      } else if (e.role === 'error') itemsRef.current.push({ id: next(), kind: 'error', text: e.error || e.text || '出错了', who: '出错' });
-      else itemsRef.current.push({ id: next(), kind: 'assistant', text: e.text ?? '', who: m.id });
+        // What the tool was given comes with its start, what it returned with its end.
+        const output = e.output ? `${e.output}` : '';
+        if (at >= 0) {
+          const old = itemsRef.current[at] as Extract<Item, { kind: 'tool' }>;
+          itemsRef.current[at] = { ...old, state, detail: output ? `${old.detail}${old.detail ? '\n\n' : ''}— 输出 —\n${output}` : old.detail };
+        } else if (e.title || !done) itemsRef.current.push({ id: next(), kind: 'tool', name: e.title || e.kind || '工具', detail: e.input ?? output, result: false, toolCallId: e.toolCallId, state });
+      } else if (e.role === 'thought') itemsRef.current.push({ id: next(), kind: 'thought', text: e.text ?? '', chars: e.chars });
+      else if (e.role === 'error') itemsRef.current.push({ id: next(), kind: 'error', text: e.error || e.text || '出错了', who: '出错', tookMs });
+      else itemsRef.current.push({ id: next(), kind: 'assistant', text: e.text ?? '', who: m.id, tookMs });
     }
     commit();
   }, []);
@@ -124,13 +150,14 @@ export function useConversation(project: string, sel: string, member: Member | u
     lastSeq.current = 0;
     sessionId.current = null;
     itemsRef.current = [];
+    starts.current.clear();
     setLoading(true);
     try {
       if (!project) return commit();
       if (sel === DISPATCHER) {
-        const r = await api<{ messages: PiMessage[] }>('GET', `/api/dispatcher/messages${pq(project)}`);
+        const r = await api<{ messages: PiMessage[]; turns?: { at: number; tookMs: number }[] }>('GET', `/api/dispatcher/messages${pq(project)}`);
         if (g !== gen.current) return;
-        itemsRef.current = fromPi(r.messages, next);
+        itemsRef.current = fromPi(r.messages, r.turns ?? [], next);
         return commit();
       }
       const m = memberRef.current;
@@ -200,7 +227,7 @@ export function useConversation(project: string, sel: string, member: Member | u
           if (last?.kind === 'assistant') itemsRef.current[itemsRef.current.length - 1] = { ...last, live: false };
           if (d.toolName === 'agent_run') {
             const a = argOf(d.args);
-            itemsRef.current.push({ id: next(), kind: 'dispatch', agent: a.agent ?? '默认执行者', prompt: a.prompt ?? '', state: 'run', toolCallId: d.toolCallId });
+            itemsRef.current.push({ id: next(), kind: 'dispatch', agent: a.agent ?? '默认执行者', prompt: a.prompt ?? '', state: 'run', toolCallId: d.toolCallId, startedAt: Date.now() });
           } else itemsRef.current.push({ id: next(), kind: 'tool', name: d.toolName ?? 'tool', detail: JSON.stringify(d.args ?? {}, null, 2), result: false });
         } else if (d.type === 'tool_execution_end' && d.result && d.toolName === 'agent_run') {
           const text = textOf(d.result.content ?? d.result);

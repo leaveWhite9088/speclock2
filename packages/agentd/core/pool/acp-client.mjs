@@ -264,15 +264,27 @@ export class AcpClient {
       // and again when it ends, so the transcript shows what the agent did.
       const run = this.run;
       if (run?.sessionId) {
+        // Some agents send the arguments and a readable title only in later updates, so each call is followed
+        // from its start: the latest title (not a placeholder) and the first arguments that are not empty.
+        const done = u.status === 'completed' || u.status === 'failed';
+        let tool = null;
+        if (u.toolCallId && (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update')) {
+          tool = run.tools.get(u.toolCallId) ?? {};
+          if (u.title && !done && !u.title.endsWith('…')) tool.title = u.title;
+          else if (!tool.title && u.title && u.sessionUpdate === 'tool_call') tool.title = u.title;
+          const input = inputText(u.rawInput);
+          if (input) tool.input = input;
+          run.tools.set(u.toolCallId, tool);
+        }
         if (u.sessionUpdate === 'tool_call') {
           appendEntry(this.name, run.sessionId, {
             role: 'tool',
             jobId: run.jobId,
             toolCallId: u.toolCallId ?? null,
-            title: u.title ?? null,
+            title: tool?.title ?? u.title ?? null,
             kind: u.kind ?? null,
             status: u.status ?? 'started',
-            input: inputText(u.rawInput),
+            input: tool?.input ?? null,
           });
         } else if (
           u.sessionUpdate === 'tool_call_update' &&
@@ -282,9 +294,10 @@ export class AcpClient {
             role: 'tool',
             jobId: run.jobId,
             toolCallId: u.toolCallId ?? null,
-            title: u.title ?? null,
+            title: tool?.title ?? null,
             kind: u.kind ?? null,
             status: u.status,
+            input: tool?.input ?? null,
             output: outputText(u),
           });
         }
@@ -883,6 +896,7 @@ export class AcpClient {
       chunks: 0,
       thoughtChars: 0,
       thought: '',
+      tools: new Map(),
       sessionId: this.sessionId,
       model: this.currentModel(),
       context: null,

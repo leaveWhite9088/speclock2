@@ -106,6 +106,11 @@ export class AcpClient {
     return (this._injection ??= injectionFor(this.type, this.rules, this.name));
   }
 
+  _viaRules() {
+    const i = this._inj();
+    return i.prefix ? 'first message' : i.args.length ? i.args[0] : Object.keys(i.env)[0] ?? (i.meta ? `_meta.${Object.keys(i.meta)[0]}` : null);
+  }
+
   /** The `_meta` of session requests, for the CLIs that take the rules there. */
   _meta() {
     const meta = this._inj().meta;
@@ -809,7 +814,7 @@ export class AcpClient {
    * Start a prompt and return `{ jobId, done }` immediately, so the caller can
    * report the job id before the run finishes (async / streaming mode).
    */
-  startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId, meta = null } = {}) {
+  startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId, meta = null, display = null } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const done = this._enqueue(async () => {
       if (this.unstable) {
@@ -852,7 +857,7 @@ export class AcpClient {
           role: 'user',
           jobId,
           ...meta,
-          text,
+          text: display ?? text,
           model: run.model,
         });
 
@@ -1106,6 +1111,8 @@ export class AcpClient {
       lastError: this.lastError,
       unstable: this.unstable,
       forcedStops: this.forcedStops.length,
+      /** How the rules reach this agent (null: it has none). */
+      rules: this.rules ? { via: this._viaRules(), file: this._inj().file } : null,
       lastJobId: lastRun?.jobId ?? null,
       attention: lastAttention,
       health: lastAttention.some((a) => a.severity === 'error')

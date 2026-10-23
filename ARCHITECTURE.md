@@ -82,7 +82,9 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/pool/metrics.mjs` | 运行指标与推断的健康信号 |
 | | `core/pool/compaction.mjs` | 上下文占用与自动压缩 |
 | | `core/pool/instances.mjs` | 内置与自建实例 |
-| | `core/projects.mjs` | 项目、执行者配置、写入 guides 与 skills |
+| | `core/projects.mjs` | 项目、执行者配置（不往项目里写任何文件） |
+| | `core/rules.mjs` | 调度器和执行者的规则文本（来源 `contexts/`） |
+| | `core/pool/system-prompt.mjs` | 把规则交给各 CLI 的系统提示入口 |
 | | `core/dispatcher.mjs` | 调度器（pi RPC） |
 | | `core/handoff.mjs` | 交接：提案、生成文档、开新会话 |
 | 适配 | `server/pi-acp-adapter.mjs` | ACP ↔ pi RPC（含 `/compact`） |
@@ -392,9 +394,12 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
   （`/compact`；mcode、pi 支持，dsh 没有）。同一个会话内进行，不换会话。
 - **交接**：换新会话，和压缩是两回事，上下文占比本身不触发。调度器只能 `propose_handoff`；系统也会在客观信号
   （同一会话压缩 ≥3 次、连续失败 ≥3 次）出现时自动提出。之后必须由人：生成交接文档 → 查看并可修改 →
-  确认，才会开新会话。交接文档由内置 `handoff` skill 写到 `<执行者目录>/.agentd/HANDOFF.md`。
+  确认，才会开新会话。交接文档由执行者直接作为回复交出（提示词里写明格式，不再用 skill 文件，也不写进执行者目录），
+  副本留在 `data/handoffs/`；新会话的第一条消息里带着这份文档。
 - **支持的 CLI**：mcode、dsh、pi、opencode（原生 ACP）、claude 和 codex（经官方适配器 `@agentclientprotocol/claude-agent-acp`、`codex-acp`，全局安装在 Node 目录）。注册表在 `core/pool/config.mjs`；claude 用 `CLAUDE.md`、技能放 `.claude/skills`，opencode 技能放 `.opencode/skills`，codex 与 dsh、pi 一样用 `.agents/skills`。opencode 的 `/compact` 虽不在 ACP 的命令列表里，但可用（实测占用 8512→806）。
-- **skills**：随执行者目录写入（mcode 为 `.minimax/skills`，其他为 `.agents/skills`），来源 `packages/agentd/skills/`。
+- **规则**：不写进项目（没有 AGENTS.md、CLAUDE.md、skills），通过各 CLI 的额外系统提示入口交：mcode 启动参数、pi 启动参数、
+  claude / codex 的 `session/new` `_meta`、opencode 的配置环境变量，dsh 没有入口，放在每个会话第一条消息前面（压缩后再补一次）。
+  六种都实测过：新会话、恢复会话后都生效（`tools/system-prompt-probe.mjs`、`tools/rules-live-test.mjs`）。
 
 ---
 
@@ -404,8 +409,10 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
 
 **1. 只观测，不改写**
 
-不写 agent 的工作区，不改它的 prompt、系统提示、上下文。
-这条排除了：自动注入 AGENTS.md、system prompt 覆写、改写对话内容。
+不写 agent 的工作区，不替换它的系统提示，不改写对话内容。
+这条排除了：往项目里写 AGENTS.md / CLAUDE.md / skills、覆写（替换）system prompt、改写对话内容。
+**唯一的例外**是规则：启动时给 agent **追加**一段额外系统提示（只加不换，agent 自己的提示和项目自己的 AGENTS.md 照旧生效）。
+这是 2026-10-23 决定的：写文件会干涉项目，而且项目已有 AGENTS.md 时我们的规则根本不生效。
 
 **2. 只补它没有的**
 

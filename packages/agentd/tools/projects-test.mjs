@@ -70,8 +70,10 @@ try {
 
   // 2. lazy start
   await call('project.addInstance', { project: A, id: 'srv', type: TYPE, dir: './server', role: 'backend service' });
-  check('starter AGENTS.md is written at the root and in the executor dir', existsSync(join(rootA, 'AGENTS.md')) && existsSync(join(rootA, 'server', 'AGENTS.md')));
-  check('the executor one holds executor rules', /执行者规则/.test(readFileSync(join(rootA, 'server', 'AGENTS.md'), 'utf8')));
+  const guides = ['AGENTS.md', 'CLAUDE.md', '.agents', '.claude', '.opencode', '.minimax'];
+  check('nothing is written into the project: no AGENTS.md, CLAUDE.md or skills', guides.every((f) => !existsSync(join(rootA, f)) && !existsSync(join(rootA, 'server', f))));
+  const st0 = await call('status', { agent: `${A}~srv` });
+  check('the executor gets its rules as system instructions', Boolean(st0.rules?.via), JSON.stringify(st0.rules));
   let list = (await call('projects')).projects.find((p) => p.id === A);
   const row = list.instances.find((i) => i.id === 'srv');
   check('instance key is <project>~<id>', row?.key === `${A}~srv`, row?.key);

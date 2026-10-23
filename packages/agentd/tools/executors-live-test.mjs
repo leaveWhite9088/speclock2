@@ -14,8 +14,6 @@ import { join } from 'node:path';
 import { Scheduler, check, stopDaemon } from './lib/scheduler.mjs';
 
 const TYPES = process.argv.slice(2).length ? process.argv.slice(2) : ['opencode', 'claude', 'codex'];
-const SKILL_DIR = { claude: '.claude/skills', opencode: '.opencode/skills' };
-const GUIDE = { claude: 'CLAUDE.md' };
 console.log(`\n=== live executors: ${TYPES.join(', ')} ===\n`);
 
 const P = `lv${Date.now().toString(36)}`;
@@ -34,8 +32,9 @@ try {
   for (const t of TYPES) {
     const dir = join(root, t);
     console.log(`\n-- ${t}`);
-    check(`${t}: guide file is written`, existsSync(join(dir, GUIDE[t] ?? 'AGENTS.md')));
-    check(`${t}: handoff skill is in ${SKILL_DIR[t] ?? '.agents/skills'}`, existsSync(join(dir, SKILL_DIR[t] ?? '.agents/skills', 'handoff', 'SKILL.md')));
+    check(`${t}: no guide or skill file is written into the project`, ['AGENTS.md', 'CLAUDE.md', '.agents', '.claude', '.opencode', '.minimax'].every((f) => !existsSync(join(dir, f))));
+    const via = (await s.status(key(t))).rules?.via;
+    check(`${t}: the rules are handed over as system instructions`, Boolean(via), String(via));
 
     const r = await s.run(key(t), `Create a file named hello.txt in the current directory containing exactly the word BANANA-${t}. Then reply with only: DONE`, { timeoutMs: 240_000 });
     sessions[t] = r.sessionId;

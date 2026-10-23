@@ -289,21 +289,16 @@ agentd 操作：projects | project.create {id,name?,root,instances?} | project.a
 | `AGENTD_RUNS_DIR` | `./data/runs` | 运行日志目录 |
 | `MCODE_NODE_BIN` | `D:/Environment/nodejs/node.exe` | node 可执行文件 |
 
-### 团队规则文件
+### 团队规则
 
-`contexts/base.md` 是 `AGENTS.md` 的模板，**需要你自己复制**到 agent 的工作目录。
+调度器和执行者各有一段规则（能做什么、不能做什么、怎么汇报），来源是 `packages/agentd/contexts/project.md`（项目的调度器）和
+`contexts/executor.md`（每个执行者）。它们在启动进程或开会话时，通过各个 CLI 自己的「额外系统提示」入口交给 agent，
+**不写进你的项目**，项目自己的 `AGENTS.md` / `CLAUDE.md` 也不会被碰，两边同时生效。入口见上面的表。
 
-调度器不会自动写入——这是设计选择，见 [ARCHITECTURE.md#设计守则](ARCHITECTURE.md#设计守则)。
-
-注意加载范围不同：
-
-| agent | 自身 cwd | 父目录 |
-| --- | --- | --- |
-| pi | ✓ | ✓ |
-| mcode | ✓ | ✗ |
-| dsh | ✓ | ✗ |
-
-所以对 mcode / dsh，文件必须放在**它实际启动的那个目录**。
+- 改这两个文件后重启 daemon；已经在跑的进程要等下次启动才会拿到新规则（dsh 是新会话的第一条消息）。
+- 项目里不再生成 `AGENTS.md`、`CLAUDE.md` 或技能目录。以前版本生成的文件（第一行有 `speclock:managed` 标记）还在，
+  不影响使用，想清理可以自己删。
+- 交接不再用技能文件：执行者直接把交接文档作为回复交出来，agentd 保存副本在 `data/handoffs/`，项目里不留文件。
 
 ---
 

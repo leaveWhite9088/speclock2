@@ -14,6 +14,8 @@
  * `messages` method reads it from pi.
  */
 
+import { dispatcherRules } from './rules.mjs';
+import { injectionFor } from './pool/system-prompt.mjs';
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -132,6 +134,11 @@ export class Dispatcher {
       '--session-dir',
       this.sessionDir,
     ];
+    // The project's rules for the dispatcher go in as extra system instructions, not as a file in the project.
+    if (this.project) {
+      const rules = injectionFor('pi', dispatcherRules(), `dispatcher-${this.project}`);
+      if (rules.file) args.push('--append-system-prompt', rules.file);
+    }
     this.spawnCount += 1;
     this.startedAt = Date.now();
     log(`spawning pi rpc (spawn #${this.spawnCount}, cwd=${this.cwd})`);

@@ -19,6 +19,8 @@ export interface Member {
   busy: boolean;
   /** Its process had to be killed several times lately; it takes no work until a person recovers it. */
   unstable?: boolean;
+  /** The running task, if any: when it started (epoch ms) and what it is doing. */
+  activity?: { startedAt: number; tool: string | null; toolCalls: number; openTools: number } | null;
   /** Its last task was cut off by a daemon shutdown; cleared when it gets new work. */
   interrupted?: { jobId: string; startedAt: string; prompt: string | null } | null;
   lastError?: string | null;

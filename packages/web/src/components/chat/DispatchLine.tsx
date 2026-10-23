@@ -1,4 +1,6 @@
 import { ChevronRight } from 'lucide-react';
+import { runLabel, useActivity } from '@/hooks/useActivity';
+import { useUi } from '@/store';
 import { oneLine } from '@/lib/format';
 import type { Item } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -11,6 +13,9 @@ type Dispatch = Extract<Item, { kind: 'dispatch' }>;
  */
 export function DispatchLine({ item }: { item: Dispatch }) {
   const retry = (item.attempt ?? 1) > 1;
+  const project = useUi((s) => s.project);
+  const live = useActivity(item.state === 'run' ? `${project}~${item.agent}` : undefined);
+  const status = live ? runLabel(live) : null;
   return (
     <details className="group -my-1 text-[12.5px] text-muted">
       <summary className="flex w-full min-w-0 cursor-pointer list-none items-center gap-1.5 py-0.5 hover:text-ink [&::-webkit-details-marker]:hidden">
@@ -23,7 +28,9 @@ export function DispatchLine({ item }: { item: Dispatch }) {
             第 {item.attempt} 次尝试{item.maxAttempts ? `（共 ${item.maxAttempts} 次）` : ''}
           </span>
         ) : null}
-        {item.state === 'run' ? <span className="shrink-0 text-accent">进行中…</span> : item.state === 'fail' ? <span className="shrink-0 text-danger">失败</span> : null}
+        {item.state === 'run' ? (
+          <span className={cn('max-w-[60%] shrink truncate', status?.quiet ? 'text-warn' : 'text-accent')}>{status?.text ?? '进行中…'}</span>
+        ) : item.state === 'fail' ? <span className="shrink-0 text-danger">失败</span> : null}
       </summary>
       <div className="mt-0.5 ml-4 grid gap-1.5 border-l border-line-2 pl-2.5">
         <div>

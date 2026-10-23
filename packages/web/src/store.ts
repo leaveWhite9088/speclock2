@@ -3,7 +3,21 @@ import { create } from 'zustand';
 /** `sel` is DISPATCHER or an executor's key ("project~id"). */
 export const DISPATCHER = '@dispatcher';
 
+/** What a running executor is doing right now, from the progress events. Times are this page's clock. */
+export interface Activity {
+  startedAt: number;
+  lastAt: number;
+  /** The tool it started last. */
+  tool: string | null;
+  toolCalls: number;
+  /** Tool calls still open: it is waiting on something, not idle. */
+  openTools: number;
+}
+
 interface UiState {
+  /** Running executors, by key ("project~id"). */
+  activity: Record<string, Activity>;
+  setActivity: (key: string, a: Activity | null) => void;
   project: string;
   sel: string;
   drawer: boolean;
@@ -19,6 +33,14 @@ interface UiState {
 }
 
 export const useUi = create<UiState>((set) => ({
+  activity: {},
+  setActivity: (key, a) =>
+    set((s) => {
+      const next = { ...s.activity };
+      if (a) next[key] = a;
+      else delete next[key];
+      return { activity: next };
+    }),
   project: localStorage.getItem('project') ?? '',
   sel: DISPATCHER,
   drawer: false,

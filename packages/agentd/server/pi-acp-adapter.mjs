@@ -115,6 +115,8 @@ class PiRpc {
     this.nextId = 1;
     this.pending = new Map();
     this.textListeners = [];
+    /** Receive pi's tool and reasoning events, so a long task is not silent. */
+    this.eventListeners = [];
     this.settledWaiters = [];
     this.cwd = DEFAULT_CWD;
     this.sessionId = null;
@@ -190,6 +192,16 @@ class PiRpc {
       this.pending.delete(rec.id);
       resolve(rec);
       return;
+    }
+
+    if (
+      this.eventListeners.length &&
+      (rec.type === 'tool_execution_start' ||
+        rec.type === 'tool_execution_update' ||
+        rec.type === 'tool_execution_end' ||
+        (rec.type === 'message_update' && rec.assistantMessageEvent?.type === 'thinking_delta'))
+    ) {
+      for (const fn of this.eventListeners) fn(rec);
     }
 
     if (rec.type === 'message_update') {
@@ -316,6 +328,47 @@ function emitChunk(sessionId, text) {
   });
 }
 
+const TOOL_KIND = { read: 'read', edit: 'edit', write: 'edit', bash: 'execute', grep: 'search', find: 'search', ls: 'search' };
+let toolSeq = 0;
+let currentTool = null;
+let lastToolPing = 0;
+
+/**
+ * What pi is doing, as ACP updates. Without these a pi executor says nothing until its final answer: the front
+ * end shows no tool calls, and the silence timer cannot tell a long build from a hang.
+ */
+function emitActivity(sessionId, rec) {
+  const update = (u) => notify('session/update', { sessionId, update: u });
+  if (rec.type === 'message_update') {
+    const text = rec.assistantMessageEvent?.delta;
+    if (text) update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } });
+    return;
+  }
+  if (rec.type === 'tool_execution_start') {
+    currentTool = rec.toolCallId ?? rec.id ?? `pi-${++toolSeq}`;
+    const a = rec.args ?? {};
+    const hint = String(a.command ?? a.path ?? a.file_path ?? a.pattern ?? '').split(String.fromCharCode(10))[0].slice(0, 70);
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: currentTool,
+      title: hint ? `${rec.toolName}: ${hint}` : String(rec.toolName ?? 'tool'),
+      kind: TOOL_KIND[rec.toolName] ?? 'other',
+      status: 'in_progress',
+      rawInput: rec.args ?? null,
+    });
+    return;
+  }
+  const toolCallId = rec.toolCallId ?? rec.id ?? currentTool;
+  if (rec.type === 'tool_execution_update') {
+    // Partial output of a running tool: a sign of life, at most once a second.
+    if (Date.now() - lastToolPing < 1000) return;
+    lastToolPing = Date.now();
+    update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' });
+  } else if (rec.type === 'tool_execution_end') {
+    update({ sessionUpdate: 'tool_call_update', toolCallId, status: rec.isError ? 'failed' : 'completed' });
+  }
+}
+
 async function ensureSession(sessionId) {
   rpc.ensureStarted();
 
@@ -414,6 +467,9 @@ async function handle(method, params, id) {
         return;
       }
 
+      const onEvent = (rec) => emitActivity(sid, rec);
+      rpc.eventListeners.push(onEvent);
+
       try {
         const settled = rpc.waitSettled();
         const r = await rpc.command('prompt', { message: text });
@@ -452,6 +508,8 @@ async function handle(method, params, id) {
       } finally {
         const i = rpc.textListeners.indexOf(onText);
         if (i >= 0) rpc.textListeners.splice(i, 1);
+        const j = rpc.eventListeners.indexOf(onEvent);
+        if (j >= 0) rpc.eventListeners.splice(j, 1);
       }
       return;
     }

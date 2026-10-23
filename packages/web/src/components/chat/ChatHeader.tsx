@@ -5,6 +5,7 @@ import { ContextRing } from '@/components/ui/context-ring';
 import { Tag } from '@/components/ui/tag';
 import { toast } from '@/components/ui/toast';
 import { useCatalog, useDispatcherModels, useSelectedMember } from '@/hooks/queries';
+import { runLabel, useActivity } from '@/hooks/useActivity';
 import { api, enc } from '@/lib/api';
 import { memberLlm, modelLabel } from '@/lib/format';
 import { useUi } from '@/store';
@@ -17,6 +18,7 @@ export function ChatHeader() {
   const { data: models } = useDispatcherModels(project?.id ?? '', isDispatcher);
   const { data: catalog } = useCatalog(member?.type);
   const [starting, setStarting] = useState(false);
+  const live = useActivity(!isDispatcher && member?.busy ? member.key : undefined);
 
   if (!project) {
     return (
@@ -36,7 +38,7 @@ export function ChatHeader() {
       ? memberLlm(member, catalog)
       : { text: null, faint: true };
 
-  let state = member?.unstable ? '不稳定：最近多次被强制结束，已暂停派活' : busy ? '工作中' : member?.interrupted ? '上次任务因服务重启被中断，可能只做了一半，请先检查文件' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
+  let state = member?.unstable ? '不稳定：最近多次被强制结束，已暂停派活' : busy ? (live ? `工作中 · ${runLabel(live).detail}` : '工作中') : member?.interrupted ? '上次任务因服务重启被中断，可能只做了一半，请先检查文件' : alive ? '待命' : member?.lastError ? `启动失败：${member.lastError.slice(0, 80)}` : '未启动，发消息时才会启动';
 
   const retry = async () => {
     if (!member) return;

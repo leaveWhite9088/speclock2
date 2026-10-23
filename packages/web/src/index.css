@@ -55,6 +55,20 @@
   }
 }
 
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+}
+
 @theme inline {
   --color-bg: var(--bg);
   --color-side: var(--side);

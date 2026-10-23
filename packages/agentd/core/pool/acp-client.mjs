@@ -218,6 +218,13 @@ export class AcpClient {
       const u = msg.params?.update;
       if (!u) return;
       this._noteSignal(u);
+      if (this.run && (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update')) {
+        if (u.sessionUpdate === 'tool_call') {
+          this.run.toolCalls = (this.run.toolCalls ?? 0) + 1;
+          this.run.lastTool = u.title ?? u.kind ?? null;
+        }
+        this._progress(this.run, u.sessionUpdate === 'tool_call');
+      }
 
       if (u.sessionUpdate === 'agent_message_chunk' && u.content?.text) {
         this.streamedText += u.content.text;
@@ -298,15 +305,26 @@ export class AcpClient {
       }
     }
 
+    this._progress(run);
+  }
+
+  /**
+   * Tell the front ends the run is alive: at most twice a second, or at once with `force`. Besides the sizes it says
+   * which tool is running, so a long task with no text yet does not look hung.
+   */
+  _progress(run, force = false) {
     const now = Date.now();
-    if (this.progressSink && now - this._lastProgressAt >= 500) {
-      this._lastProgressAt = now;
-      this.progressSink(run.jobId, {
-        chars: run.text.length,
-        thinkingChars: run.thoughtChars,
-        elapsedMs: now - run.startedAt,
-      });
-    }
+    if (!this.progressSink || (!force && now - this._lastProgressAt < 500)) return;
+    this._lastProgressAt = now;
+    this.progressSink(run.jobId, {
+      agent: this.name,
+      chars: run.text.length,
+      thinkingChars: run.thoughtChars,
+      elapsedMs: now - run.startedAt,
+      tool: run.lastTool ?? null,
+      toolCalls: run.toolCalls ?? 0,
+      openTools: this.openTools.size,
+    });
   }
 
   /** Reasoning text: counted for progress only, never returned as output. */
@@ -316,15 +334,7 @@ export class AcpClient {
     if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
     run.thoughtChars += text.length;
 
-    const now = Date.now();
-    if (this.progressSink && now - this._lastProgressAt >= 500) {
-      this._lastProgressAt = now;
-      this.progressSink(run.jobId, {
-        chars: run.text.length,
-        thinkingChars: run.thoughtChars,
-        elapsedMs: now - run.startedAt,
-      });
-    }
+    this._progress(run);
   }
 
   _write(obj) {

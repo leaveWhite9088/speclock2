@@ -111,6 +111,8 @@ export function listInstances() {
     cwd: a.spec.defaultCwd ?? null,
     alive: Boolean(a.child),
     busy: a.busy,
+    /** What the running task is doing now, so a page opened mid-run can show it at once. */
+    activity: a.run ? { startedAt: a.run.startedAt, tool: a.run.lastTool ?? null, toolCalls: a.run.toolCalls ?? 0, openTools: a.openTools.size } : null,
     unstable: a.unstable,
     /** Its last task was cut off by a daemon shutdown (until it gets new work): { jobId, startedAt, prompt }. */
     interrupted: interruptedOf(a.name),

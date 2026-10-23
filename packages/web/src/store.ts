@@ -3,17 +3,9 @@ import { create } from 'zustand';
 /** `sel` is DISPATCHER or an executor's key ("project~id"). */
 export const DISPATCHER = '@dispatcher';
 
-/** What a running executor is doing right now, from the progress events. Times are this page's clock. */
+/** A running executor: when its task started (this page's clock). */
 export interface Activity {
   startedAt: number;
-  lastAt: number;
-  /** The tool it started last. */
-  tool: string | null;
-  toolCalls: number;
-  /** Tool calls still open: it is waiting on something, not idle. */
-  openTools: number;
-  /** Characters of reasoning so far. */
-  thinking: number;
 }
 
 interface UiState {

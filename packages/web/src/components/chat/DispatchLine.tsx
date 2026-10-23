@@ -15,7 +15,7 @@ export function DispatchLine({ item }: { item: Dispatch }) {
   const retry = (item.attempt ?? 1) > 1;
   const project = useUi((s) => s.project);
   const live = useActivity(item.state === 'run' ? `${project}~${item.agent}` : undefined);
-  const status = live ? runLabel(live) : null;
+  const status = live ? runLabel(live) : '进行中…';
   return (
     <details className="group -my-1 text-[12.5px] text-muted">
       <summary className="flex w-full min-w-0 cursor-pointer list-none items-center gap-1.5 py-0.5 hover:text-ink [&::-webkit-details-marker]:hidden">
@@ -29,7 +29,7 @@ export function DispatchLine({ item }: { item: Dispatch }) {
           </span>
         ) : null}
         {item.state === 'run' ? (
-          <span className={cn('max-w-[60%] shrink truncate', status?.quiet ? 'text-warn' : 'text-accent')}>{status?.text ?? '进行中…'}</span>
+          <span className="shrink-0 text-accent">{status}</span>
         ) : item.state === 'fail' ? (
           <span className="shrink-0 text-danger">失败{item.tookMs != null ? ` · 用时 ${took(item.tookMs)}` : ''}</span>
         ) : item.tookMs != null ? (

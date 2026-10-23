@@ -24,20 +24,9 @@ export function useLiveEvents() {
         const key = (payload as { agent?: string }).agent;
         if (name === 'progress' || name === 'job.started' || name === 'job.done') {
           if (key) {
-            const p = payload as { elapsedMs?: number; tool?: string | null; toolCalls?: number; openTools?: number; thinkingChars?: number };
-            const now = Date.now();
+            const p = payload as { elapsedMs?: number };
             if (name === 'job.done') setActivity(key, null);
-            else {
-              const prev = useUi.getState().activity[key];
-              setActivity(key, {
-                startedAt: prev?.startedAt ?? now - (p.elapsedMs ?? 0),
-                lastAt: now,
-                tool: p.tool ?? prev?.tool ?? null,
-                toolCalls: p.toolCalls ?? prev?.toolCalls ?? 0,
-                openTools: p.openTools ?? prev?.openTools ?? 0,
-                thinking: p.thinkingChars ?? prev?.thinking ?? 0,
-              });
-            }
+            else if (!useUi.getState().activity[key]) setActivity(key, { startedAt: Date.now() - (p.elapsedMs ?? 0) });
           }
           if (name === 'progress') return; // frequent, and nothing on the page needs a refetch for it
         }

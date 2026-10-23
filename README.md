@@ -3,14 +3,40 @@
 在一台机器上调度多个 CLI agent，从 pi 里用自然语言调用。
 
 ```
-pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode / dsh / pi
+pi  ──扩展──►  agentd（常驻单例）  ──ACP──►  mcode / dsh / opencode / claude / codex / pi
 ```
 
-| agent | 是什么 | 启动目录 |
-| --- | --- | --- |
-| `mcode` | MiniMax Code | 由 `agentd.config.json` 决定 |
-| `dsh` | DeepSeek Harness | 由 `agentd.config.json` 决定 |
-| `pi` | 另一个 pi 实例 | 基准目录 |
+| agent | 是什么 | 怎么接入 | 版本（实测） | 启动目录 |
+| --- | --- | --- | --- | --- |
+| `mcode` | MiniMax Code | 原生 ACP | `@minimax-ai/code` 0.6.12 | 由 `agentd.config.json` 决定 |
+| `dsh` | DeepSeek Harness | 原生 ACP | `@deepseek-ai/dsh` 0.1.5-rc.2 | 由 `agentd.config.json` 决定 |
+| `opencode` | OpenCode | 原生 ACP（`opencode acp`） | `opencode-ai` 1.19.1 | 由 `agentd.config.json` 决定 |
+| `claude` | Claude Code | 官方适配器 | `@agentclientprotocol/claude-agent-acp` 0.94.0 + `@anthropic-ai/claude-code` 2.1.295 | 由 `agentd.config.json` 决定 |
+| `codex` | Codex | 官方适配器 | `@agentclientprotocol/codex-acp` 2.2.2（依赖 `@openai/codex` 0.160.1；本机另装的 codex-cli 为 0.163.0） | 由 `agentd.config.json` 决定 |
+| `pi` | 另一个 pi 实例 | 自带适配器 `server/pi-acp-adapter.mjs`（走 pi 的 RPC） | `@earendil-works/pi-coding-agent` 1.3.0 | 基准目录 |
+
+版本是 2026-10-23 在本机（Windows 11、Node v24.19.0）实测时安装的，升级后行为可能不同。
+claude 的接口地址、模型和密钥读取你自己的 `~/.claude/settings.json`（cc-switch 切换后，下次启动进程时生效）。
+
+### 各 CLI 能看到什么（实测）
+
+一个执行者干活时，界面上能看到它的哪些内部过程。方法：每种 CLI 各让它用工具创建一个文件，读它的会话记录
+（`node packages/agentd/tools/executors-activity-probe.mjs`，会调用真实模型）。
+
+| CLI | 工具调用 | 输入 | 输出 | 思考过程 |
+| --- | --- | --- | --- | --- |
+| mcode | ✓ | 没有 | ✓ | 这次没有 |
+| dsh | ✓ | ✓ | ✓ | ✓ |
+| opencode | ✓ | ✓ | ✓ | 这次没有 |
+| claude | ✓ | ✓ | ✓ | ✓ |
+| codex | ✓ | ✓ | 只有退出码 | 这次没有 |
+| pi | ✓ | ✓ | ✓ | ✓ |
+
+- **mcode** 的协议不提供工具的输入，只有标题和输出。
+- **codex** 的命令在终端里执行，输出不经过协议，只能拿到退出码。
+- **思考过程**取决于模型有没有输出推理；任务很简单时有的模型不写，所以「这次没有」不等于「不支持」。
+- opencode、claude 的参数和可读标题在工具开始之后的更新里才给，agentd 会把这些更新合并起来再写进记录。
+- 只有这些改动之后的运行才有这些详情，旧的运行记录里没有。
 
 架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，踩过的坑和实测数据见 [LESSONS.md](LESSONS.md)。
 

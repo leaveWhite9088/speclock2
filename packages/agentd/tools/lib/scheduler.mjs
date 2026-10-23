@@ -102,8 +102,40 @@ export class Scheduler {
   }
 }
 
-/** Stop every running agentd. The next `Scheduler.open()` starts a fresh one. */
-export async function stopDaemon() {
+/** What the running daemon is working on right now (executors and dispatchers); empty when none runs. */
+async function busyWork() {
+  try {
+    const c = await connect({ spawnOnDemand: false });
+    try {
+      const { agents } = await c.call('agents');
+      const { projects } = await c.call('projects');
+      return [...agents.filter((a) => a.busy).map((a) => a.name), ...projects.filter((p) => p.dispatcher?.busy).map((p) => `${p.id} dispatcher`)];
+    } finally {
+      c.close();
+    }
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Stop every running agentd. The next `Scheduler.open()` starts a fresh one.
+ *
+ * The daemon is shared with whoever uses the dashboard, so killing it while a task runs destroys that person's work.
+ * Unless `force` is set (a test that kills it on purpose, or AGENTD_FORCE_STOP=1), this waits for it to go idle and
+ * gives up with an error instead of killing it.
+ */
+export async function stopDaemon({ force = process.env.AGENTD_FORCE_STOP === '1' } = {}) {
+  if (!force) {
+    const until = Date.now() + (Number(process.env.AGENTD_STOP_WAIT_MS) || 180_000);
+    let busy = await busyWork();
+    if (busy.length) console.log(`  waiting for agentd to go idle (working on ${busy.join(', ')})…`);
+    while (busy.length && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 5000));
+      busy = await busyWork();
+    }
+    if (busy.length) throw new Error(`not stopping agentd: it is still working on ${busy.join(', ')}. Stop it yourself, or set AGENTD_FORCE_STOP=1.`);
+  }
   const { execFileSync } = await import('node:child_process');
   try {
     execFileSync(

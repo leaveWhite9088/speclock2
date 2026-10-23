@@ -36,7 +36,7 @@ const before = await call('dispatcher.messages', { project: P });
 console.log('messages before the kill:', before.messages.length, before.messages.map((m) => `${m.role}${m.stopReason ? '/' + m.stopReason : ''}`).join(' '));
 
 s.close();
-await stopDaemon();
+await stopDaemon({ force: true });
 console.log('daemon killed; restarting');
 await new Promise((r) => setTimeout(r, 2000));
 s = await Scheduler.open();

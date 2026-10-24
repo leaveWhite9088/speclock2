@@ -60,9 +60,13 @@ const lastOf = (t) => t.attempts.at(-1);
 
 /**
  * Decide which task a run belongs to, before it starts. Throws `retry-limit` when the task has used up its attempts.
+ *
+ * The limit protects against a dispatcher that retries the same failure for ever, so it is for the dispatcher
+ * (`counted`). A person sending the same thing again is a new decision: it starts a new task and closes the failed
+ * one, so a later resend by the dispatcher does not inherit those failures.
  * @returns {{ taskId: string, attempt: number, retryOf: string | null, maxAttempts: number, hash: string, agent: string, isNew: boolean }}
  */
-export function planRun({ agent, prompt, retryOf = null }) {
+export function planRun({ agent, prompt, retryOf = null, counted = true }) {
   const hash = hashOf(prompt);
   const limit = maxAttempts();
   let task = null;
@@ -77,6 +81,12 @@ export function planRun({ agent, prompt, retryOf = null }) {
       Object.values(tasks)
         .filter((t) => !t.closed && t.agent === agent && t.hash === hash && FAILED.has(lastOf(t)?.outcome) && now - lastOf(t).at < RESEND_WINDOW_MS)
         .sort((a, b) => lastOf(b).at - lastOf(a).at)[0] ?? null;
+  }
+
+  if (task && !counted) {
+    task.closed = true;
+    save();
+    task = null;
   }
 
   if (task) {

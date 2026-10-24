@@ -12,14 +12,15 @@ type Dispatch = Extract<Item, { kind: 'dispatch' }>;
  * One line for a task the dispatcher handed to an executor: who got it, what it was, how it went.
  * Open it for the full task and the executor's reply (or the reason it failed).
  */
-export function DispatchLine({ item }: { item: Dispatch }) {
+export function DispatchLine({ item, queued = false }: { item: Dispatch; queued?: boolean }) {
   const retry = (item.attempt ?? 1) > 1;
   const project = useUi((s) => s.project);
   const dispatcher = useProject()?.dispatcher;
   // A dispatch waits for its result only while the dispatcher is in a turn. If the dispatcher is idle and there is
   // still no result, the daemon stopped meanwhile and the result will never come.
   const lost = item.state === 'run' && dispatcher != null && !dispatcher.busy;
-  const live = useActivity(item.state === 'run' && !lost ? `${project}~${item.agent}` : undefined);
+  const waiting = item.state === 'run' && (queued || Boolean(item.queued)) && !lost;
+  const live = useActivity(item.state === 'run' && !lost && !waiting ? `${project}~${item.agent}` : undefined);
   const status = live ? runLabel(live) : '进行中…';
   return (
     <details className="group -my-1 text-[12.5px] text-muted">
@@ -35,6 +36,8 @@ export function DispatchLine({ item }: { item: Dispatch }) {
         ) : null}
         {lost ? (
           <span className="shrink-0 text-danger">已中断：没有收到结果</span>
+        ) : waiting ? (
+          <span className="shrink-0">排队中{item.ahead ? `（前面还有 ${item.ahead} 个）` : ''}</span>
         ) : item.state === 'run' ? (
           <span className="shrink-0 text-accent">{status}</span>
         ) : item.state === 'fail' ? (

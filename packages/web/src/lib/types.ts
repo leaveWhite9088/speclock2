@@ -19,6 +19,8 @@ export interface Member {
   busy: boolean;
   /** Its process had to be killed several times lately; it takes no work until a person recovers it. */
   unstable?: boolean;
+  /** Prompts queued behind the running one. */
+  waiting?: number;
   /** The running task, if any: when it started (epoch ms) and what it is doing. */
   activity?: { startedAt: number; tool: string | null; toolCalls: number; openTools: number; thinking?: number } | null;
   /** Its last task was cut off by a daemon shutdown; cleared when it gets new work. */
@@ -118,5 +120,5 @@ export type Item =
   /** The reasoning an executor wrote before answering. */
   | { id: string; kind: 'thought'; text: string; chars?: number }
   /** A task the dispatcher handed to an executor (its agent_run call and result as one line). */
-  | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string; startedAt?: number; tookMs?: number }
+  | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string; startedAt?: number; tookMs?: number; queued?: boolean; ahead?: number }
   | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail' };

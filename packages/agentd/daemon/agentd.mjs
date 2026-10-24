@@ -103,6 +103,8 @@ for (const j of lostJobs) {
 
 function wireAgent(agent) {
   agent.setProgressSink((jobId, p) => publishEphemeral(jobId, p));
+  // A prompt that waited behind another really starts now.
+  agent.onRunStart = ({ jobId }) => publish(allocEvent('job.running', { jobId, agent: agent.name }));
   agent.onCompact = (info) => {
     publish(allocEvent('agent.compacted', info));
     suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次从约 ${info.before?.used} 降到 ${info.after?.used} token`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
@@ -386,12 +388,12 @@ const OPS = {
    * immediately and should `subscribe` to stream progress.
    */
   run: async (
-    { agent, prompt, cwd, timeoutMs, reset, sessionId, model, async: isAsync, subscribe: wantSub, retryOf },
+    { agent, prompt, cwd, timeoutMs, reset, sessionId, model, async: isAsync, subscribe: wantSub, retryOf, caller },
     sock,
   ) => {
     const a = getAgent(agent);
     // Which task is this an attempt at? Refused here when the task has used up its attempts.
-    const plan = planRun({ agent: a.name, prompt, retryOf });
+    const plan = planRun({ agent: a.name, prompt, retryOf, counted: caller === 'dispatcher' });
     const task = { taskId: plan.taskId, attempt: plan.attempt, retryOf: plan.retryOf, maxAttempts: plan.maxAttempts };
     if (model) await a.setConfigOption('model', model, sessionId);
     const started = a.startPrompt(prompt, { timeoutMs, cwd, reset, sessionId, meta: { taskId: task.taskId, attempt: task.attempt, retryOf: task.retryOf } });
@@ -402,6 +404,8 @@ const OPS = {
     // and the `done` event would be broadcast to nobody.
     if (wantSub && sock) subscribe(sock, started.jobId);
 
+    task.queued = started.ahead > 0;
+    task.ahead = started.ahead;
     journalStart({ jobId: started.jobId, agent: a.name, project: a.project, prompt, ...task });
     clearInterrupted(a.name);
     publish(

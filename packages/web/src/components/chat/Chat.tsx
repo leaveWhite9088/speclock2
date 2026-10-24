@@ -65,6 +65,16 @@ export function Chat() {
   };
 
   const list = blocks(items);
+  // Which dispatched tasks wait behind another: an executor works on one thing at a time, in order, so of its
+  // unfinished dispatches the newest `waiting` ones are the queued ones (the server counts them).
+  const queued = new Set<string>();
+  if (isDispatcher && project) {
+    const open = items.filter((i): i is Extract<Item, { kind: 'dispatch' }> => i.kind === 'dispatch' && i.state === 'run');
+    for (const m of project.instances) {
+      const lines = open.filter((d) => d.agent === m.id);
+      for (const d of lines.slice(Math.max(0, lines.length - (m.waiting ?? 0)))) queued.add(d.id);
+    }
+  }
   return (
     <>
       <div ref={scroller} onScroll={onScroll} tabIndex={-1} aria-live="polite" className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-1">
@@ -73,7 +83,7 @@ export function Chat() {
         ) : (
           <div className="mx-auto grid max-w-[740px] grid-cols-[minmax(0,1fr)] gap-3.5 px-6 pt-1.5 pb-16 *:min-w-0">
             {list.map((b) =>
-              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} /> : b.kind === 'thought' ? <ThoughtBlock key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
+              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} queued={queued.has(b.item.id)} /> : b.kind === 'thought' ? <ThoughtBlock key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
             )}
           </div>
         )}

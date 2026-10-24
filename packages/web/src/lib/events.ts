@@ -1,6 +1,6 @@
 /** Live events from the backend (SSE), fanned out to whoever listens. */
 
-export type LiveName = 'dispatcher.event' | 'job.started' | 'job.done' | 'agent.exit' | 'agent.forced-stop' | 'agent.recovered' | 'job.interrupted' | 'progress' | 'handoff.changed' | 'agent.compacted';
+export type LiveName = 'dispatcher.event' | 'job.started' | 'job.done' | 'agent.exit' | 'agent.forced-stop' | 'agent.recovered' | 'job.interrupted' | 'job.running' | 'progress' | 'handoff.changed' | 'agent.compacted';
 export interface LiveEvent {
   name: LiveName;
   /** dispatcher.event: the project it belongs to */
@@ -13,6 +13,9 @@ export interface LiveEvent {
   toolCalls?: number;
   openTools?: number;
   thinkingChars?: number;
+  /** job.started: it waits behind other prompts of the same executor */
+  queued?: boolean;
+  ahead?: number;
   /** job.*: which attempt at its task this run is */
   attempt?: number;
   maxAttempts?: number;

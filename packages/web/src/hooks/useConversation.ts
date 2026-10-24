@@ -214,7 +214,17 @@ export function useConversation(project: string, sel: string, member: Member | u
           const short = ev.agent.slice(project.length + 1);
           const at = itemsRef.current.findIndex((i) => i.kind === 'dispatch' && i.state === 'run' && i.attempt === undefined && i.agent === short);
           if (at >= 0) {
-            itemsRef.current[at] = { ...(itemsRef.current[at] as Dispatch), attempt: ev.attempt, maxAttempts: ev.maxAttempts };
+            itemsRef.current[at] = { ...(itemsRef.current[at] as Dispatch), attempt: ev.attempt, maxAttempts: ev.maxAttempts, queued: ev.queued, ahead: ev.ahead };
+            commit();
+          }
+          return;
+        }
+        if (ev.name === 'job.running' && isDispatcher && ev.agent?.startsWith(`${project}~`)) {
+          // A task that waited behind another has really started: the oldest waiting line of that executor.
+          const short = ev.agent.slice(project.length + 1);
+          const at = itemsRef.current.findIndex((i) => i.kind === 'dispatch' && i.state === 'run' && i.queued && i.agent === short);
+          if (at >= 0) {
+            itemsRef.current[at] = { ...(itemsRef.current[at] as Dispatch), queued: false };
             commit();
           }
           return;

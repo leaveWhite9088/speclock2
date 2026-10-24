@@ -8,7 +8,7 @@
 
 import { connect } from '@speclock/agentd/client/agentd-client.mjs';
 
-const LIVE_EVENTS = ['progress', 'job.done', 'job.started', 'agent.exit', 'agent.forced-stop', 'agent.recovered', 'job.interrupted', 'dispatcher.event', 'handoff.changed', 'agent.compacted'];
+const LIVE_EVENTS = ['progress', 'job.done', 'job.started', 'job.running', 'agent.exit', 'agent.forced-stop', 'agent.recovered', 'job.interrupted', 'dispatcher.event', 'handoff.changed', 'agent.compacted'];
 
 let client = null;
 let opening = null;

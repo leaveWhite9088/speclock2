@@ -5,7 +5,7 @@
  *   1. the same prompt after a failure is the next attempt of the same task (whitespace does not matter)
  *   2. another prompt, or another executor, is a new task
  *   3. naming an earlier run (`retryOf`) joins its task whatever the prompt says
- *   4. a task that failed three times is refused, by prompt and by name
+ *   4. a task that failed three times is refused for the dispatcher, by prompt and by name; a person starts over
  *   5. finished and cancelled runs end the task; a refused (`unstable`) run does not count as a failure
  *   6. all of it survives a restart
  * and on a real daemon with seeded files:
@@ -59,6 +59,15 @@ check('after three failures the same prompt is refused', e1?.kind === 'retry-lim
 const e2 = refused(() => T.planRun({ agent: 'coder', prompt: 'reworded', retryOf: 'j3' }));
 check('and so is naming it', e2?.kind === 'retry-limit');
 
+// the limit is for the dispatcher: a person sending the same thing again starts over
+run('coder', 'Task H', 'h1', 'failed');
+run('coder', 'Task H', 'h2', 'failed');
+run('coder', 'Task H', 'h3', 'timeout');
+check('the dispatcher is refused after three failures', refused(() => T.planRun({ agent: 'coder', prompt: 'Task H' }))?.kind === 'retry-limit');
+const person = T.planRun({ agent: 'coder', prompt: 'Task H', counted: false });
+check('a person sending it again starts a new task', person.isNew && person.attempt === 1);
+check('and the failed task is closed, so it no longer blocks anyone', T.planRun({ agent: 'coder', prompt: 'Task H' }).isNew);
+
 run('coder', 'Task B', 'b1', 'done');
 const b2 = T.planRun({ agent: 'coder', prompt: 'Task B' });
 check('a finished run ends the task: the same prompt is new', b2.isNew && b2.attempt === 1);
@@ -97,13 +106,15 @@ const lost = (await receipts()).find((r) => r.jobId === 'a2');
 check('the cut-off attempt is an interrupted receipt of its task', lost?.status === 'interrupted' && lost.taskId === 'tA' && lost.attempt === 2, JSON.stringify(lost));
 
 const before = (await receipts()).length;
-await s.c.call('run', { agent: 'dsh', prompt: P2 }).then(
-  () => check('a task that failed three times is refused', false),
-  (e) => check('a task that failed three times is refused', /not sent again/.test(e.message), e.message),
+await s.c.call('run', { agent: 'dsh', prompt: P2, caller: 'dispatcher' }).then(
+  () => check('a task that failed three times is refused for the dispatcher', false),
+  (e) => check('a task that failed three times is refused for the dispatcher', /not sent again/.test(e.message), e.message),
 );
 check('and nothing was started for it', (await receipts()).length === before);
+const person2 = await s.c.call('run', { agent: 'dsh', prompt: P2 }, { timeoutMs: 240_000 });
+check('a person sending the same thing again is not refused: a new task', person2.attempt === 1 && person2.taskId !== 'tB' && /NOPE/.test(person2.text), JSON.stringify([person2.taskId, person2.attempt]));
 
-const r = await s.c.call('run', { agent: 'dsh', prompt: P1 }, { timeoutMs: 240_000 });
+const r = await s.c.call('run', { agent: 'dsh', prompt: P1, caller: 'dispatcher' }, { timeoutMs: 240_000 });
 check('the resend is attempt 3 of the same task', r.taskId === 'tA' && r.attempt === 3 && r.retryOf === 'a2', JSON.stringify([r.taskId, r.attempt, r.retryOf]));
 check('and the executor answers', /OK/.test(r.text), JSON.stringify(r.text?.slice(0, 40)));
 const rec = (await receipts()).find((x) => x.jobId === r.jobId);

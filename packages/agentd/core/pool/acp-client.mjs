@@ -94,6 +94,10 @@ export class AcpClient {
     this.killed = new WeakSet();
     /** Called when a process is killed for ignoring a cancel. */
     this.onForcedStop = null;
+    /** Prompts handed over and not finished yet (running or waiting their turn). */
+    this.inflight = 0;
+    /** Called when a prompt really starts, after any that were ahead of it. */
+    this.onRunStart = null;
     /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
     this.rules = spec.systemPrompt ?? null;
     this._injection = null;
@@ -816,6 +820,8 @@ export class AcpClient {
    */
   startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId, meta = null, display = null } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const ahead = this.inflight;
+    this.inflight += 1;
     const done = this._enqueue(async () => {
       if (this.unstable) {
         const err = new Error(
@@ -835,6 +841,7 @@ export class AcpClient {
       }
       const run = this._beginRun(jobId);
       try {
+        this.onRunStart?.({ jobId });
         if (sessionId && sessionId !== this.sessionId) {
           await this._init();
           await this._attach(sessionId, cwd);
@@ -910,7 +917,12 @@ export class AcpClient {
       }
     });
 
-    return { jobId, done };
+    const leave = () => {
+      this.inflight -= 1;
+    };
+    done.then(leave, leave);
+
+    return { jobId, done, ahead };
   }
 
   // -- runs / metrics -----------------------------------------------------

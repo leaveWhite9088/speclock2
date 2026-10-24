@@ -1,13 +1,12 @@
 /** AcpClient: one resident ACP child per agent. Sessions, runs, model choice and the JSON-RPC plumbing live here. */
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEntry } from '../transcripts.mjs';
 import { COMPACT_PROMPT, maybeCompact } from './compaction.mjs';
 import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDOW_MS, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from './config.mjs';
 import { modelName, runMetrics } from './metrics.mjs';
-import { killTree } from './process.mjs';
+import { AcpTransport } from './acp-transport.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { RunTracker } from './run-tracker.mjs';
 import { injectionFor } from './system-prompt.mjs';
@@ -43,10 +42,7 @@ export class AcpClient {
     /** Set while we stop the process on purpose, so it is not reported as a crash. */
     this.stopping = false;
 
-    this.child = null;
-    this.buf = '';
-    this.pending = new Map();
-    this.nextId = 1;
+    this.transport = new AcpTransport({ name, onNotification: (m) => this._onNotification(m), onClose: (e) => this._onClose(e) });
 
     this.sessionId = null;
     /** Where it works. Before the first start this is the directory it will start in, not the global base. */
@@ -54,7 +50,6 @@ export class AcpClient {
     this.initPromise = null;
 
     this.spawnCount = 0;
-    this.lastError = null;
 
     this.line = new PromptQueue({ touch: () => (this.lastActive = Date.now()) });
     this.agentInfo = null;
@@ -86,8 +81,6 @@ export class AcpClient {
     this.onExit = null;
     /** Times (ms) this process had to be killed because it ignored a cancel; drives the `unstable` flag. */
     this.forcedStops = [];
-    /** Children we killed on purpose, so their `close` is not reported as a crash. */
-    this.killed = new WeakSet();
     /** Called when a process is killed for ignoring a cancel. */
     this.onForcedStop = null;
     /** Called when a prompt really starts, after any that were ahead of it. */
@@ -140,192 +133,59 @@ export class AcpClient {
     const inj = this._inj();
     const env = { ...process.env, ...(this.spec.env ?? {}), ...(this.spec.envFn?.() ?? {}), ...inj.env };
     if (this.type === 'pi' && this.spec.defaultCwd) env.AGENTD_BASE_CWD = this.spec.defaultCwd;
-
-    const child = spawn(this.spec.cmd, [...this.spec.args, ...inj.args], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      env,
-    });
-    this.child = child;
-    this.buf = '';
-
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      if (this.child !== child) return; // output of a process we already dropped
-      this.buf += chunk;
-      let i;
-      while ((i = this.buf.indexOf('\n')) !== -1) {
-        const line = this.buf.slice(0, i).trim();
-        this.buf = this.buf.slice(i + 1);
-        if (line) this._onMessage(line);
-      }
-    });
-
-    child.stderr.setEncoding('utf8');
-    this.stderrTail = [];
-    child.stderr.on('data', (d) => {
-      for (const line of d.split('\n')) {
-        const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
-        if (plain) this.stderrTail = [...this.stderrTail, plain.slice(0, 160)].slice(-4);
-        if (/ERROR|error:/.test(line)) {
-          const clean = line.replace(/\x1b\[[0-9;]*m/g, '').slice(0, 200);
-          this.lastError = clean;
-          log(`[${this.name}] stderr:`, clean);
-        }
-      }
-    });
-
-    child.on('error', (err) => {
-      this.lastError = err.message;
-      log(`[${this.name}] child error:`, err.message);
-    });
-
-    child.on('close', (code) => {
-      log(`[${this.name}] child closed (code=${code})`);
-      if (this.killed.has(child)) return; // already cleaned up by _forceStop
-      // A replacement process may already be running (stopped, then used again at once).
-      if (this.child && this.child !== child) {
-        this.stopping = false;
-        return;
-      }
-      const wasRunning = Boolean(this.run);
-      this.child = null;
-      this.initPromise = null;
-      this.sessionId = null;
-      this.live.clear();
-      for (const { reject } of this.pending.values()) reject(new Error(`${this.name} ACP exited`));
-      this.pending.clear();
-      if (this.stopping) {
-        this.stopping = false;
-        return;
-      }
-      try {
-        this.onExit?.({ agent: this.name, code, wasRunning, spawns: this.spawnCount });
-      } catch {
-        /* listener errors must not break the pool */
-      }
-    });
+    this.transport.spawn({ cmd: this.spec.cmd, args: [...this.spec.args, ...inj.args], env });
   }
 
-  _onMessage(line) {
-    let msg;
+  // The wire's state, under the names the rest of the daemon and the tests use.
+  get child() {
+    return this.transport.child;
+  }
+  get stderrTail() {
+    return this.transport.stderrTail;
+  }
+  get lastError() {
+    return this.transport.lastError;
+  }
+  set lastError(v) {
+    this.transport.lastError = v;
+  }
+
+  /** The process ended by itself (or was replaced by a newer one). */
+  _onClose({ code, replaced }) {
+    if (replaced) {
+      this.stopping = false;
+      return;
+    }
+    const wasRunning = Boolean(this.run);
+    this.initPromise = null;
+    this.sessionId = null;
+    this.live.clear();
+    if (this.stopping) {
+      this.stopping = false;
+      return;
+    }
     try {
-      msg = JSON.parse(line);
+      this.onExit?.({ agent: this.name, code, wasRunning, spawns: this.spawnCount });
     } catch {
-      return log(`[${this.name}] non-json:`, line.slice(0, 120));
+      /* listener errors must not break the pool */
     }
+  }
 
-    if (msg.id != null && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id);
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        // The CLI itself answered with an error: that is its message, and it is passed on as it came.
-        const err = new Error(msg.error.message ?? JSON.stringify(msg.error));
-        err.source = 'cli';
-        err.code = msg.error.code;
-        reject(err);
-      }
-      else resolve(msg.result);
-      return;
-    }
-
-    if (msg.id != null && msg.method) {
-      if (msg.method === 'session/request_permission') {
-        const opts = msg.params?.options ?? [];
-        const picked = opts.find((o) => /allow/i.test(o.kind ?? o.optionId ?? '')) ?? opts[0];
-        this._write({
-          jsonrpc: '2.0',
-          id: msg.id,
-          // The ACP shape; some adapters (claude) treat anything else as a refusal.
-          result: { outcome: picked ? { outcome: 'selected', optionId: picked.optionId } : { outcome: 'cancelled' } },
-        });
-      } else {
-        this._write({
-          jsonrpc: '2.0',
-          id: msg.id,
-          error: { code: -32601, message: `unsupported: ${msg.method}` },
-        });
-      }
-      return;
-    }
-
-    if (msg.method === 'session/update') {
-      const u = msg.params?.update;
-      if (!u) return;
-      if (u.sessionUpdate === 'config_option_update' && Array.isArray(u.configOptions)) this.configOptions = u.configOptions;
-      this.tracker.onUpdate(u);
-    }
+  /** Something the agent announced: the updates of a run, and a change of the options of the session. */
+  _onNotification(msg) {
+    if (msg.method !== 'session/update') return;
+    const u = msg.params?.update;
+    if (!u) return;
+    if (u.sessionUpdate === 'config_option_update' && Array.isArray(u.configOptions)) this.configOptions = u.configOptions;
+    this.tracker.onUpdate(u);
   }
 
   _write(obj) {
-    try {
-      this.child?.stdin.write(JSON.stringify(obj) + '\n');
-    } catch (err) {
-      log(`[${this.name}] write failed:`, err.message);
-    }
+    this.transport.write(obj);
   }
 
   _request(method, params, { timeoutMs = 300_000, idleMs = null } = {}) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const clear = () => {
-        clearTimeout(timer);
-        clearInterval(watch);
-      };
-      let timer = null;
-      let watch = null;
-      let expired = null;
-      const fail = (message) => {
-        // The agent is told to stop first. Dropping the wait alone would leave it working,
-        // and the next prompt to the same session would then be refused as "already in flight".
-        expired = new Error(message);
-        expired.kind = 'timeout';
-        clear();
-        if (method === 'session/prompt' && params?.sessionId) {
-          this._write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: params.sessionId } });
-        }
-        timer = setTimeout(() => {
-          this.pending.delete(id);
-          // Still no answer after the grace period: the agent is stuck and would refuse every later prompt as
-          // "already in flight". Stop the process; the next task starts a fresh one in the same session.
-          if (method === 'session/prompt' && this._forceStop(`no answer ${CANCEL_GRACE_MS / 1000}s after the cancel`)) {
-            expired.forced = true;
-            expired.message += `; it did not answer the cancel, so its process was stopped (a new one starts with the next task). Check what it was working on before sending the task again`;
-          }
-          reject(expired);
-        }, method === 'session/prompt' ? CANCEL_GRACE_MS : 0);
-      };
-      if (idleMs) {
-        // No fixed deadline. The prompt fails when the agent has said nothing for `idleMs`, and
-        // waiting on a running tool (a build, a long command) is not silence. `timeoutMs` stays
-        // as the hard ceiling for the whole prompt.
-        this.tracker.begin();
-        const started = Date.now();
-        watch = setInterval(() => {
-          if (Date.now() - started > timeoutMs) fail(`ACP ${method} timed out: still running after ${Math.round(timeoutMs / 60000)} min, cancelled`);
-          else if (!this.tracker.quiet().waitingOnTool && this.tracker.quiet().forMs > idleMs) {
-            fail(`ACP ${method} timed out: no activity for ${Math.round(idleMs / 1000)}s, cancelled`);
-          }
-        }, Math.max(100, Math.min(5_000, idleMs / 4)));
-      } else {
-        timer = setTimeout(() => {
-          this.pending.delete(id);
-          reject(new Error(`ACP ${method} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }
-      this.pending.set(id, {
-        resolve: (v) => {
-          clear();
-          if (expired) reject(expired);
-          else resolve(v);
-        },
-        reject: (e) => {
-          clear();
-          reject(expired ?? e);
-        },
-      });
-      this._write({ jsonrpc: '2.0', id, method, params });
-    });
+    return this.transport.request(method, params, { timeoutMs, idleMs, quiet: this.tracker, forceStop: (reason) => this._forceStop(reason) });
   }
 
   /**
@@ -333,22 +193,17 @@ export class AcpClient {
    * that arrives before the old process has finished dying starts a clean one.
    */
   _forceStop(reason) {
-    const child = this.child;
-    if (!child) return false;
+    if (!this.child) return false;
     log(`[${this.name}] stopping the process: ${reason}`);
-    this.killed.add(child);
-    this.child = null;
     this.initPromise = null;
     this.sessionId = null;
     this.live.clear();
-    for (const { reject } of this.pending.values()) {
+    this.transport.abandon(() => {
       const err = new Error(`${this.name} process was stopped`);
       err.forced = true;
       if (this.run?.cancelRequested) err.kind = 'cancelled'; // a person asked it to stop and it did not
-      reject(err);
-    }
-    this.pending.clear();
-    killTree(child);
+      return err;
+    });
     const now = Date.now();
     this.forcedStops = [...this.forcedStops.filter((t) => now - t < FORCED_STOP_WINDOW_MS), now];
     try {
@@ -1066,12 +921,6 @@ export class AcpClient {
   async shutdown() {
     if (!this.child) return;
     this.stopping = true;
-    try {
-      this.child.stdin.end();
-      killTree(this.child);
-    } catch {
-      /* ignore */
-    }
-    this.child = null;
+    this.transport.stop();
   }
 }

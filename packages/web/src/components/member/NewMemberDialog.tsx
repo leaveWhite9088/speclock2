@@ -10,6 +10,7 @@ import { useCatalog, useDirs, useInstanceTypes, useProbeSessions, useProject, us
 import { api, enc } from '@/lib/api';
 import { modelLabel, modelName, relDir, when } from '@/lib/format';
 import { useUi } from '@/store';
+import { TemplatesDialog } from './TemplatesDialog';
 
 const EMPTY = { id: '', type: '', dir: '', role: '', model: '', sessionId: 'new', template: '' };
 
@@ -18,6 +19,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const project = useProject();
   const select = useUi((s) => s.select);
   const [form, setForm] = useState(EMPTY);
+  const [managing, setManaging] = useState(false);
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
 
   const { data: types = [] } = useInstanceTypes();
@@ -26,8 +28,10 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
   // A template fills in what it knows; everything stays editable.
   const pick = (id: string) => {
     const t = templates.find((x) => x.id === id);
-    if (!t) return set({ template: '' });
-    set({ template: id, id: form.id || t.id, type: t.type && types.includes(t.type) ? t.type : form.type, dir: relDir(t.dir, project?.root), role: t.role, model: t.model, sessionId: 'new' });
+    // The name follows the template while it is the template's own name (or empty): a name the person typed stays.
+    const autoName = form.id === '' || form.id === tpl?.id;
+    if (!t) return set({ template: '', id: autoName ? '' : form.id });
+    set({ template: id, id: autoName ? t.id : form.id, type: t.type && types.includes(t.type) ? t.type : form.type, dir: relDir(t.dir, project?.root), role: t.role, model: t.model, sessionId: 'new' });
   };
   const type = form.type || types[0] || '';
   const dir = relDir(form.dir, project?.root);
@@ -65,8 +69,13 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="新建执行者" description="执行者是固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。">
         <form onSubmit={submit} className="grid gap-2">
-          <Field label="模板" hint={tpl ? '系统提示词来自这个模板，要改它在「执行者模板」里改' : templates.length ? undefined : '还没有模板，可以在侧栏的「执行者模板」里建'}>
-            <Select filled={Boolean(form.template)} value={form.template} onChange={pick} options={[{ value: '', label: '不使用模板' }, ...templates.map((t) => ({ value: t.id, label: t.name }))]} />
+          <Field label="模板" hint={tpl ? '系统提示词来自这个模板，改提示词请点右边的「管理模板」' : templates.length ? undefined : '还没有模板，点右边的「管理模板」建一个'}>
+            <div className="flex min-w-0 items-center gap-2">
+              <Select className="min-w-0 flex-1" filled={Boolean(form.template)} value={form.template} onChange={pick} options={[{ value: '', label: '不使用模板' }, ...templates.map((t) => ({ value: t.id, label: t.name }))]} />
+              <Button variant="link" className="shrink-0" onClick={() => setManaging(true)}>
+                管理模板
+              </Button>
+            </div>
           </Field>
           <Field label="名称">
             <Input required autoFocus placeholder="例如 dsh-backend" value={form.id} onChange={(e) => set({ id: e.target.value })} />
@@ -124,6 +133,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
           </div>
         </form>
       </DialogContent>
+      <TemplatesDialog open={managing} onOpenChange={setManaging} />
     </Dialog>
   );
 }

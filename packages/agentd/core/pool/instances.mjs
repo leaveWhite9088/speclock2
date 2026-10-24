@@ -115,7 +115,9 @@ export function listInstances() {
     /** What the running task is doing now, so a page opened mid-run can show it at once. */
     activity: a.run ? { startedAt: a.run.startedAt, tool: a.run.lastTool ?? null, toolCalls: a.run.toolCalls ?? 0, openTools: a.openTools.size, thinking: a.run.thoughtChars } : null,
     /** Prompts waiting behind the one that runs, so a page opened mid-run can tell which task is queued. */
-    waiting: Math.max(0, a.inflight - (a.run ? 1 : 0)),
+    waiting: a.waitingJobs().length,
+    /** The same prompts one by one, so each can be cancelled: [{ jobId, text, at }]. */
+    waitingJobs: a.waitingJobs(),
     unstable: a.unstable,
     /** Its last task was cut off by a daemon shutdown (until it gets new work): { jobId, startedAt, prompt }. */
     interrupted: interruptedOf(a.name),

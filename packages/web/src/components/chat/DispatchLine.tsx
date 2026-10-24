@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, X } from 'lucide-react';
 import { useProject } from '@/hooks/queries';
 import { runLabel, useActivity } from '@/hooks/useActivity';
 import { useUi } from '@/store';
@@ -12,7 +12,7 @@ type Dispatch = Extract<Item, { kind: 'dispatch' }>;
  * One line for a task the dispatcher handed to an executor: who got it, what it was, how it went.
  * Open it for the full task and the executor's reply (or the reason it failed).
  */
-export function DispatchLine({ item, queued = false }: { item: Dispatch; queued?: boolean }) {
+export function DispatchLine({ item, queued = false, onCancel }: { item: Dispatch; queued?: boolean; onCancel?: () => void }) {
   const retry = (item.attempt ?? 1) > 1;
   const project = useUi((s) => s.project);
   const dispatcher = useProject()?.dispatcher;
@@ -37,7 +37,23 @@ export function DispatchLine({ item, queued = false }: { item: Dispatch; queued?
         {lost ? (
           <span className="shrink-0 text-danger">已中断：没有收到结果</span>
         ) : waiting ? (
-          <span className="shrink-0">排队中{item.ahead ? `（前面还有 ${item.ahead} 个）` : ''}</span>
+          <>
+            <span className="shrink-0">排队中{item.ahead ? `（前面还有 ${item.ahead} 个）` : ''}</span>
+            {onCancel ? (
+              <button
+                type="button"
+                aria-label="取消排队"
+                title="取消排队"
+                className="shrink-0 rounded p-0.5 hover:bg-hover hover:text-ink"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCancel();
+                }}
+              >
+                <X className="size-3" />
+              </button>
+            ) : null}
+          </>
         ) : item.state === 'run' ? (
           <span className="shrink-0 text-accent">{status}</span>
         ) : item.state === 'fail' ? (

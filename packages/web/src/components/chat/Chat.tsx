@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ArrowDown, X } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from '@/components/ui/toast';
-import { api, pq } from '@/lib/api';
+import { api, enc, pq } from '@/lib/api';
 import { useSelectedMember } from '@/hooks/queries';
 import { useConversation } from '@/hooks/useConversation';
 import type { Item } from '@/lib/types';
@@ -92,14 +92,25 @@ export function Chat() {
   };
   // Which dispatched tasks wait behind another: an executor works on one thing at a time, in order, so of its
   // unfinished dispatches the newest `waiting` ones are the queued ones (the server counts them).
-  const queued = new Set<string>();
+  const queued = new Map<string, { agent: string; jobId?: string }>();
   if (isDispatcher && project) {
     const open = items.filter((i): i is Extract<Item, { kind: 'dispatch' }> => i.kind === 'dispatch' && i.state === 'run');
     for (const m of project.instances) {
       const lines = open.filter((d) => d.agent === m.id);
-      for (const d of lines.slice(Math.max(0, lines.length - (m.waiting ?? 0)))) queued.add(d.id);
+      const mine = lines.slice(Math.max(0, lines.length - (m.waiting ?? 0)));
+      const jobs = m.waitingJobs ?? [];
+      mine.forEach((d, i) => queued.set(d.id, { agent: m.key, jobId: jobs[jobs.length - mine.length + i]?.jobId }));
     }
   }
+  const cancelJob = async (agent: string, jobId: string) => {
+    try {
+      await api('POST', `/api/agents/${enc(agent)}/cancel`, { jobId });
+    } catch (e) {
+      toast((e as Error).message);
+    }
+    await qc.invalidateQueries({ queryKey: ['projects'] });
+  };
+  const waitingJobs = !isDispatcher && member ? (member.waitingJobs ?? []) : [];
   return (
     <>
       <div className="relative flex min-h-0 min-w-0 flex-1">
@@ -109,7 +120,7 @@ export function Chat() {
         ) : (
           <div className="mx-auto grid max-w-[740px] grid-cols-[minmax(0,1fr)] gap-3.5 px-6 pt-1.5 pb-16 *:min-w-0">
             {list.map((b) =>
-              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} queued={queued.has(b.item.id)} /> : b.kind === 'thought' ? <ThoughtBlock key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
+              b.kind === 'say' ? <Message key={b.item.id} item={b.item} /> : b.kind === 'dispatch' ? <DispatchLine key={b.item.id} item={b.item} queued={queued.has(b.item.id)} onCancel={queued.get(b.item.id)?.jobId ? () => void cancelJob(queued.get(b.item.id)!.agent, queued.get(b.item.id)!.jobId!) : undefined} /> : b.kind === 'thought' ? <ThoughtBlock key={b.item.id} item={b.item} /> : <ToolGroup key={b.id} tools={b.tools} />,
             )}
           </div>
         )}
@@ -120,6 +131,19 @@ export function Chat() {
                 <span className="shrink-0">排队中</span>
                 <span className="max-w-[70%] truncate rounded-lg bg-bubble px-3 py-[7px] text-sm text-ink opacity-70">{m}</span>
                 <button type="button" aria-label="取消排队" title="取消排队" className="shrink-0 rounded p-1 hover:bg-hover hover:text-ink" onClick={() => void dequeue(i)}>
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {waitingJobs.length ? (
+          <div className="mx-auto grid max-w-[740px] gap-2 px-6 pb-16">
+            {waitingJobs.map((j) => (
+              <div key={j.jobId} className="flex items-center justify-end gap-2 text-[12.5px] text-muted">
+                <span className="shrink-0">排队中</span>
+                <span className="max-w-[70%] truncate rounded-lg bg-bubble px-3 py-[7px] text-sm text-ink opacity-70">{j.text}</span>
+                <button type="button" aria-label="取消排队" title="取消排队" className="shrink-0 rounded p-1 hover:bg-hover hover:text-ink" onClick={() => void cancelJob(member!.key, j.jobId)}>
                   <X className="size-3.5" />
                 </button>
               </div>

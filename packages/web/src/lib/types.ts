@@ -21,6 +21,8 @@ export interface Member {
   unstable?: boolean;
   /** Prompts queued behind the running one. */
   waiting?: number;
+  /** The queued prompts one by one, oldest first, each can be cancelled by its job id. */
+  waitingJobs?: { jobId: string; text: string; at: number }[];
   /** The running task, if any: when it started (epoch ms) and what it is doing. */
   activity?: { startedAt: number; tool: string | null; toolCalls: number; openTools: number; thinking?: number } | null;
   /** Its last task was cut off by a daemon shutdown; cleared when it gets new work. */
@@ -136,4 +138,4 @@ export type Item =
   | { id: string; kind: 'thought'; text: string; chars?: number; live?: boolean }
   /** A task the dispatcher handed to an executor (its agent_run call and result as one line). */
   | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string; startedAt?: number; tookMs?: number; queued?: boolean; ahead?: number }
-  | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail' };
+  | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail'; startedAt?: number; endedAt?: number };

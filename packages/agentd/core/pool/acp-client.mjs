@@ -99,7 +99,8 @@ export class AcpClient {
     /** Called when a prompt really starts, after any that were ahead of it. */
     this.onRunStart = null;
     /** Runs waiting their turn, and those among them cancelled before it came. */
-    this.queuedJobs = new Set();
+    this.queuedJobs = new Map(); // jobId -> { text, at }
+    this.earlyCancel = new Map(); // jobId -> answers its caller now
     this.cancelledJobs = new Set();
     /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
     this.rules = spec.systemPrompt ?? null;
@@ -861,24 +862,32 @@ export class AcpClient {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const ahead = this.inflight;
     this.inflight += 1;
-    this.queuedJobs.add(jobId);
-    const done = this._enqueue(async () => {
+    this.queuedJobs.set(jobId, { text: String(display ?? text).slice(0, 300), at: Date.now() });
+    const cancelledErr = () => {
+      // Cancelled while it waited: it never reaches the CLI.
+      const err = new Error('cancelled before it started');
+      err.kind = 'cancelled';
+      err.metrics = {
+        jobId,
+        error: err.message,
+        outcome: 'cancelled',
+        forced: false,
+        failureSource: 'agentd',
+        health: 'warn',
+        attention: [{ code: 'cancelled', severity: 'warn', source: 'system', text: 'the run was cancelled before it started' }],
+      };
+      return err;
+    };
+    // A cancelled run waiting its turn is answered at once; it only leaves the line when its turn comes.
+    let answerNow;
+    const early = new Promise((_, reject) => {
+      answerNow = () => reject(cancelledErr());
+    });
+    this.earlyCancel.set(jobId, answerNow);
+    const chain = this._enqueue(async () => {
       this.queuedJobs.delete(jobId);
-      if (this.cancelledJobs.delete(jobId)) {
-        // Cancelled while it waited: it never reaches the CLI.
-        const err = new Error('cancelled before it started');
-        err.kind = 'cancelled';
-        err.metrics = {
-          jobId,
-          error: err.message,
-          outcome: 'cancelled',
-          forced: false,
-          failureSource: 'agentd',
-          health: 'warn',
-          attention: [{ code: 'cancelled', severity: 'warn', source: 'system', text: 'the run was cancelled before it started' }],
-        };
-        throw err;
-      }
+      this.earlyCancel.delete(jobId);
+      if (this.cancelledJobs.delete(jobId)) throw cancelledErr();
       if (this.unstable) {
         const err = new Error(
           `${this.name} is marked unstable: its process had to be killed ${this.forcedStops.length} times in the last ${Math.round(FORCED_STOP_WINDOW_MS / 60_000)} min. ` +
@@ -983,7 +992,8 @@ export class AcpClient {
     const leave = () => {
       this.inflight -= 1;
     };
-    done.then(leave, leave);
+    chain.then(leave, leave);
+    const done = Promise.race([chain, early]);
 
     return { jobId, done, ahead };
   }
@@ -1215,6 +1225,7 @@ export class AcpClient {
     if (jobId) {
       if (this.queuedJobs.has(jobId)) {
         this.cancelledJobs.add(jobId);
+        this.earlyCancel.get(jobId)?.();
         return { cancelled: true, jobId, queued: true };
       }
       if (this.run?.jobId !== jobId) return { cancelled: false, jobId, reason: 'not running: it is over, or unknown' };
@@ -1230,6 +1241,11 @@ export class AcpClient {
       t.unref?.();
     }
     return { cancelled: true, sessionId: this.sessionId };
+  }
+
+  /** Runs waiting their turn that nobody has cancelled, oldest first: what a page shows with a cancel button. */
+  waitingJobs() {
+    return [...this.queuedJobs].filter(([id]) => !this.cancelledJobs.has(id)).map(([jobId, j]) => ({ jobId, text: j.text, at: j.at }));
   }
 
   get busy() {

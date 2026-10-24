@@ -84,12 +84,15 @@ const q2 = a.startPrompt('cancel-me');
 const q3 = a.startPrompt('third');
 const c = a.cancel(q2.jobId);
 check('a waiting run can be cancelled', c.cancelled === true && c.queued === true, JSON.stringify(c));
+const listed = a.waitingJobs();
+check('the waiting list shows the others, not the cancelled one', !listed.some((j) => j.jobId === q2.jobId) && listed.some((j) => j.jobId === q3.jobId && j.text === 'third'), JSON.stringify(listed));
 const o2 = await outcome(q2);
+check('it is answered at once, while the run in front of it still goes on', a.run != null && a.run.jobId === q1.jobId);
 check('it ends as cancelled, without an error from the CLI', !o2.ok && o2.e.kind === 'cancelled' && o2.e.metrics?.outcome === 'cancelled', o2.e?.message);
 check('the run in front of it was not touched', (await outcome(q1)).ok);
 check('the one behind it still ran', (await outcome(q3)).ok);
 check('the cancelled prompt never reached the CLI', !prompts().includes('cancel-me'), prompts().join(','));
-check('and nothing is left in flight', a.inflight === 0 && a.queuedJobs.size === 0 && a.cancelledJobs.size === 0);
+check('and nothing is left in flight', a.inflight === 0 && a.queuedJobs.size === 0 && a.cancelledJobs.size === 0 && a.earlyCancel.size === 0);
 
 // 4: the running one, and one that is over
 const s1 = a.startPrompt('slow-3');

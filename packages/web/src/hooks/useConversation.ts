@@ -155,8 +155,8 @@ export function useConversation(project: string, sel: string, member: Member | u
           const old = itemsRef.current[at] as Extract<Item, { kind: 'tool' }>;
           // The end carries the readable title and the arguments too, for agents that only know them by then.
           const base = e.input && (!old.detail || old.detail === '{}') ? e.input : old.detail;
-          itemsRef.current[at] = { ...old, state, name: e.title || old.name, detail: output ? `${base}${base ? '\n\n' : ''}— 输出 —\n${output}` : base };
-        } else if (e.title || !done) itemsRef.current.push({ id: next(), kind: 'tool', name: e.title || e.kind || '工具', detail: e.input ?? output, result: false, toolCallId: e.toolCallId, state });
+          itemsRef.current[at] = { ...old, state, endedAt: done && Number.isFinite(at0) ? at0 : old.endedAt, name: e.title || old.name, detail: output ? `${base}${base ? '\n\n' : ''}— 输出 —\n${output}` : base };
+        } else if (e.title || !done) itemsRef.current.push({ id: next(), kind: 'tool', name: e.title || e.kind || '工具', detail: e.input ?? output, result: false, toolCallId: e.toolCallId, state, startedAt: !done && Number.isFinite(at0) ? at0 : undefined });
       } else if (e.role === 'thought') itemsRef.current.push({ id: next(), kind: 'thought', text: e.text ?? '', chars: e.chars });
       else if (e.role === 'error') itemsRef.current.push({ id: next(), kind: 'error', text: e.error || e.text || '出错了', who: e.interrupted ? '被中断' : '出错', tookMs: e.interrupted ? undefined : tookMs });
       else if (!(e.text ?? '').trim() && itemsRef.current.some((i) => i.kind === 'assistant')) {

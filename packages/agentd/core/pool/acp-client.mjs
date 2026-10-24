@@ -1,7 +1,7 @@
 /** AcpClient: one resident ACP child per agent. Sessions, runs, model choice and the JSON-RPC plumbing live here. */
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEntry } from '../transcripts.mjs';
 import { COMPACT_PROMPT, maybeCompact } from './compaction.mjs';
@@ -9,8 +9,8 @@ import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDO
 import { modelName, runMetrics } from './metrics.mjs';
 import { killTree } from './process.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
+import { RunTracker } from './run-tracker.mjs';
 import { injectionFor } from './system-prompt.mjs';
-import { inputText, outputText } from './tool-text.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from './registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from './store.mjs';
 
@@ -53,7 +53,6 @@ export class AcpClient {
     this.cwd = spec.defaultCwd || BASE_CWD;
     this.initPromise = null;
 
-    this.streamedText = '';
     this.spawnCount = 0;
     this.lastError = null;
 
@@ -77,13 +76,9 @@ export class AcpClient {
     // -- streaming / metrics --
     /** Active run: { jobId, startedAt, firstChunkAt, text, chunks, context, cost, tokens } */
     this.run = null;
-    this.lastSignal = Date.now();
-    this.openTools = new Set();
+    this.tracker = new RunTracker({ name, getRun: () => this.run });
     /** Completed runs, newest last. Bounded. */
     this.jobs = new Map();
-    /** Progress sink set by whichever front end is attached (daemon broadcasts it). */
-    this.progressSink = null;
-    this._lastProgressAt = 0;
 
     /** Rolling run durations, used to flag abnormally slow runs. */
     this.durationHistory = [];
@@ -257,165 +252,9 @@ export class AcpClient {
     if (msg.method === 'session/update') {
       const u = msg.params?.update;
       if (!u) return;
-      this._noteSignal(u);
-      if (this.run && (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update')) {
-        if (u.sessionUpdate === 'tool_call') {
-          this.run.toolCalls = (this.run.toolCalls ?? 0) + 1;
-          this.run.lastTool = u.title ?? u.kind ?? null;
-        }
-        this._progress(this.run, u.sessionUpdate === 'tool_call');
-      }
-
-      if (u.sessionUpdate === 'agent_message_chunk' && u.content?.text) {
-        this.streamedText += u.content.text;
-        this._recordChunk(u.content.text);
-        return;
-      }
-
-      // Reasoning chunks are not answer text, but they are the only sign of life
-      // some agents give during long think phases (mcode: up to ~17s).
-      if (u.sessionUpdate === 'agent_thought_chunk' && u.content?.text) {
-        this._recordThought(u.content.text);
-        return;
-      }
-
-      if (u.sessionUpdate === 'usage_update') {
-        const run = this.run;
-        const ctx = {
-          used: u.used ?? null,
-          size: u.size ?? null,
-          percent: u.used != null && u.size ? +((u.used / u.size) * 100).toFixed(1) : null,
-        };
-        if (run) {
-          run.context = ctx;
-          if (u.cost) run.cost = u.cost;
-          if (u.tokens) run.tokens = u.tokens;
-        }
-        this.lastUsage = { ...ctx, cost: u.cost ?? null, tokens: u.tokens ?? null };
-        return;
-      }
-
-      if (u.sessionUpdate === 'config_option_update' && Array.isArray(u.configOptions)) {
-        this.configOptions = u.configOptions;
-      }
-
-      // Tool activity goes into the transcript. A call is recorded when it starts
-      // and again when it ends, so the transcript shows what the agent did.
-      const run = this.run;
-      if (run?.sessionId) {
-        // Some agents send the arguments and a readable title only in later updates, so each call is followed
-        // from its start: the latest title (not a placeholder) and the first arguments that are not empty.
-        const done = u.status === 'completed' || u.status === 'failed';
-        let tool = null;
-        if (u.toolCallId && (u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update')) {
-          tool = run.tools.get(u.toolCallId) ?? {};
-          if (u.title && !done && !u.title.endsWith('…')) tool.title = u.title;
-          else if (!tool.title && u.title && u.sessionUpdate === 'tool_call') tool.title = u.title;
-          const input = inputText(u.rawInput);
-          if (input) tool.input = input;
-          run.tools.set(u.toolCallId, tool);
-        }
-        if (u.sessionUpdate === 'tool_call') {
-          this._flushPieces(run);
-          appendEntry(this.name, run.sessionId, {
-            role: 'tool',
-            jobId: run.jobId,
-            toolCallId: u.toolCallId ?? null,
-            title: tool?.title ?? u.title ?? null,
-            kind: u.kind ?? null,
-            status: u.status ?? 'started',
-            input: tool?.input ?? null,
-          });
-        } else if (
-          u.sessionUpdate === 'tool_call_update' &&
-          (u.status === 'completed' || u.status === 'failed')
-        ) {
-          appendEntry(this.name, run.sessionId, {
-            role: 'tool',
-            jobId: run.jobId,
-            toolCallId: u.toolCallId ?? null,
-            title: tool?.title ?? null,
-            kind: u.kind ?? null,
-            status: u.status,
-            input: tool?.input ?? null,
-            output: outputText(u),
-          });
-        }
-      }
+      if (u.sessionUpdate === 'config_option_update' && Array.isArray(u.configOptions)) this.configOptions = u.configOptions;
+      this.tracker.onUpdate(u);
     }
-  }
-
-  /** Append a streamed chunk to the active run and push progress upstream. */
-  _recordChunk(text) {
-    const run = this.run;
-    if (!run) return;
-    if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
-    if (run.segAt == null) run.segAt = Date.now();
-    run.text += text;
-    run.chunks += 1;
-
-    if (run.logFile) {
-      try {
-        appendFileSync(run.logFile, text, 'utf8');
-      } catch {
-        /* logging is best-effort */
-      }
-    }
-
-    this._progress(run);
-  }
-
-  /**
-   * Tell the front ends the run is alive: at most twice a second, or at once with `force`. Besides the sizes it says
-   * which tool is running, so a long task with no text yet does not look hung.
-   */
-  _progress(run, force = false) {
-    const now = Date.now();
-    if (!this.progressSink || (!force && now - this._lastProgressAt < 500)) return;
-    this._lastProgressAt = now;
-    this.progressSink(run.jobId, {
-      agent: this.name,
-      chars: run.text.length,
-      thinkingChars: run.thoughtChars,
-      elapsedMs: now - run.startedAt,
-      tool: run.lastTool ?? null,
-      toolCalls: run.toolCalls ?? 0,
-      openTools: this.openTools.size,
-    });
-  }
-
-  /**
-   * Write what the agent has said and thought since the last piece into the transcript, as pieces of their own. Done when
-   * a tool call starts and when the run ends, so text, reasoning and tool calls come out in the order they happened (the
-   * whole text used to be one entry at the very end, after every tool call).
-   */
-  _flushPieces(run, extra = {}) {
-    if (!run?.sessionId) return;
-    const iso = (ms) => (ms ? new Date(ms).toISOString() : undefined);
-    const thought = run.thought.slice(run.flushedThought).trim();
-    if (thought) {
-      appendEntry(this.name, run.sessionId, { role: 'thought', jobId: run.jobId, text: thought.slice(0, 12_000), chars: thought.length, startedAt: iso(run.thoughtAt) });
-    }
-    run.flushedThought = run.thought.length;
-    run.thoughtAt = null;
-    const text = run.text.slice(run.flushed).trim();
-    if (text) {
-      appendEntry(this.name, run.sessionId, { role: 'assistant', jobId: run.jobId, piece: true, text, startedAt: iso(run.segAt), ...extra });
-    }
-    run.flushed = run.text.length;
-    run.segAt = null;
-  }
-
-  /** Reasoning text: counted for progress only, never returned as output. */
-  _recordThought(text) {
-    const run = this.run;
-    if (!run) return;
-    if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
-    if (run.thoughtAt == null) run.thoughtAt = Date.now();
-    run.thoughtChars += text.length;
-    if (run.thought.length < 20_000) run.thought += text;
-
-    this._progress(run);
   }
 
   _write(obj) {
@@ -460,12 +299,11 @@ export class AcpClient {
         // No fixed deadline. The prompt fails when the agent has said nothing for `idleMs`, and
         // waiting on a running tool (a build, a long command) is not silence. `timeoutMs` stays
         // as the hard ceiling for the whole prompt.
-        this.lastSignal = Date.now();
-        this.openTools.clear();
+        this.tracker.begin();
         const started = Date.now();
         watch = setInterval(() => {
           if (Date.now() - started > timeoutMs) fail(`ACP ${method} timed out: still running after ${Math.round(timeoutMs / 60000)} min, cancelled`);
-          else if (!this.openTools.size && Date.now() - this.lastSignal > idleMs) {
+          else if (!this.tracker.quiet().waitingOnTool && this.tracker.quiet().forMs > idleMs) {
             fail(`ACP ${method} timed out: no activity for ${Math.round(idleMs / 1000)}s, cancelled`);
           }
         }, Math.max(100, Math.min(5_000, idleMs / 4)));
@@ -488,17 +326,6 @@ export class AcpClient {
       });
       this._write({ jsonrpc: '2.0', id, method, params });
     });
-  }
-
-  /** Any update from the agent is a sign of life; open tool calls mean it is waiting on something. */
-  _noteSignal(u) {
-    this.lastSignal = Date.now();
-    const id = u.toolCallId ?? null;
-    if (u.sessionUpdate === 'tool_call' && id && u.status !== 'completed' && u.status !== 'failed') this.openTools.add(id);
-    else if (u.sessionUpdate === 'tool_call_update' && id) {
-      if (u.status === 'completed' || u.status === 'failed') this.openTools.delete(id);
-      else if (u.status === 'in_progress' || u.status === 'pending') this.openTools.add(id);
-    }
   }
 
   /**
@@ -546,6 +373,13 @@ export class AcpClient {
 
   _enqueue(task) {
     return this.line.enqueue(task);
+  }
+
+  get openTools() {
+    return this.tracker.openTools;
+  }
+  get lastUsage() {
+    return this.tracker.lastUsage;
   }
 
   // The line's state, under the names the rest of the daemon and the tests use.
@@ -850,7 +684,7 @@ export class AcpClient {
 
   /** Front ends register one sink; it receives (jobId, progressPayload). */
   setProgressSink(fn) {
-    this.progressSink = fn;
+    this.tracker.sink = fn;
   }
 
   /**
@@ -907,7 +741,7 @@ export class AcpClient {
           this.modelDirty = false;
           await this._applyPreferredModel();
         }
-        this.streamedText = '';
+        this.tracker.streamedText = '';
         run.sessionId = this.sessionId;
         run.model = this.currentModel();
         // Spawning is expected here; only a restart after this point is abnormal.
@@ -945,7 +779,7 @@ export class AcpClient {
           model: run.model,
         });
         const out = {
-          text: this.streamedText.trim(),
+          text: this.tracker.streamedText.trim(),
           stopReason: res?.stopReason,
           sessionId: this.sessionId,
           metrics: this._finishRun(run),
@@ -958,7 +792,7 @@ export class AcpClient {
         run.errorSource = err.source ?? 'agentd'; // 'cli': what the CLI reported; anything else is agentd's own
         run.forced = Boolean(err.forced);
         // Record the failure and any partial answer, so the transcript has no gap.
-        this._flushPieces(run);
+        this.tracker.flushPieces(run);
         appendEntry(this.name, run.sessionId, {
           role: 'error',
           jobId,
@@ -1015,7 +849,7 @@ export class AcpClient {
       run.logFile = null;
     }
     this.run = run;
-    this._lastProgressAt = 0;
+    this.tracker.lastProgressAt = 0;
     this.jobs.set(jobId, run);
     // keep the map bounded
     while (this.jobs.size > 30) this.jobs.delete(this.jobs.keys().next().value);

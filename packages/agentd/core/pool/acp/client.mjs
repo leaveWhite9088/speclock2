@@ -4,12 +4,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEntry } from '../../transcripts.mjs';
 import { COMPACT_PROMPT, maybeCompact } from '../compaction.mjs';
-import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, FORCED_STOP_LIMIT, FORCED_STOP_WINDOW_MS, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from '../config.mjs';
+import { BASE_CWD, CANCEL_GRACE_MS, CONFIG, IDLE_RUN_MS, MAX_RUN_MS, RUNS_DIR, flattenOptions, log, normPath } from '../config.mjs';
 import { modelName, runMetrics } from '../metrics.mjs';
+import { StopHealth } from './health.mjs';
 import { AcpTransport } from './transport.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
+import { RulesChannel } from './rules-channel.mjs';
 import { RunTracker } from './run-tracker.mjs';
-import { injectionFor } from '../system-prompt.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from '../registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from '../store.mjs';
 
@@ -79,47 +80,39 @@ export class AcpClient {
     this.durationHistory = [];
     /** Called when the agent process exits unexpectedly. */
     this.onExit = null;
-    /** Times (ms) this process had to be killed because it ignored a cancel; drives the `unstable` flag. */
-    this.forcedStops = [];
+    /** How often this process had to be killed because it ignored a cancel; drives the `unstable` flag. */
+    this.health = new StopHealth();
     /** Called when a process is killed for ignoring a cancel. */
     this.onForcedStop = null;
     /** Called when a prompt really starts, after any that were ahead of it. */
     this.onRunStart = null;
-    /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
-    this._injection = null;
-    /** Sessions whose first prompt already carried the rules (only for a CLI with no other channel). */
-    this.primed = new Set();
+    /** The rules this agent must follow, given to it through its CLI's own channel. */
+    this.rulesChannel = new RulesChannel({ type: this.type, name, spec });
   }
 
-  /** The rules this agent must follow. `systemPrompt` may be a function, so an edited template applies the next time it starts. */
+  // The rules, under the names the rest of the daemon and the tests use.
   get rules() {
-    const p = this.spec.systemPrompt;
-    return (typeof p === 'function' ? p() : p) || null;
+    return this.rulesChannel.text;
   }
 
-  /** How the rules reach this CLI. Worked out again when the text changed; writes the rules file in agentd's data directory. */
+  get primed() {
+    return this.rulesChannel.primed;
+  }
+
   _inj() {
-    const text = this.rules;
-    if (!this._injection || this._injection.text !== text) this._injection = { ...injectionFor(this.type, text, this.name), text };
-    return this._injection;
+    return this.rulesChannel.injection();
   }
 
   _viaRules() {
-    const i = this._inj();
-    return i.prefix ? 'first message' : i.args.length ? i.args[0] : Object.keys(i.env)[0] ?? (i.meta ? `_meta.${Object.keys(i.meta)[0]}` : null);
+    return this.rulesChannel.via();
   }
 
-  /** The `_meta` of session requests, for the CLIs that take the rules there. */
   _meta() {
-    const meta = this._inj().meta;
-    return meta ? { _meta: meta } : {};
+    return this.rulesChannel.meta();
   }
 
-  /** A CLI with no channel gets the rules in front of the first prompt of a session, and again after a compaction. */
   _withRules(text) {
-    if (!this._inj().prefix || !this.sessionId || this.primed.has(this.sessionId)) return text;
-    this.primed.add(this.sessionId);
-    return `${this.rules.trim()}\n\n---\n\n${text}`;
+    return this.rulesChannel.withRules(text, this.sessionId);
   }
 
   // -- process ------------------------------------------------------------
@@ -212,9 +205,9 @@ export class AcpClient {
       return err;
     });
     const now = Date.now();
-    this.forcedStops = [...this.forcedStops.filter((t) => now - t < FORCED_STOP_WINDOW_MS), now];
+    this.health.note(now);
     try {
-      this.onForcedStop?.({ agent: this.name, reason, forcedStops: this.forcedStops.length, unstable: this.unstable });
+      this.onForcedStop?.({ agent: this.name, reason, forcedStops: this.health.count, unstable: this.unstable });
     } catch {
       /* listener errors must not break the pool */
     }
@@ -223,13 +216,12 @@ export class AcpClient {
 
   /** Killed too often lately: it gets no more work until `recover()`. */
   get unstable() {
-    const now = Date.now();
-    return this.forcedStops.filter((t) => now - t < FORCED_STOP_WINDOW_MS).length >= FORCED_STOP_LIMIT;
+    return this.health.unstable;
   }
 
   /** A person looked at it: forget the recent kills. */
   recover() {
-    this.forcedStops = [];
+    this.health.recover();
     return { agent: this.name, unstable: false };
   }
 
@@ -573,7 +565,7 @@ export class AcpClient {
     const { done, ahead } = this.line.submit(jobId, display ?? text, async () => {
       if (this.unstable) {
         const err = new Error(
-          `${this.name} is marked unstable: its process had to be killed ${this.forcedStops.length} times in the last ${Math.round(FORCED_STOP_WINDOW_MS / 60_000)} min. ` +
+          `${this.name} is marked unstable: its process had to be killed ${this.health.count} times in the last ${this.health.windowMinutes} min. ` +
             'It gets no more tasks until a person has looked at it and recovered it.',
         );
         err.kind = 'unstable';
@@ -880,7 +872,7 @@ export class AcpClient {
       agentInfo: this.agentInfo,
       lastError: this.lastError,
       unstable: this.unstable,
-      forcedStops: this.forcedStops.length,
+      forcedStops: this.health.count,
       /** How the rules reach this agent (null: it has none). */
       rules: this.rules ? { via: this._viaRules(), file: this._inj().file } : null,
       lastJobId: lastRun?.jobId ?? null,

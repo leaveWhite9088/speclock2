@@ -28,7 +28,7 @@
  *     that this adapter does not render
  */
 
-import { spawn } from 'node:child_process';
+import { PiRpc } from '../core/pi-rpc.mjs';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,25 +108,25 @@ function findSessionFile(sessionId) {
 // pi RPC client
 // ---------------------------------------------------------------------------
 
-class PiRpc {
+/**
+ * The pi process behind this adapter: the shared client (core/pi-rpc.mjs) plus what only an ACP adapter needs, which
+ * pi session the ACP session ids point at and who wants the text and tool events of the prompt that is running.
+ */
+class AdapterPi extends PiRpc {
   constructor() {
-    this.child = null;
-    this.buf = '';
-    this.nextId = 1;
-    this.pending = new Map();
+    super({ label: 'pi', log });
     this.textListeners = [];
     /** Receive pi's tool and reasoning events, so a long task is not silent. */
     this.eventListeners = [];
-    this.settledWaiters = [];
     this.cwd = DEFAULT_CWD;
     this.sessionId = null;
     this.sessionFile = null;
     this.activeAcpId = null;
-    this.stderrTail = '';
+    this.addListener((rec) => this._fanOut(rec));
   }
 
   ensureStarted(cwd) {
-    if (this.child) {
+    if (this.running) {
       if (cwd && cwd !== this.cwd) {
         throw new Error(
           `pi adapter is pinned to cwd ${this.cwd}; asked for ${cwd}. ` +
@@ -137,65 +137,14 @@ class PiRpc {
     }
     this.cwd = cwd || DEFAULT_CWD;
 
-    const args = [
-      PI_CLI,
-      '--mode',
-      'rpc',
-      '--no-mcp',
-      '--no-extensions',
-      '--session-dir',
-      SESSION_DIR,
-    ];
+    const args = [PI_CLI, '--mode', 'rpc', '--no-mcp', '--no-extensions', '--session-dir', SESSION_DIR];
     // Rules from agentd, given as extra system instructions instead of a file in the project.
     if (process.env.AGENTD_APPEND_SYSTEM_PROMPT_FILE) args.push('--append-system-prompt', process.env.AGENTD_APPEND_SYSTEM_PROMPT_FILE);
     log(`spawning pi rpc (cwd=${this.cwd})`);
-    const child = spawn(NODE_BIN, args, {
-      cwd: this.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    this.child = child;
-
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      this.buf += chunk;
-      let i;
-      while ((i = this.buf.indexOf('\n')) !== -1) {
-        const line = this.buf.slice(0, i).trim();
-        this.buf = this.buf.slice(i + 1);
-        if (line) this._onRecord(line);
-      }
-    });
-
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => {
-      this.stderrTail = (this.stderrTail + d.toString()).slice(-2000);
-    });
-
-    child.on('close', (code) => {
-      log(`pi exited (code=${code})`);
-      this.child = null;
-      for (const { reject } of this.pending.values()) reject(new Error('pi rpc exited'));
-      this.pending.clear();
-      for (const w of this.settledWaiters.splice(0)) w();
-    });
+    this.start({ cmd: NODE_BIN, args, cwd: this.cwd, env: process.env });
   }
 
-  _onRecord(line) {
-    let rec;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      return;
-    }
-
-    if (rec.type === 'response' && rec.id != null && this.pending.has(rec.id)) {
-      const { resolve } = this.pending.get(rec.id);
-      this.pending.delete(rec.id);
-      resolve(rec);
-      return;
-    }
-
+  _fanOut(rec) {
     if (
       this.eventListeners.length &&
       (rec.type === 'tool_execution_start' ||
@@ -205,59 +154,21 @@ class PiRpc {
     ) {
       for (const fn of this.eventListeners) fn(rec);
     }
-
     if (rec.type === 'message_update') {
       const ev = rec.assistantMessageEvent;
       if (ev?.type === 'text_delta' && ev.delta) {
         for (const fn of this.textListeners) fn(ev.delta);
       }
-      return;
-    }
-
-    if (rec.type === 'agent_settled') {
-      for (const w of this.settledWaiters.splice(0)) w();
     }
   }
 
+  /** The prompt that runs through here can take long: a generous default. */
   command(type, params = {}, timeoutMs = 300_000) {
-    const id = `rpc-${this.nextId++}`;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`pi ${type} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (rec) => {
-          clearTimeout(timer);
-          if (!rec.success) reject(new Error(`pi ${type} failed: ${rec.error ?? 'unknown error'}`));
-          else resolve(rec.data);
-        },
-      });
-      this.child.stdin.write(JSON.stringify({ id, type, ...params }) + '\n');
-    });
-  }
-
-  waitSettled(timeoutMs = 600_000) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const i = this.settledWaiters.indexOf(done);
-        if (i >= 0) this.settledWaiters.splice(i, 1);
-        reject(new Error(`pi run did not settle within ${timeoutMs}ms`));
-      }, timeoutMs);
-      const done = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      this.settledWaiters.push(done);
-    });
-  }
-
-  async state() {
-    return this.command('get_state', {}, 60_000);
+    return super.command(type, params, timeoutMs);
   }
 }
 
-const rpc = new PiRpc();
+const rpc = new AdapterPi();
 
 // ---------------------------------------------------------------------------
 // ACP config options (model, thinking)
@@ -491,6 +402,7 @@ async function handle(method, params, id) {
 
       try {
         const settled = rpc.waitSettled();
+        settled.catch(() => {}); // if pi dies before the command is answered, the failure surfaces there, not as an unhandled rejection
         const r = await rpc.command('prompt', { message: text });
         if (r?.disposition !== 'handled') await settled;
 
@@ -572,8 +484,7 @@ let ended = false;
 function maybeExit() {
   if (ended && inflight === 0) {
     try {
-      rpc.child?.stdin.end();
-      rpc.child?.kill();
+      rpc.stop();
     } catch {
       /* ignore */
     }
@@ -616,8 +527,7 @@ process.stdin.on('end', () => {
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     try {
-      rpc.child?.stdin.end();
-      rpc.child?.kill();
+      rpc.stop();
     } catch {}
     process.exit(0);
   });

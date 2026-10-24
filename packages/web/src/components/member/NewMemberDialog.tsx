@@ -6,12 +6,12 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
-import { useCatalog, useDirs, useInstanceTypes, useProbeSessions, useProject } from '@/hooks/queries';
+import { useCatalog, useDirs, useInstanceTypes, useProbeSessions, useProject, useTemplates } from '@/hooks/queries';
 import { api, enc } from '@/lib/api';
 import { modelLabel, modelName, relDir, when } from '@/lib/format';
 import { useUi } from '@/store';
 
-const EMPTY = { id: '', type: '', dir: '', role: '', model: '', sessionId: 'new' };
+const EMPTY = { id: '', type: '', dir: '', role: '', model: '', sessionId: 'new', template: '' };
 
 export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const qc = useQueryClient();
@@ -21,6 +21,14 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
 
   const { data: types = [] } = useInstanceTypes();
+  const { data: templates = [] } = useTemplates(open);
+  const tpl = templates.find((t) => t.id === form.template);
+  // A template fills in what it knows; everything stays editable.
+  const pick = (id: string) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return set({ template: '' });
+    set({ template: id, id: form.id || t.id, type: t.type && types.includes(t.type) ? t.type : form.type, dir: relDir(t.dir, project?.root), role: t.role, model: t.model, sessionId: 'new' });
+  };
   const type = form.type || types[0] || '';
   const dir = relDir(form.dir, project?.root);
   const { data: dirs = [] } = useDirs(project?.id ?? '', open);
@@ -41,6 +49,7 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
         role: form.role || undefined,
         model: form.model || undefined,
         sessionId: form.sessionId || 'new',
+        template: form.template || undefined,
       });
       onOpenChange(false);
       setForm(EMPTY);
@@ -56,6 +65,9 @@ export function NewMemberDialog({ open, onOpenChange }: { open: boolean; onOpenC
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="新建执行者" description="执行者是固定在项目某个目录里的 CLI 进程。创建时只写配置，第一次用到才会启动。">
         <form onSubmit={submit} className="grid gap-2">
+          <Field label="模板" hint={tpl ? '系统提示词来自这个模板，要改它在「执行者模板」里改' : templates.length ? undefined : '还没有模板，可以在侧栏的「执行者模板」里建'}>
+            <Select filled={Boolean(form.template)} value={form.template} onChange={pick} options={[{ value: '', label: '不使用模板' }, ...templates.map((t) => ({ value: t.id, label: t.name }))]} />
+          </Field>
           <Field label="名称">
             <Input required autoFocus placeholder="例如 dsh-backend" value={form.id} onChange={(e) => set({ id: e.target.value })} />
           </Field>

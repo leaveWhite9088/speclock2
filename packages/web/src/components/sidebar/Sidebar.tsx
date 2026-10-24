@@ -4,6 +4,7 @@ import { Dot } from '@/components/ui/dot';
 import { useProject, useProjectsQuery } from '@/hooks/queries';
 import { useUi } from '@/store';
 import { NewMemberDialog } from '../member/NewMemberDialog';
+import { TemplatesDialog } from '../member/TemplatesDialog';
 import { MemberList } from './MemberList';
 import { ProjectBar } from './ProjectBar';
 
@@ -31,6 +32,7 @@ function StatusBar() {
 export function Sidebar() {
   const project = useProject();
   const [creating, setCreating] = useState(false);
+  const [templating, setTemplating] = useState(false);
   return (
     <aside className="flex min-h-0 flex-col bg-side max-[620px]:max-h-[34vh]">
       <ProjectBar />
@@ -39,9 +41,13 @@ export function Sidebar() {
         <Button variant="outline" className="w-full" disabled={!project} onClick={() => setCreating(true)}>
           新建执行者
         </Button>
+        <Button variant="link" className="justify-self-start" onClick={() => setTemplating(true)}>
+          执行者模板
+        </Button>
         <StatusBar />
       </div>
       <NewMemberDialog open={creating} onOpenChange={setCreating} />
+      <TemplatesDialog open={templating} onOpenChange={setTemplating} />
     </aside>
   );
 }

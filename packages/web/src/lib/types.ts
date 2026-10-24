@@ -6,12 +6,28 @@ export interface Context {
   size?: number;
 }
 
+/** A kind of executor: what it is for, where it works and the system prompt that makes it so. A markdown file on the server. */
+export interface Template {
+  id: string;
+  name: string;
+  role: string;
+  dir: string;
+  /** The CLI it suggests (empty: the person picks). */
+  type: string;
+  model: string;
+  prompt: string;
+  /** Executors made from it. */
+  usedBy?: { project: string; id: string }[];
+}
+
 export interface Member {
   key: string;
   id: string;
   type: string;
   dir: string;
   role: string | null;
+  /** The id of the template it was made from. */
+  template?: string | null;
   model: string | null;
   preferModel: string | null;
   preferSession: string | null;

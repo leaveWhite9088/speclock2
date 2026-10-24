@@ -9,8 +9,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const CONTEXTS = join(dirname(dirname(fileURLToPath(import.meta.url))), 'contexts');
+export const CONTEXTS = join(dirname(dirname(fileURLToPath(import.meta.url))), 'contexts');
 const cache = new Map();
+
+/** A text without its HTML comments (notes for whoever edits it, not for the agent). */
+export const stripComments = (text) => String(text).replace(/<!--[\s\S]*?-->/g, '').trim();
 
 /** A template without its HTML comments (notes for whoever edits it, not for the agent). */
 function load(name) {

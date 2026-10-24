@@ -49,6 +49,7 @@ import {
 } from '../core/agent-pool.mjs';
 import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
 import { createHandoffs } from '../core/handoff.mjs';
+import { listTemplates, removeTemplate, saveTemplate } from '../core/templates.mjs';
 import * as projects from '../core/projects.mjs';
 import { EPOCH, RING_MAX, addClient, allocEvent, dropClient, eventsSince, publish, publishEphemeral, publishLive, subscribe, unsubscribe } from './events.mjs';
 import { scopeArgs, viewRows } from './guard.mjs';
@@ -350,8 +351,8 @@ const OPS = {
     return p;
   },
 
-  'project.addInstance': ({ project, id, type, dir, role, model, sessionId, compactAt }) => {
-    const r = projects.addInstance(project, { id, type, dir, role, model, sessionId, compactAt });
+  'project.addInstance': ({ project, id, type, dir, role, model, sessionId, compactAt, template }) => {
+    const r = projects.addInstance(project, { id, type, dir, role, model, sessionId, compactAt, template });
     wireAgent(pool.get(r.key));
     return r;
   },
@@ -363,14 +364,28 @@ const OPS = {
   'project.sessions': ({ project, type, dir }) => projects.probeSessions(project, type, dir),
 
   /** Edit an instance: role and preferred model. A running instance with a session switches model now. */
-  'project.updateInstance': async ({ project, id, role, model, name, dir, compactAt }) => {
-    const r = await projects.updateInstance(project, id, { role, model, name, dir, compactAt });
+  'project.updateInstance': async ({ project, id, role, model, name, dir, compactAt, template }) => {
+    const r = await projects.updateInstance(project, id, { role, model, name, dir, compactAt, template });
     const agent = pool.get(r.key);
     wireAgent(agent);
     if (model && agent.child && agent.sessionId && !agent.busy) {
       await agent.setConfigOption('model', model, agent.sessionId).catch(() => {});
     }
     return r;
+  },
+
+  // -- executor templates (markdown files in contexts/templates) --
+
+  'template.list': () => ({ templates: listTemplates().map((t) => ({ ...t, usedBy: projects.templateUsers(t.id) })) }),
+
+  'template.save': (args) => {
+    const t = saveTemplate(args);
+    return { ...t, usedBy: projects.templateUsers(t.id) };
+  },
+
+  'template.remove': ({ id }) => {
+    const users = projects.templateUsers(id);
+    return { ...removeTemplate(id), usedBy: users };
   },
 
   'project.removeInstance': ({ project, id, force }) => projects.removeInstance(project, id, { force }),

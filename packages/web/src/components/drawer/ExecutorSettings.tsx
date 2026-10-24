@@ -6,7 +6,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
-import { useCatalog, useExecutorSessions } from '@/hooks/queries';
+import { useCatalog, useExecutorSessions, useTemplates } from '@/hooks/queries';
 import { useDraft } from '@/hooks/useDraft';
 import { useForceable } from '@/hooks/useForceable';
 import { api, enc } from '@/lib/api';
@@ -25,10 +25,11 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
   const { select, setDrawer, reloadConversation } = useUi.getState();
   const { data: catalog } = useCatalog(m.type);
   const { data: sessions, error: sessionsError } = useExecutorSessions(m.key);
+  const { data: templates = [] } = useTemplates();
 
   let current = m.model ?? m.preferModel ?? '';
   if (current === catalog?.default) current = '';
-  const saved = { name: m.id, role: m.role ?? '', model: current, compactK: m.compactAt ? String(Math.round(m.compactAt / 1000)) : '' };
+  const saved = { name: m.id, role: m.role ?? '', template: m.template ?? '', model: current, compactK: m.compactAt ? String(Math.round(m.compactAt / 1000)) : '' };
   const dirLabel = relDir(m.dir, root);
   const draft = useDraft(`draft:instance:${projectId}:${m.id}`, saved);
   const v = draft.values;
@@ -48,6 +49,7 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
     const patch: Record<string, unknown> = {};
     if (v.name !== m.id) patch.name = v.name;
     if (v.role !== (m.role ?? '')) patch.role = v.role;
+    if (v.template !== saved.template) patch.template = v.template || null;
     if (v.model !== current) patch.model = v.model || null;
     if (v.compactK.trim() !== saved.compactK) patch.compactAt = v.compactK.trim() ? Number(v.compactK) * 1000 : null;
     try {
@@ -86,6 +88,17 @@ export function ExecutorSettings({ m, projectId, root }: { m: Member; projectId:
         </Field>
         <Field label="用途">
           <Input placeholder="调度器据此挑人，例如 后端服务" filled={v.role.trim() !== saved.role.trim()} value={v.role} onChange={(e) => draft.set({ role: e.target.value })} />
+        </Field>
+        <Field
+          label="模板"
+          hint={m.template && !templates.some((t) => t.id === m.template) ? `模板「${m.template}」已被删除，它现在只用通用规则` : v.template !== saved.template ? '新提示词在这个执行者下次启动时生效' : '系统提示词来自模板，改模板即可，不用逐个改'}
+        >
+          <Select
+            filled={v.template !== saved.template}
+            value={v.template}
+            onChange={(x) => draft.set({ template: x })}
+            options={[{ value: '', label: '不使用模板' }, ...templates.map((t) => ({ value: t.id, label: t.name })), ...(v.template && !templates.some((t) => t.id === v.template) ? [{ value: v.template, label: `${v.template}（已删除）` }] : [])]}
+          />
         </Field>
         <Field label="目录">
           <div className="truncate text-[12.5px] text-ink-2" title="目录在创建时定下，之后不能修改；要换目录请新建执行者">

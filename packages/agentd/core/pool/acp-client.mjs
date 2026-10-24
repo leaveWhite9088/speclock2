@@ -86,15 +86,22 @@ export class AcpClient {
     /** Called when a prompt really starts, after any that were ahead of it. */
     this.onRunStart = null;
     /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
-    this.rules = spec.systemPrompt ?? null;
     this._injection = null;
     /** Sessions whose first prompt already carried the rules (only for a CLI with no other channel). */
     this.primed = new Set();
   }
 
-  /** How the rules reach this CLI. Worked out once; writes the rules file in agentd's data directory. */
+  /** The rules this agent must follow. `systemPrompt` may be a function, so an edited template applies the next time it starts. */
+  get rules() {
+    const p = this.spec.systemPrompt;
+    return (typeof p === 'function' ? p() : p) || null;
+  }
+
+  /** How the rules reach this CLI. Worked out again when the text changed; writes the rules file in agentd's data directory. */
   _inj() {
-    return (this._injection ??= injectionFor(this.type, this.rules, this.name));
+    const text = this.rules;
+    if (!this._injection || this._injection.text !== text) this._injection = { ...injectionFor(this.type, text, this.name), text };
+    return this._injection;
   }
 
   _viaRules() {

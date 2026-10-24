@@ -87,6 +87,7 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/pool/instances.mjs` | 内置与自建实例 |
 | | `core/projects.mjs` | 项目、执行者配置（不往项目里写任何文件） |
 | | `core/rules.mjs` | 调度器和执行者的规则文本（来源 `contexts/`） |
+| | `core/templates.mjs` | 执行者模板：`contexts/templates/*.md`（文件头 + 系统提示词）的增删改查；执行者规则 = 通用规则 + 模板提示词，每次启动重读 |
 | | `core/pool/system-prompt.mjs` | 把规则交给各 CLI 的系统提示入口 |
 | | `core/pi-rpc.mjs` | 和 pi RPC 通话的唯一一份实现（调度器和 pi 适配器共用，只依赖 node 内置模块） |
 | | `core/dispatcher.mjs` | 调度器：在 PiRpc 之上加会话文件、消息排队、压缩、交接 |

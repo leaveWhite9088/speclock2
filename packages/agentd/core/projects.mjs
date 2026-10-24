@@ -23,7 +23,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { executorRules } from './rules.mjs';
+import { executorRulesFor, getTemplate } from './templates.mjs';
 import { dshSessions } from './session-disk.mjs';
 import { AGENTS, buildInstance, defaultModelFor, listInstances, pool } from './agent-pool.mjs';
 
@@ -129,7 +129,8 @@ function register(project, inst) {
     model: inst.model ?? null,
     sessionId: inst.sessionId ?? null,
     compactAt: inst.compactAt ?? null,
-    systemPrompt: executorRules() || null,
+    // A function: the rules are read again whenever the agent starts, so an edited template applies at once.
+    systemPrompt: () => executorRulesFor(inst.template) || null,
     // The instance comes back to the session it last used, also after a daemon restart.
     onSession: (sid) => {
       inst.sessionId = sid;
@@ -185,6 +186,7 @@ export function listProjects() {
         id: r.shortId,
         key: r.id,
         dir: p.instances.find((i) => i.id === r.shortId)?.dir ?? '.',
+        template: p.instances.find((i) => i.id === r.shortId)?.template ?? null,
       })),
       alive: rows.filter((r) => r.alive).length,
       busy: rows.filter((r) => r.busy).length,
@@ -228,8 +230,17 @@ function cleanCompactAt(v) {
   return Math.round(n);
 }
 
-export function addInstance(projectId, { id, type, dir = '.', role = null, model = null, sessionId = null, compactAt = null }, { persist = true } = {}) {
+export function addInstance(projectId, spec, { persist = true } = {}) {
   const project = find(projectId);
+  // A template gives what the request leaves out.
+  const tpl = spec.template ? getTemplate(spec.template) : null;
+  if (spec.template && !tpl) throw new Error(`unknown template "${spec.template}"`);
+  const id = spec.id;
+  const type = spec.type || tpl?.type;
+  const dir = spec.dir || tpl?.dir || '.';
+  const role = spec.role || tpl?.role || null;
+  const model = spec.model || tpl?.model || null;
+  const { sessionId = null, compactAt = null } = spec;
   checkId('instance', id);
   if (!AGENTS[type]) throw new Error(`unknown type "${type}"; available: ${Object.keys(AGENTS).join(', ')}`);
   if (project.instances.some((i) => i.id === id)) throw new Error(`instance "${id}" already exists in project "${projectId}"`);
@@ -245,11 +256,17 @@ export function addInstance(projectId, { id, type, dir = '.', role = null, model
     // "new" (or nothing) means: start a fresh session on first use.
     sessionId: sessionId && sessionId !== 'new' ? String(sessionId).slice(0, 200) : null,
     compactAt: cleanCompactAt(compactAt),
+    template: tpl?.id ?? null,
   };
   project.instances.push(inst);
   const agent = register(project, inst);
   if (persist) save();
-  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId, compactAt: inst.compactAt };
+  return { key: agent.name, id, type, dir: rel, cwd: abs, role: inst.role, model: inst.model, sessionId: inst.sessionId, compactAt: inst.compactAt, template: inst.template };
+}
+
+/** Executors (in any project) made from a template: [{ project, id }]. */
+export function templateUsers(templateId) {
+  return projects.flatMap((p) => p.instances.filter((i) => i.template === templateId).map((i) => ({ project: p.id, id: i.id })));
 }
 
 // -- probes: what can I pick before the instance exists? -----------------------------
@@ -318,7 +335,7 @@ export function setDispatcherCompactAt(projectId, value) {
   return project.dispatcherCompactAt;
 }
 
-export async function updateInstance(projectId, id, { role, model, name, dir, compactAt }) {
+export async function updateInstance(projectId, id, { role, model, name, dir, compactAt, template }) {
   const project = find(projectId);
   const inst = project.instances.find((i) => i.id === id);
   if (!inst) throw new Error(`unknown instance "${id}" in project "${projectId}"`);
@@ -342,6 +359,11 @@ export async function updateInstance(projectId, id, { role, model, name, dir, co
     inst.role = role ? String(role).slice(0, 500) : null;
     agent.role = inst.role ?? agent.role;
   }
+  if (template !== undefined) {
+    // Takes effect the next time the process starts (or a new session begins).
+    if (template && !getTemplate(template)) throw new Error(`unknown template "${template}"`);
+    inst.template = template || null;
+  }
   if (compactAt !== undefined) {
     inst.compactAt = cleanCompactAt(compactAt);
     agent.compactAt = inst.compactAt;
@@ -351,7 +373,7 @@ export async function updateInstance(projectId, id, { role, model, name, dir, co
     await agent.chooseModel(inst.model);
   }
   save();
-  return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir, compactAt: inst.compactAt };
+  return { key: agent.name, id, role: inst.role, model: inst.model, dir: inst.dir, compactAt: inst.compactAt, template: inst.template ?? null };
 }
 
 function busyOf(agents) {

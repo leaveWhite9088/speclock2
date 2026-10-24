@@ -64,7 +64,7 @@ export function HandoffBar() {
           <div key={h.id} className="surface flex items-center gap-3 px-3 py-2 text-[13px]">
             <div className="min-w-0 flex-1">
               <div className="truncate">
-                <b>{h.agent}</b> 建议换一个新会话：{h.reason}
+                <b>{h.agent === '@dispatcher' ? '调度器' : h.agent}</b> 建议换一个新会话：{h.reason}
               </div>
               {h.error && <div className="truncate text-[12px] text-danger">{h.error}</div>}
             </div>
@@ -83,7 +83,7 @@ export function HandoffBar() {
       <Dialog open={!!open && open.status === 'review'} onOpenChange={(o) => !o && setOpenId(null)}>
         {open && (
           <DialogContent
-            title={`交接 ${open.agent}`}
+            title={`交接 ${open.agent === '@dispatcher' ? '调度器' : open.agent}`}
             description="下面是旧会话写的交接文档，可以直接修改。确认后会开一个新会话并让它先读这份文档；旧会话保留。"
             className="w-[min(720px,94vw)]"
           >

@@ -20,28 +20,63 @@ export function contextOf(a) {
 }
 
 /**
- * Past the configured size, ask the CLI to compact: only between runs, never while the executor works, and not
- * again when the last compaction did not bring the conversation down (it would only loop).
+ * Past the configured size, compact: only between runs, never while the thing works, and not again when the last
+ * compaction did not bring the conversation down (it would only loop).
+ *
+ * It works on anything that can say how full its conversation is and compact it, so an executor and a project's
+ * dispatcher follow the same rules:
+ *
+ * @param {{
+ *   name: string,                       // for the log and the session's record
+ *   owner: { _compacting?: boolean },    // holds the "compaction under way" flag
+ *   compactAt: number | null,            // tokens; null: never
+ *   busy: boolean,
+ *   sessionKey: string | null,           // the conversation being compacted
+ *   context: () => { used: number | null, size: number | null, percent: number | null } | null,
+ *   compact: () => Promise<unknown>,
+ *   contextAfter?: () => Promise<any> | any,
+ *   onCompact?: (info: object) => void,
+ * }} t
  */
-export async function maybeCompact(agent) {
-  const cmd = COMPACT_PROMPT[agent.type];
-  const ctx = contextOf(agent);
-  if (!cmd || !agent.compactAt || agent._compacting || agent.busy || !agent.sessionId || ctx?.used == null) return;
-  const limit = ctx.size ? Math.min(agent.compactAt, Math.floor(ctx.size * 0.9)) : agent.compactAt;
+export async function compactIfNeeded(t) {
+  const ctx = t.context();
+  if (!t.compactAt || t.owner._compacting || t.busy || !t.sessionKey || ctx?.used == null) return;
+  const limit = ctx.size ? Math.min(t.compactAt, Math.floor(ctx.size * 0.9)) : t.compactAt;
   if (ctx.used < limit) return;
-  const e = entry(agent.name, agent.sessionId);
+  const e = entry(t.name, t.sessionKey);
   if (e.lastCompactUsed != null && ctx.used >= e.lastCompactUsed * 0.9 && e.compactedAt && Date.now() - e.compactedAt < 30 * 60_000) return;
-  agent._compacting = true;
-  const sessionId = agent.sessionId;
+  t.owner._compacting = true;
+  const sessionKey = t.sessionKey;
   try {
-    await agent.startPrompt(cmd, { timeoutMs: 600_000 }).done;
-    agent.primed.delete(sessionId); // the rules may have been compacted away: send them again with the next prompt
-    const after = contextOf(agent);
-    noteSession(agent.name, sessionId, { compactions: (e.compactions ?? 0) + 1, compactedAt: Date.now(), lastCompactUsed: ctx.used });
-    agent.onCompact?.({ agent: agent.name, sessionId, before: ctx, after, threshold: limit, compactions: (e.compactions ?? 0) + 1 });
+    await t.compact();
+    const after = (await t.contextAfter?.()) ?? t.context();
+    // Counted once, before it is saved: saving changes the record `e` points to, so asking it again would say one too many.
+    const compactions = (e.compactions ?? 0) + 1;
+    noteSession(t.name, sessionKey, { compactions, compactedAt: Date.now(), lastCompactUsed: ctx.used });
+    t.onCompact?.({ agent: t.name, sessionId: sessionKey, before: ctx, after, threshold: limit, compactions });
   } catch (err) {
-    log(`[${agent.name}] compaction failed: ${err.message}`);
+    log(`[${t.name}] compaction failed: ${err.message}`);
   } finally {
-    agent._compacting = false;
+    t.owner._compacting = false;
   }
+}
+
+/** An executor: the CLI does the compacting, we ask it with its own command. */
+export function maybeCompact(agent) {
+  const cmd = COMPACT_PROMPT[agent.type];
+  if (!cmd) return Promise.resolve();
+  const sessionId = agent.sessionId;
+  return compactIfNeeded({
+    name: agent.name,
+    owner: agent,
+    compactAt: agent.compactAt,
+    busy: agent.busy,
+    sessionKey: sessionId,
+    context: () => contextOf(agent),
+    compact: async () => {
+      await agent.startPrompt(cmd, { timeoutMs: 600_000 }).done;
+      agent.primed.delete(sessionId); // the rules may have been compacted away: send them again with the next prompt
+    },
+    onCompact: (info) => agent.onCompact?.(info),
+  });
 }

@@ -68,6 +68,23 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
   const { data: sessions, error } = useDispatcherSessions(projectId);
   const [switching, setSwitching] = useState(false);
   const [changed, setChanged] = useState(false); // the model was switched here, so the field shows white
+  const savedK = project?.dispatcher?.compactAt ? String(Math.round(project.dispatcher.compactAt / 1000)) : '';
+  const [compactK, setCompactK] = useState<string | null>(null); // null: showing the saved value
+  const shownK = compactK ?? savedK;
+
+  // Applied when the field is left: the same way the model is, with no separate submit.
+  const saveCompact = async () => {
+    const v = (compactK ?? savedK).trim();
+    setCompactK(null);
+    if (v === savedK) return;
+    try {
+      await api('PATCH', `/api/projects/${enc(projectId)}/dispatcher`, { compactAt: v ? Number(v) * 1000 : null });
+      toast(v ? `调度器超过 ${v}K tokens 自动压缩` : '调度器不自动压缩');
+      await qc.invalidateQueries({ queryKey: ['projects'] });
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
 
   const refreshAll = async () => {
     await qc.invalidateQueries({ queryKey: ['projects'] });
@@ -98,6 +115,21 @@ export function DispatcherSettings({ projectId }: { projectId: string }) {
           hint={models?.hiddenWithoutCredentials ? `另有 ${models.hiddenWithoutCredentials} 个模型没有配置凭据，没有列出。` : '选择后立即生效。'}
         >
           <Select filled={changed} value={models?.current ?? ''} onChange={(v) => void setModel(v)} disabled={switching || !models} options={(models?.models ?? []).map((x) => ({ value: x.value, label: modelLabel(x.value, x.name) }))} />
+        </Field>
+        <Field label="压缩" hint={`超过多少 K tokens 自动压缩，留空为不压缩，离开输入框时生效。pi 只压缩最近约 20K 之前的部分，设得太低压不下来，建议不低于 50K${project?.dispatcher?.compactions ? `（这个会话已压缩 ${project.dispatcher.compactions} 次）` : ''}`}>
+          <Input
+            type="number"
+            min={10}
+            step={1}
+            placeholder="例如 256"
+            filled={shownK.trim() !== savedK}
+            value={shownK}
+            onChange={(e) => setCompactK(e.target.value)}
+            onBlur={() => void saveCompact()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+          />
         </Field>
         {project?.root ? (
           <Field label="根目录">

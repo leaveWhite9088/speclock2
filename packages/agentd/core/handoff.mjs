@@ -18,6 +18,12 @@ import { handoffStartPrompt, handoffWritePrompt } from './rules.mjs';
 const COPIES_DIR = join(DATA_DIR, 'handoffs');
 const OPEN = ['pending', 'generating', 'review', 'applying'];
 
+/** A readable short form of a conversation's id: executors have a uuid, the dispatcher's is a file `<time>_<uuid>.jsonl`. */
+const shortSession = (id) => {
+  const base = String(id ?? '').split(/[\\/]/).pop().replace(/\.jsonl$/, '');
+  return (base.includes('_') ? base.slice(base.lastIndexOf('_') + 1) : base).slice(0, 8);
+};
+
 /** What the conversation view shows instead of the long prompts (contexts/handoff-write.md, handoff-start.md). */
 const SHOWN_WRITE = '（交接）请写出这个会话的交接文档';
 const SHOWN_START = '（交接）新会话开始，已收到上一个会话的交接文档';
@@ -101,7 +107,7 @@ export function createHandoffs({ getAgent, keyOf, onChange }) {
     touch(p, { status: 'applying', error: null });
     (async () => {
       const sessionId = await a.newSession();
-      await Promise.resolve(a.renameSession(sessionId, `交接自 ${String(p.oldSession ?? '').slice(0, 8)}`)).catch(() => {});
+      await Promise.resolve(a.renameSession(sessionId, `交接自 ${shortSession(p.oldSession)}`)).catch(() => {});
       touch(p, { newSession: sessionId });
       await a.startPrompt(startText, { timeoutMs: 300_000, display: SHOWN_START }).done;
       touch(p, { status: 'done' });

@@ -306,6 +306,18 @@ export async function probeSessions(projectId, type, dir = '.') {
  * Edit an instance: role, preferred model, and (while idle) name. The CLI type and the directory are fixed.
  * A new name restarts the process under the new identity.
  */
+/** The size (tokens) at which the project's dispatcher compacts its conversation; null: never. */
+export function dispatcherCompactAt(projectId) {
+  return find(projectId).dispatcherCompactAt ?? null;
+}
+
+export function setDispatcherCompactAt(projectId, value) {
+  const project = find(projectId);
+  project.dispatcherCompactAt = cleanCompactAt(value);
+  save();
+  return project.dispatcherCompactAt;
+}
+
 export async function updateInstance(projectId, id, { role, model, name, dir, compactAt }) {
   const project = find(projectId);
   const inst = project.instances.find((i) => i.id === id);

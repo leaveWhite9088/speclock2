@@ -38,6 +38,10 @@ export interface DispatcherInfo {
   busy: boolean;
   /** Messages sent while a turn runs, waiting their turn (oldest first). */
   queued?: string[];
+  /** Compact the conversation at this many tokens; null: never. */
+  compactAt?: number | null;
+  /** How many times the current conversation was compacted. */
+  compactions?: number;
   context?: Context | null;
 }
 

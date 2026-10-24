@@ -107,7 +107,7 @@ function wireAgent(agent) {
   agent.onRunStart = ({ jobId }) => publish(allocEvent('job.running', { jobId, agent: agent.name }));
   agent.onCompact = (info) => {
     publish(allocEvent('agent.compacted', info));
-    suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次从约 ${info.before?.used} 降到 ${info.after?.used} token`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
+    suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次压缩前约 ${info.before?.used} token${info.after?.used != null ? `，压缩后约 ${info.after.used}` : ''}`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
   };
   // Killed for ignoring a cancel: the person should know, and may need to recover it.
   agent.onForcedStop = (info) => publish(allocEvent('agent.forced-stop', { ...info }));
@@ -135,7 +135,25 @@ function getDispatcher(project = null) {
       project,
       sessionDir: join(ROOT, 'data', 'dispatcher-sessions', project),
       onEvent: (ev) => publishLive('dispatcher.event', { project, data: ev }),
+      compactAt: projects.dispatcherCompactAt(project),
     });
+    // Like an executor's: a compaction is announced, and a conversation compacted again and again is proposed for a handoff.
+    d.onCompact = (info) => {
+      publish(allocEvent('agent.compacted', { ...info, agent: DISPATCHER_ID }));
+      if (info.compactions >= COMPACTIONS_BEFORE_HANDOFF) {
+        try {
+          handoffs.propose({
+            project,
+            agent: DISPATCHER_ID,
+            reason: `这个会话已经压缩了 ${info.compactions} 次`,
+            // right after a compaction pi may not know the new size yet: then only the size before is said
+            evidence: `压缩 ${info.compactions} 次；最近一次压缩前约 ${info.before?.used} token${info.after?.used != null ? `，压缩后约 ${info.after.used}` : ''}`,
+          });
+        } catch (err) {
+          log('handoff proposal skipped:', err.message);
+        }
+      }
+    };
   } else {
     d = new Dispatcher({
       cwd: process.env.AGENTD_CWD_DISPATCHER || CONFIG?.dispatcher?.cwd || BASE_CWD,
@@ -158,8 +176,15 @@ async function restartRunningDispatchers() {
   return out;
 }
 
+/** In a handoff, the project's dispatcher is addressed as `<project>~@dispatcher`, next to its executors. */
+const DISPATCHER_ID = '@dispatcher';
+
 const handoffs = createHandoffs({
-  getAgent: (key) => getAgent(key),
+  getAgent: (key) => {
+    const tail = `${projects.SEP}${DISPATCHER_ID}`;
+    if (key.endsWith(tail)) return getDispatcher(key.slice(0, -tail.length)).asHandoffTarget();
+    return getAgent(key);
+  },
   keyOf: (project, id) => `${project}${projects.SEP}${id}`,
   onChange: (p) => publishLive('handoff.changed', { project: p.project, data: p }),
 });
@@ -306,10 +331,18 @@ const OPS = {
   projects: () => ({
     projects: projects.listProjects().map((p) => ({
       ...p,
-      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), compactAt: projects.dispatcherCompactAt(p.id), compactions: dispatchers.get(p.id)?.compactions() ?? 0, queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
     })),
     limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),
+
+  /** The size at which the project's dispatcher compacts its conversation (null: never). */
+  'project.updateDispatcher': ({ project, compactAt }) => {
+    const value = projects.setDispatcherCompactAt(project, compactAt);
+    const d = dispatchers.get(project);
+    if (d) d.compactAt = value;
+    return { project, compactAt: value };
+  },
 
   'project.create': (args) => {
     const p = projects.createProject(args);

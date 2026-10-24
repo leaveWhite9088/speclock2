@@ -114,6 +114,7 @@ const routes = [
     ({ params, query }) => call('project.sessions', { project: params.id, type: query.type, dir: query.dir || '.' }),
   ],
   ['POST', '/api/projects/:id/instances', ({ params, body }) => call('project.addInstance', { ...body, project: params.id })],
+  ['PATCH', '/api/projects/:id/dispatcher', ({ params, body }) => call('project.updateDispatcher', { project: params.id, compactAt: body.compactAt })],
   [
     'PATCH',
     '/api/projects/:id/instances/:iid',

@@ -14,6 +14,8 @@
  * `messages` method reads it from pi.
  */
 
+import { compactIfNeeded } from './pool/compaction.mjs';
+import { saved } from './pool/store.mjs';
 import { PiRpc } from './pi-rpc.mjs';
 import { dispatcherRules } from './rules.mjs';
 import { injectionFor } from './pool/system-prompt.mjs';
@@ -79,7 +81,7 @@ export class Dispatcher {
    * With `project` set, the extension runs scoped: every tool call it makes carries
    * that project, and agentd refuses anything outside it.
    */
-  constructor({ cwd, project = null, sessionDir = SESSION_DIR, onEvent }) {
+  constructor({ cwd, project = null, sessionDir = SESSION_DIR, onEvent, compactAt = null }) {
     this.cwd = cwd;
     this.project = project;
     this.sessionDir = sessionDir;
@@ -94,6 +96,11 @@ export class Dispatcher {
     /** Messages sent while a turn runs, in order. A turn that ends starts the next one. */
     this.queue = [];
     this.context = null;
+    /** Compact the conversation once it holds this many tokens (null: never), checked when a turn ends. */
+    this.compactAt = compactAt;
+    this._compacting = false;
+    /** Called after a compaction, like an executor's. */
+    this.onCompact = null;
     /** Session file to return to after a restart. */
     this.resumeFile = null;
   }
@@ -209,8 +216,105 @@ export class Dispatcher {
         this.context = PiRpc.contextOf(stats);
         // Kept on disk so the figure is still there when the process is idle-reaped or the daemon restarts.
         if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
+        void this._maybeCompact();
       })
       .catch(() => {});
+  }
+
+  /** The name this conversation is recorded under (compactions, last size), next to the executors'. */
+  get recordName() {
+    return `dispatcher:${this.project ?? ''}`;
+  }
+
+  /** Past the set size, between turns: pi compacts the conversation. Messages that arrive meanwhile wait their turn. */
+  async _maybeCompact() {
+    if (!this.compactAt || this.streaming || !this.pi.running) return;
+    let sessionKey = null;
+    try {
+      const st = await this.command('get_state');
+      sessionKey = st?.sessionFile ?? null;
+      if (sessionKey) this.resumeFile = sessionKey; // so the count and the record follow this conversation
+    } catch {
+      return;
+    }
+    await compactIfNeeded({
+      name: this.recordName,
+      owner: this,
+      compactAt: this.compactAt,
+      busy: this.streaming,
+      sessionKey,
+      context: () => this.context,
+      compact: async () => {
+        this.streaming = true; // busy: what is sent now waits
+        try {
+          await this.command('compact', {}, 600_000);
+        } finally {
+          this.streaming = false;
+          this._drain();
+        }
+      },
+      contextAfter: async () => {
+        try {
+          this.context = PiRpc.contextOf(await this.command('get_session_stats', {}, 30_000));
+          if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
+        } catch {
+          /* keep the old figure */
+        }
+        return this.context;
+      },
+      onCompact: (info) => this.onCompact?.({ ...info, project: this.project }),
+    });
+  }
+
+  /** How many times the current conversation was compacted. */
+  compactions() {
+    return saved(this.recordName, this.resumeFile)?.compactions ?? 0;
+  }
+
+  /**
+   * The dispatcher seen as something a handoff can move to a fresh conversation (core/handoff.mjs asks for exactly
+   * this much): it can be busy, take a prompt and return its reply, start a new conversation and name it.
+   */
+  asHandoffTarget() {
+    const d = this;
+    return {
+      name: this.recordName,
+      get busy() {
+        return d.streaming;
+      },
+      get cwd() {
+        return d.cwd;
+      },
+      get sessionId() {
+        return d.resumeFile;
+      },
+      get preferSession() {
+        return d.resumeFile;
+      },
+      startPrompt: (text, opts) => d._promptAndWait(text, opts),
+      newSession: async () => {
+        await d.ensureStarted();
+        await d.command('new_session', {}, 60_000);
+        return (await d.state())?.sessionFile ?? null;
+      },
+      renameSession: (file, label) => d.renameSession(file, label, { mustExist: false }),
+    };
+  }
+
+  /** Send a prompt as a turn of its own, and give back what the dispatcher answered: `{ jobId, done }`. */
+  _promptAndWait(text, { timeoutMs = 300_000 } = {}) {
+    const done = (async () => {
+      await this.ensureStarted();
+      const settled = this.pi.waitSettled(timeoutMs);
+      settled.catch(() => {});
+      const r = await this._send(text);
+      if (r.disposition !== 'handled') await settled;
+      const msgs = (await this.command('get_messages', {}, 60_000))?.messages ?? [];
+      const last = [...msgs].reverse().find((m) => m.role === 'assistant');
+      const reply = (last?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+      return { text: reply, sessionId: this.resumeFile };
+    })();
+    return { jobId: `dispatcher-${Date.now().toString(36)}`, done };
   }
 
   async command(type, params = {}, timeoutMs = 60_000) {
@@ -438,9 +542,10 @@ export class Dispatcher {
   }
 
   /** Name a session file (pi has no rename of its own); an empty label removes the name. */
-  renameSession(file, label) {
+  /** `mustExist: false` for a conversation pi has not written to disk yet (it does so with the first message). */
+  renameSession(file, label, { mustExist = true } = {}) {
     const p = resolve(String(file ?? ''));
-    if (!existsSync(p) || !p.endsWith('.jsonl') || !p.startsWith(resolve(this.sessionDir))) throw new Error('unknown session');
+    if ((mustExist && !existsSync(p)) || !p.endsWith('.jsonl') || !p.startsWith(resolve(this.sessionDir))) throw new Error('unknown session');
     const labels = this._labels();
     const text = String(label ?? '').trim().slice(0, 120);
     if (text) labels[basename(p)] = text;

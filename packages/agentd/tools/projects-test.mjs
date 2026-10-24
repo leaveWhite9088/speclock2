@@ -168,6 +168,17 @@ try {
   check('open proposals are listed', (await call('handoff.list', { project: A })).handoffs.some((h) => h.id === prop.id));
   await call('handoff.cancel', { id: prop.id });
   check('a cancelled proposal leaves the list', !(await call('handoff.list', { project: A })).handoffs.some((h) => h.id === prop.id));
+  // the dispatcher: compaction setting and handoff
+  const dsp = (await call('projects')).projects.find((p) => p.id === A).dispatcher;
+  check('the dispatcher does not compact by default', dsp.compactAt === null, JSON.stringify(dsp.compactAt));
+  const set = await call('project.updateDispatcher', { project: A, compactAt: 200000 });
+  check('a compaction size can be set for the dispatcher', set.compactAt === 200000 && (await call('projects')).projects.find((p) => p.id === A).dispatcher.compactAt === 200000);
+  await fails(call('project.updateDispatcher', { project: A, compactAt: 500 }), /at least 10000/, 'a size that is too small is refused');
+  await fails(call('project.updateDispatcher', { project: A, compactAt: 200000, caller: 'dispatcher' }), /dispatcher cannot/, 'the dispatcher cannot change its own compaction');
+  check('and it can be switched off again', (await call('project.updateDispatcher', { project: A, compactAt: null })).compactAt === null);
+  const dprop = await call('handoff.propose', { agent: '@dispatcher', project: A, reason: 'test', evidence: 'e' });
+  check('the dispatcher itself can be proposed for a handoff', dprop.status === 'pending' && dprop.agent === '@dispatcher', JSON.stringify(dprop));
+  await call('handoff.cancel', { id: dprop.id });
   await call('project.removeInstance', { project: A, id: 'tmp2' });
 
   // 7. busy refusal

@@ -46,3 +46,6 @@ export const handoffWritePrompt = () => fresh('handoff-write.md');
 
 /** Step 2: the first message of the new session, with the document in it. */
 export const handoffStartPrompt = (doc) => fresh('handoff-start.md').replace('{{doc}}', () => doc);
+
+/** The paragraph a project's dispatcher gets under its system prompt every turn: the roster of its executors, and what to do with it. */
+export const rosterPrompt = (roster) => fresh('roster.md').replace('{{roster}}', () => roster);

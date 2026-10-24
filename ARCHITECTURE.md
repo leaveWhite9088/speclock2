@@ -68,7 +68,9 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 
 | 层 | 文件 | 只负责 |
 | --- | --- | --- |
-| 入口 | `extension/agent-router.ts` | 调度器的工具（`agent_run`、`propose_handoff` 等）+ 渲染 |
+| 入口 | `extension/agent-router.ts` | 调度器的扩展入口：只注册工具、斜杠命令和每轮的执行者名单；pi 按路径加载它，它引用旁边 `router/` 里的文件 |
+| | `extension/router/tools/` | 八个工具：`run`（agent_run）、`sessions`（会话、模型、状态）、`instances`、`handoff` |
+| | `extension/router/` | `daemon`（连接和按项目限定的代理）、`format`、`failure`（纯函数，可直接用 Node 测）、`roster`（名单，文本在 `contexts/roster.md`）、`commands`、`params` |
 | 客户端 | `client/agentd-client.mjs` | 连接 + 订阅 + 续传 |
 | 服务 | `daemon/agentd.mjs` | 只做组装：把下面几块接起来并启动 |
 | | `daemon/ops/` | 客户端能调的 62 个操作，按领域分五个文件：`executors`、`run`、`dispatcher`（含交接）、`projects`（含模板）、`system`；`index.mjs` 合并，重名直接报错 |

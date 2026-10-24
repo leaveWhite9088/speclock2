@@ -8,6 +8,7 @@
  * Usage: node tools/cwd-test.mjs
  */
 
+import { existsSync } from 'node:fs';
 import { Scheduler, check } from './lib/scheduler.mjs';
 
 console.log('\n=== per-agent working directory ===\n');
@@ -21,6 +22,10 @@ for (const a of agents) {
   const want = st.defaultCwd;
   if (!want) {
     console.log(`  ${a.name.padEnd(6)} (no configured cwd, uses base)`);
+    continue;
+  }
+  if (!existsSync(want)) {
+    console.log(`  ${a.name.padEnd(6)} (its directory is gone: left over from another test, skipped)`);
     continue;
   }
   configured += 1;

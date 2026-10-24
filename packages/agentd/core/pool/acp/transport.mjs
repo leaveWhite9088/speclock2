@@ -5,8 +5,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { CANCEL_GRACE_MS, log } from './config.mjs';
-import { killTree } from './process.mjs';
+import { CANCEL_GRACE_MS, log } from '../config.mjs';
+import { killTree } from '../process.mjs';
 
 export class AcpTransport {
   /**

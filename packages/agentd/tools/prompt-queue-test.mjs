@@ -9,7 +9,7 @@
  *   5. everything is cleaned up afterwards
  */
 
-import { PromptQueue } from '../core/pool/prompt-queue.mjs';
+import { PromptQueue } from '../core/pool/acp/prompt-queue.mjs';
 import { check } from './lib/scheduler.mjs';
 
 console.log('\n=== prompt queue ===\n');

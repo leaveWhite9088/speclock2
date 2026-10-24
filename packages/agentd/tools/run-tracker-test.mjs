@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.AGENTD_TRANSCRIPTS_DIR = join(mkdtempSync(join(tmpdir(), 'agentd-tracker-t-')), 'tr');
-const { RunTracker } = await import('../core/pool/run-tracker.mjs');
+const { RunTracker } = await import('../core/pool/acp/run-tracker.mjs');
 const { readTranscript } = await import('../core/transcripts.mjs');
 const { check } = await import('./lib/scheduler.mjs');
 

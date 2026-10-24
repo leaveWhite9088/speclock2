@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.AGENTD_CANCEL_GRACE_MS = '400';
-const { AcpTransport } = await import('../core/pool/acp-transport.mjs');
+const { AcpTransport } = await import('../core/pool/acp/transport.mjs');
 const { check } = await import('./lib/scheduler.mjs');
 
 console.log('\n=== acp transport ===\n');

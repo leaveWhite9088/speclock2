@@ -85,10 +85,10 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/pool/config.mjs` | 常量、CLI 注册表、`agentd.config.json` |
 | | `core/pool/store.mjs` | 会话旁路数据（标签、目录、模型、上下文、压缩次数） |
 | | `core/pool/registry.mjs` | 池 Map、进程数上限、同类型启动锁 |
-| | `core/pool/acp-client.mjs` | 一个常驻进程：会话、模型、规则注入，把下面三块组合起来，对外接口不变 |
-| | `core/pool/acp-transport.mjs` | 和 ACP 进程之间的线：启动、读行、应答（含自动批准权限）、带空闲/总超时的请求、放弃进程；不知道会话和运行 |
-| | `core/pool/run-tracker.mjs` | 一次运行怎么从 `session/update` 变成状态和对话记录：文字、推理、工具调用（从开始跟到结束）、分段写入、进度；不知道进程 |
-| | `core/pool/prompt-queue.mjs` | 一个执行者的排队：先进先出、按任务号取消排队中的、取消后立刻回复调用方；会话操作走同一条队 |
+| | `core/pool/acp-client.mjs`、`core/pool/acp/client.mjs` | 前者只做再导出；一个常驻进程：会话、模型、规则注入，把下面三块组合起来，对外接口不变 |
+| | `core/pool/acp/transport.mjs` | 和 ACP 进程之间的线：启动、读行、应答（含自动批准权限）、带空闲/总超时的请求、放弃进程；不知道会话和运行 |
+| | `core/pool/acp/run-tracker.mjs` | 一次运行怎么从 `session/update` 变成状态和对话记录：文字、推理、工具调用（从开始跟到结束）、分段写入、进度；不知道进程 |
+| | `core/pool/acp/prompt-queue.mjs` | 一个执行者的排队：先进先出、按任务号取消排队中的、取消后立刻回复调用方；会话操作走同一条队 |
 | | `core/pool/metrics.mjs` | 运行指标与推断的健康信号 |
 | | `core/pool/compaction.mjs` | 上下文占用与自动压缩 |
 | | `core/pool/instances.mjs` | 内置与自建实例 |

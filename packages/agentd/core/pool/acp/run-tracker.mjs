@@ -5,8 +5,8 @@
  */
 
 import { appendFileSync } from 'node:fs';
-import { appendEntry } from '../transcripts.mjs';
-import { inputText, outputText } from './tool-text.mjs';
+import { appendEntry } from '../../transcripts.mjs';
+import { inputText, outputText } from '../tool-text.mjs';
 
 const finished = (status) => status === 'completed' || status === 'failed';
 

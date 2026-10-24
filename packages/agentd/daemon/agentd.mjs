@@ -21,18 +21,7 @@
  * minutes with no connections and no running jobs.
  */
 
-import net from 'node:net';
-import { spawn } from 'node:child_process';
-import {
-  writeFileSync,
-  readFileSync,
-  appendFileSync,
-  rmSync,
-  mkdirSync,
-  existsSync,
-} from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   AGENTS,
   BASE_CWD,
@@ -47,20 +36,20 @@ import {
   MAX_PROCESSES,
   seedContexts,
 } from '../core/agent-pool.mjs';
-import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
 import { DATA_DIR } from '../core/data-dir.mjs';
-import { createHandoffs } from '../core/handoff.mjs';
+import { savedContext } from '../core/dispatcher.mjs';
 import { listTemplates, removeTemplate, saveTemplate } from '../core/templates.mjs';
 import * as projects from '../core/projects.mjs';
-import { EPOCH, RING_MAX, addClient, allocEvent, dropClient, eventsSince, publish, publishEphemeral, publishLive, subscribe, unsubscribe } from './events.mjs';
+import { DISPATCHER_ID, anyDispatcherBusy, dispatchers, getDispatcher, handoffs, noteRunOutcome, restartRunningDispatchers, wireAgent } from './dispatchers.mjs';
+import { EPOCH, RING_MAX, allocEvent, eventsSince, publish, subscribe, unsubscribe } from './events.mjs';
 import { scopeArgs, viewRows } from './guard.mjs';
+import { startLifecycle } from './lifecycle.mjs';
 import { appendReceipt, readReceipts } from './receipts.mjs';
-import { clearInterrupted, journalEnd, journalStart, reconcileJournal } from '../core/journal.mjs';
+import { startServer } from './server.mjs';
+import { recordInterruptedJobs } from './startup.mjs';
+import { clearInterrupted, journalEnd, journalStart } from '../core/journal.mjs';
 import { endRun, planRun, recordRun } from '../core/tasks.mjs';
-import { appendEntry, findJobSession } from '../core/transcripts.mjs';
 import { addProvider, removeProvider, listProviders, agentDir } from '../core/pi-models.mjs';
-
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const PIPE_NAME = process.env.AGENTD_PIPE || '\\\\.\\pipe\\pi-agentd';
 const PORT = process.env.AGENTD_PORT ? Number(process.env.AGENTD_PORT) : null;
@@ -74,138 +63,7 @@ const log = (...a) => process.stderr.write(`[agentd] ${a.join(' ')}\n`);
 const startedAt = new Date().toISOString();
 
 // Tasks the last daemon never finished: record them now, announce them once the socket is up.
-const lostJobs = reconcileJournal();
-for (const j of lostJobs) {
-  endRun(j.jobId, 'interrupted');
-  const error = 'the daemon stopped while this task was queued or running; the executor may have done part of it';
-  appendReceipt(
-    j.agent,
-    { sessionId: null, metrics: { jobId: j.jobId, outcome: 'interrupted', error, health: 'error', attention: [{ code: 'interrupted', severity: 'error', source: 'system', text: error }] } },
-    j.prompt,
-    null,
-    j,
-  );
-  // The executor's own conversation must say so too: without this the person sees their message and then nothing.
-  const sid = findJobSession(j.agent, j.jobId);
-  if (sid) {
-    appendEntry(j.agent, sid, {
-      role: 'error',
-      jobId: j.jobId,
-      taskId: j.taskId,
-      attempt: j.attempt,
-      interrupted: true,
-      error: '这次任务因服务重启被中断，没有得到回复。执行者可能已经做了一部分，请先检查文件，再决定要不要重发。',
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Progress sink: every agent forwards its stream updates to subscribers.
-// ---------------------------------------------------------------------------
-
-function wireAgent(agent) {
-  agent.setProgressSink((jobId, p) => publishEphemeral(jobId, p));
-  // A prompt that waited behind another really starts now.
-  agent.onRunStart = ({ jobId }) => publish(allocEvent('job.running', { jobId, agent: agent.name }));
-  agent.onCompact = (info) => {
-    publish(allocEvent('agent.compacted', info));
-    suggestHandoff(agent, `这个会话已经压缩了 ${info.compactions} 次`, `压缩 ${info.compactions} 次；最近一次压缩前约 ${info.before?.used} token${info.after?.used != null ? `，压缩后约 ${info.after.used}` : ''}`, info.compactions >= COMPACTIONS_BEFORE_HANDOFF);
-  };
-  // Killed for ignoring a cancel: the person should know, and may need to recover it.
-  agent.onForcedStop = (info) => publish(allocEvent('agent.forced-stop', { ...info }));
-  // An unexpected exit is a health event even when no run is in flight.
-  agent.onExit = (info) => {
-    publish(allocEvent('agent.exit', { ...info }));
-  };
-}
-for (const agent of pool.values()) wireAgent(agent);
-
-// ---------------------------------------------------------------------------
-// Dispatcher: the pi that picks the agent. Started on first use.
-// ---------------------------------------------------------------------------
-
-/** One dispatcher per project, plus the global one under the key ''. */
-const dispatchers = new Map();
-
-function getDispatcher(project = null) {
-  const key = project || '';
-  let d = dispatchers.get(key);
-  if (d) return d;
-  if (project) {
-    d = new Dispatcher({
-      cwd: projects.projectRoot(project),
-      project,
-      sessionDir: join(DATA_DIR, 'dispatcher-sessions', project),
-      onEvent: (ev) => publishLive('dispatcher.event', { project, data: ev }),
-      compactAt: projects.dispatcherCompactAt(project),
-    });
-    // Like an executor's: a compaction is announced, and a conversation compacted again and again is proposed for a handoff.
-    d.onCompact = (info) => {
-      publish(allocEvent('agent.compacted', { ...info, agent: DISPATCHER_ID }));
-      if (info.compactions >= COMPACTIONS_BEFORE_HANDOFF) {
-        try {
-          handoffs.propose({
-            project,
-            agent: DISPATCHER_ID,
-            reason: `这个会话已经压缩了 ${info.compactions} 次`,
-            // right after a compaction pi may not know the new size yet: then only the size before is said
-            evidence: `压缩 ${info.compactions} 次；最近一次压缩前约 ${info.before?.used} token${info.after?.used != null ? `，压缩后约 ${info.after.used}` : ''}`,
-          });
-        } catch (err) {
-          log('handoff proposal skipped:', err.message);
-        }
-      }
-    };
-  } else {
-    d = new Dispatcher({
-      cwd: process.env.AGENTD_CWD_DISPATCHER || CONFIG?.dispatcher?.cwd || BASE_CWD,
-      onEvent: (ev) => publishLive('dispatcher.event', { project: null, data: ev }),
-    });
-  }
-  dispatchers.set(key, d);
-  return d;
-}
-
-const anyDispatcherBusy = () => [...dispatchers.values()].some((d) => d.busy);
-
-/** Dispatchers that are running now get a restart after models.json changed. */
-async function restartRunningDispatchers() {
-  const out = [];
-  for (const [key, d] of dispatchers) {
-    if (!d.child) continue;
-    out.push({ project: key || null, ...(await d.restart()) });
-  }
-  return out;
-}
-
-/** In a handoff, the project's dispatcher is addressed as `<project>~@dispatcher`, next to its executors. */
-const DISPATCHER_ID = '@dispatcher';
-
-const handoffs = createHandoffs({
-  getAgent: (key) => {
-    const tail = `${projects.SEP}${DISPATCHER_ID}`;
-    if (key.endsWith(tail)) return getDispatcher(key.slice(0, -tail.length)).asHandoffTarget();
-    return getAgent(key);
-  },
-  keyOf: (project, id) => `${project}${projects.SEP}${id}`,
-  onChange: (p) => publishLive('handoff.changed', { project: p.project, data: p }),
-});
-
-/**
- * Objective drift signals. Crossing one only raises a proposal; a person still has to confirm it. Context size alone
- * is never a signal: compaction deals with that.
- */
-const COMPACTIONS_BEFORE_HANDOFF = 3;
-const FAILURES_BEFORE_HANDOFF = 3;
-const failStreak = new Map();
-function suggestHandoff(agent, reason, evidence, when = true) {
-  if (!when || !agent.project) return;
-  try {
-    handoffs.propose({ project: agent.project, agent: agent.shortId, reason, evidence });
-  } catch (err) {
-    log('handoff proposal skipped:', err.message);
-  }
-}
+const lostJobs = recordInterruptedJobs();
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -333,7 +191,7 @@ const OPS = {
   projects: () => ({
     projects: projects.listProjects().map((p) => ({
       ...p,
-      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), compactAt: projects.dispatcherCompactAt(p.id), compactions: dispatchers.get(p.id)?.compactions() ?? 0, queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), compactAt: projects.dispatcherCompactAt(p.id), compactions: dispatchers.get(p.id)?.compactions() ?? 0, queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(DATA_DIR, 'dispatcher-sessions', p.id)) },
     })),
     limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),
@@ -489,9 +347,7 @@ const OPS = {
       );
       publish(ev);
       const failed = (!!error || !!result?.metrics?.error) && error?.metrics?.outcome !== 'cancelled';
-      const streak = failed ? (failStreak.get(a.name) ?? 0) + 1 : 0;
-      failStreak.set(a.name, streak);
-      suggestHandoff(a, `连续 ${streak} 次任务失败`, `最近 ${streak} 次运行都失败了：${error?.message ?? result?.metrics?.error ?? ''}`, streak >= FAILURES_BEFORE_HANDOFF);
+      noteRunOutcome(a, failed, error?.message ?? result?.metrics?.error ?? '');
       return ev;
     };
 
@@ -550,138 +406,25 @@ const OPS = {
 };
 
 // ---------------------------------------------------------------------------
-// Server
+// Server and lifecycle
 // ---------------------------------------------------------------------------
 
-let connections = 0;
-let lastActivity = Date.now();
-
-const server = net.createServer((sock) => {
-  connections += 1;
-  addClient(sock);
-  lastActivity = Date.now();
-  let buf = '';
-  sock.setEncoding('utf8');
-
-  sock.on('data', (chunk) => {
-    buf += chunk;
-    let i;
-    while ((i = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        sock.write(JSON.stringify({ ok: false, error: 'invalid json' }) + '\n');
-        continue;
-      }
-      lastActivity = Date.now();
-      const op = OPS[msg.op];
-      if (!op) {
-        sock.write(JSON.stringify({ id: msg.id, ok: false, error: `unknown op: ${msg.op}` }) + '\n');
-        continue;
-      }
-      Promise.resolve()
-        .then(() => op(scopeArgs(msg.op, msg.args ?? {}), sock))
-        .then((result) => sock.write(JSON.stringify({ id: msg.id, ok: true, result }) + '\n'))
-        .catch((err) =>
-          sock.write(JSON.stringify({ id: msg.id, ok: false, error: err?.message ?? String(err) }) + '\n'),
-        );
-    }
-  });
-
-  const cleanup = () => {
-    connections = Math.max(0, connections - 1);
-    dropClient(sock);
-  };
-  sock.on('close', cleanup);
-  sock.on('error', cleanup);
+const endpointFile = ENDPOINT_FILE;
+const { stats } = startServer({
+  ops: OPS,
+  scopeArgs,
+  pipe: PIPE_NAME,
+  port: PORT,
+  endpointFile,
+  info: { protocol: PROTOCOL, startedAt, baseCwd: BASE_CWD },
+  onListening: (endpoint) => {
+    seedContexts(readReceipts(500)); // the newest figure of a session wins
+    for (const j of lostJobs) publish(allocEvent('job.interrupted', { ...j }));
+    if (lostJobs.length) log(`interrupted by the last shutdown: ${lostJobs.map((j) => `${j.agent}/${j.jobId}`).join(', ')}`);
+    log(`listening on ${endpoint} (pid ${process.pid})`);
+    log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
+  },
+  log,
 });
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    log('another agentd is already listening; exiting');
-    process.exit(0);
-  }
-  log('server error:', err.message);
-  process.exit(1);
-});
-
-const endpoint = PORT ? `127.0.0.1:${PORT}` : PIPE_NAME;
-server.listen(PORT ?? PIPE_NAME, () => {
-  // Publish the real endpoint so every client finds the same daemon regardless of
-  // which shell (PowerShell, WSL, cmd) started it or what env it inherited.
-  try {
-    mkdirSync(dirname(ENDPOINT_FILE), { recursive: true });
-    writeFileSync(
-      ENDPOINT_FILE,
-      JSON.stringify(
-        {
-          protocol: PROTOCOL,
-          transport: PORT ? 'tcp' : 'pipe',
-          path: PORT ? undefined : PIPE_NAME,
-          port: PORT ?? undefined,
-          pid: process.pid,
-          startedAt,
-          baseCwd: BASE_CWD,
-          endpoint,
-        },
-        null,
-        2,
-      ),
-    );
-  } catch (err) {
-    log('could not publish endpoint file:', err.message);
-  }
-  seedContexts(readReceipts(500)); // the newest figure of a session wins
-  for (const j of lostJobs) publish(allocEvent('job.interrupted', { ...j }));
-  if (lostJobs.length) log(`interrupted by the last shutdown: ${lostJobs.map((j) => `${j.agent}/${j.jobId}`).join(', ')}`);
-  log(`listening on ${endpoint} (pid ${process.pid})`);
-  log(`base cwd: ${BASE_CWD}; instances: ${[...pool.keys()].join(', ')}`);
-});
-
-// Idle recycling: project instances and dispatchers that were not used for a while
-// are stopped. Their sessions stay on disk and come back on the next use.
-setInterval(async () => {
-  try {
-    const stopped = await projects.sweepIdle(IDLE_INSTANCE_MS);
-    for (const [key, d] of dispatchers) {
-      if (d.child && !d.busy && Date.now() - d.lastActive > IDLE_INSTANCE_MS) {
-        await d.shutdown();
-        stopped.push(`dispatcher:${key || 'global'}`);
-      }
-    }
-    if (stopped.length) log(`idle, stopped: ${stopped.join(', ')}`);
-  } catch (err) {
-    log('idle sweep failed:', err.message);
-  }
-}, 60_000).unref();
-
-// Idle shutdown: no clients, nothing running.
-setInterval(() => {
-  const busy = [...pool.values()].some((a) => a.busy) || anyDispatcherBusy();
-  if (connections === 0 && !busy && Date.now() - lastActivity > IDLE_MS) {
-    log('idle; shutting down');
-    shutdown(0);
-  }
-}, 30_000).unref();
-
-async function shutdown(code) {
-  try {
-    rmSync(ENDPOINT_FILE, { force: true });
-  } catch {
-    /* ignore */
-  }
-  await Promise.all([
-    ...[...pool.values()].map((a) => a.shutdown()),
-    ...[...dispatchers.values()].map((d) => d.shutdown()),
-  ]);
-  process.exit(code);
-}
-
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(0));
-process.on('uncaughtException', (e) => {
-  log('uncaught:', e?.stack ?? String(e));
-});
+startLifecycle({ endpointFile, pool, dispatchers, sweepIdle: projects.sweepIdle, stats, idleMs: IDLE_MS, idleInstanceMs: IDLE_INSTANCE_MS, log });

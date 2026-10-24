@@ -301,7 +301,7 @@ agentd 操作：projects | project.create {id,name?,root,instances?} | project.a
 - **执行者模板**：新建执行者对话框里的「管理模板」可以新建、编辑、删除模板，也可以直接改文件 `contexts/templates/<标识>.md`。
   文件头写名称、用途、目录（`.` 是项目根目录）、建议的 CLI 和模型，正文是这类执行者的系统提示词（markdown，HTML 注释不会交给 agent）。
   新建执行者时选模板就会预填这些；创建出来的执行者记着自己来自哪个模板，规则 = 通用规则 + 模板提示词，
-  **每次启动时重新读**，所以改模板后，用它创建的执行者下次启动就用新提示词，不用逐个改。自带两个：`spec-agent`、`business-agent`（后者的提示词留空待填）。
+  **每次启动时重新读**，所以改模板后，用它创建的执行者下次启动就用新提示词，不用逐个改。自带三个：`spec-agent`、`business-agent`（交付项目）、`product-agent`（自己的产品，提示词留空待填）。
 - 交接不再用技能文件：执行者直接把交接文档作为回复交出来，agentd 保存副本在 `data/handoffs/`，项目里不留文件。
   交接用的两条提示词也是 md：`contexts/handoff-write.md`（生成文档时发）、`contexts/handoff-start.md`（开新会话时发，`{{doc}}` 换成文档）。
   它们**不是**启动时的规则，只在交接那一步发出；改了下次交接就生效，不用重启。

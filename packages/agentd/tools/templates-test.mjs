@@ -20,6 +20,8 @@ import { join } from 'node:path';
 const tmp = mkdtempSync(join(tmpdir(), 'agentd-tpl-'));
 process.env.AGENTD_TEMPLATES_DIR = join(tmp, 'templates');
 const T = await import('../core/templates.mjs');
+// The folder is read once, when the module loads. A daemon this test starts must not inherit it, or it would keep using the temporary folder.
+delete process.env.AGENTD_TEMPLATES_DIR;
 const { executorRules } = await import('../core/rules.mjs');
 const { buildInstance } = await import('../core/agent-pool.mjs');
 const { Scheduler, check } = await import('./lib/scheduler.mjs');
@@ -104,7 +106,9 @@ try {
   await call('template.remove', { id: `${id}-d` }).catch(() => {});
   s.close();
 }
-check('the test template is gone', !existsSync(join(process.cwd(), 'contexts', 'templates', `${id}.md`)));
+const s2 = await Scheduler.open();
+check('the test template is gone from the daemon, the real ones are still there', (await s2.c.call('template.list')).templates.every((x) => !x.id.startsWith('zz-test-')) && existsSync(join(process.cwd(), 'contexts', 'templates', 'spec-agent.md')));
+s2.close();
 
 console.log(process.exitCode ? '\n=> ✗ TEMPLATES BROKEN' : '\n=> ✓ TEMPLATES OK');
 process.exit(process.exitCode ?? 0);

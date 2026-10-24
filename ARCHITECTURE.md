@@ -43,7 +43,7 @@
   内置实例 id 等于类型名；自建实例存 `data/instances.json`。
 - **对话记录**：`core/transcripts.mjs` 把经手的每一轮追加到 `data/transcripts/<实例>/<sessionId>.jsonl`，
   `seq` 做游标。这是「补 harness 缺的」：ACP 不提供读历史的统一方式。
-- **调度器就是 pi**：`core/dispatcher.mjs` 持有一个 `pi --mode rpc`（加载 agent-router 扩展），
+- **调度器就是 pi**：`core/dispatcher/dispatcher.mjs` 持有一个 `pi --mode rpc`（加载 agent-router 扩展），
   由它的 LLM 决定调哪个实例。池里的 `pi` agent 是 `--no-extensions` 的执行者，二者是两个进程。
   LLM 通过 `core/pi-models.mjs` 写 pi 的 `models.json` 来增删，随后重启调度器。
 
@@ -90,7 +90,11 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/templates.mjs` | 执行者模板：`contexts/templates/*.md`（文件头 + 系统提示词）的增删改查；执行者规则 = 通用规则 + 模板提示词，每次启动重读 |
 | | `core/pool/system-prompt.mjs` | 把规则交给各 CLI 的系统提示入口 |
 | | `core/pi-rpc.mjs` | 和 pi RPC 通话的唯一一份实现（调度器和 pi 适配器共用，只依赖 node 内置模块） |
-| | `core/dispatcher.mjs` | 调度器：在 PiRpc 之上加会话文件、消息排队、压缩、交接 |
+| | `core/dispatcher.mjs` | 只做再导出，导入路径不变；代码在 `core/dispatcher/` |
+| | `core/dispatcher/dispatcher.mjs` | 调度器：pi 进程的生命周期、接线、模型与状态、作为交接的目标；把下面三块组合起来 |
+| | `core/dispatcher/sessions.mjs` | 会话文件：列表、命名、删除、每一轮的用时；只认目录，不碰 pi |
+| | `core/dispatcher/turn-queue.mjs` | 一轮是否在跑、排队的消息、取消排队；只要一个 `send` 函数，不碰 pi |
+| | `core/dispatcher/context.mjs` | 上下文数字（存盘）与超过阈值的压缩；规则和执行者共用 `pool/compaction.mjs` |
 | | `core/handoff.mjs` | 交接：提案、生成文档、开新会话 |
 | 适配 | `server/pi-acp-adapter.mjs` | ACP ↔ pi RPC（含 `/compact`） |
 

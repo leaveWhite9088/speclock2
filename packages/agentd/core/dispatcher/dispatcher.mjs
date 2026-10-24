@@ -14,15 +14,14 @@
  * `messages` method reads it from pi.
  */
 
-import { compactIfNeeded } from '../pool/compaction.mjs';
-import { saved } from '../pool/store.mjs';
 import { PiRpc } from '../pi-rpc.mjs';
 import { dispatcherRules } from '../rules.mjs';
 import { injectionFor } from '../pool/system-prompt.mjs';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { agentDir, usableProviders } from '../pi-models.mjs';
 import { fileURLToPath } from 'node:url';
+import { ContextTracker } from './context.mjs';
 import { SessionStore } from './sessions.mjs';
 import { TurnQueue } from './turn-queue.mjs';
 
@@ -41,15 +40,6 @@ const DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor']);
 
 /** Largest event we forward whole. Bigger ones are cut to a marker. */
 const MAX_EVENT_BYTES = 20_000;
-
-/** The last context figure saved for a dispatcher session directory, or null. */
-export function savedContext(sessionDir) {
-  try {
-    return JSON.parse(readFileSync(join(sessionDir, 'context.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-}
 
 export class Dispatcher {
   /**
@@ -77,10 +67,19 @@ export class Dispatcher {
       onChange: (queued) => this.onEvent({ type: 'dispatcher_queue', queued }),
       log,
     });
-    this.context = null;
+    /** How full the conversation is, and compacting it (see context.mjs). */
+    this.ctx = new ContextTracker({
+      sessionDir,
+      name: this.recordName,
+      command: (...a) => this.command(...a),
+      turns: this.turns,
+      running: () => this.pi.running,
+      compactAt: () => this.compactAt,
+      onCompact: (info) => this.onCompact?.({ ...info, project: this.project }),
+      sessionFile: { get: () => this.resumeFile, set: (f) => (this.resumeFile = f) },
+    });
     /** Compact the conversation once it holds this many tokens (null: never), checked when a turn ends. */
     this.compactAt = compactAt;
-    this._compacting = false;
     /** Called after a compaction, like an executor's. */
     this.onCompact = null;
     /** Session file to return to after a restart. */
@@ -169,7 +168,7 @@ export class Dispatcher {
         log(`could not return to the previous session: ${err.message}`);
       }
     }
-    this._refreshContext();
+    this.ctx.refresh();
   }
 
   _onRecord(rec) {
@@ -182,7 +181,7 @@ export class Dispatcher {
 
     if (rec.type === 'agent_start') this.turns.began();
     if (rec.type === 'agent_settled') {
-      this._refreshContext();
+      this.ctx.refresh();
       this.turns.settled();
     }
 
@@ -196,16 +195,9 @@ export class Dispatcher {
     this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
   }
 
-  /** How full the conversation is, from pi's own session statistics. Never throws. */
-  _refreshContext() {
-    this.command('get_session_stats', {}, 30_000)
-      .then((stats) => {
-        this.context = PiRpc.contextOf(stats);
-        // Kept on disk so the figure is still there when the process is idle-reaped or the daemon restarts.
-        if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
-        void this._maybeCompact();
-      })
-      .catch(() => {});
+  /** How full the conversation is: `{ used, size, percent }` or null. */
+  get context() {
+    return this.ctx.value;
   }
 
   /** The name this conversation is recorded under (compactions, last size), next to the executors'. */
@@ -213,41 +205,9 @@ export class Dispatcher {
     return `dispatcher:${this.project ?? ''}`;
   }
 
-  /** Past the set size, between turns: pi compacts the conversation. Messages that arrive meanwhile wait their turn. */
-  async _maybeCompact() {
-    if (!this.compactAt || this.turns.busy || !this.pi.running) return;
-    let sessionKey = null;
-    try {
-      const st = await this.command('get_state');
-      sessionKey = st?.sessionFile ?? null;
-      if (sessionKey) this.resumeFile = sessionKey; // so the count and the record follow this conversation
-    } catch {
-      return;
-    }
-    await compactIfNeeded({
-      name: this.recordName,
-      owner: this,
-      compactAt: this.compactAt,
-      busy: this.turns.busy,
-      sessionKey,
-      context: () => this.context,
-      compact: () => this.turns.hold(() => this.command('compact', {}, 600_000)), // what is sent meanwhile waits
-      contextAfter: async () => {
-        try {
-          this.context = PiRpc.contextOf(await this.command('get_session_stats', {}, 30_000));
-          if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
-        } catch {
-          /* keep the old figure */
-        }
-        return this.context;
-      },
-      onCompact: (info) => this.onCompact?.({ ...info, project: this.project }),
-    });
-  }
-
   /** How many times the current conversation was compacted. */
   compactions() {
-    return saved(this.recordName, this.resumeFile)?.compactions ?? 0;
+    return this.ctx.compactions();
   }
 
   /**

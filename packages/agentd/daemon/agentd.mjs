@@ -55,7 +55,8 @@ const startedAt = new Date().toISOString();
 // Tasks the last daemon never finished: record them now, announce them once the socket is up.
 const lostJobs = recordInterruptedJobs();
 
-const OPS = buildOps({ protocol: PROTOCOL, startedAt, idleInstanceMs: IDLE_INSTANCE_MS });
+let lifecycle; // started below; the operations only use it after the daemon is up
+const OPS = buildOps({ protocol: PROTOCOL, startedAt, idleInstanceMs: IDLE_INSTANCE_MS, shutdown: (code) => lifecycle.shutdown(code) });
 
 const { stats } = startServer({
   ops: OPS,
@@ -74,4 +75,4 @@ const { stats } = startServer({
   log,
 });
 
-startLifecycle({ endpointFile: ENDPOINT_FILE, pool, dispatchers, sweepIdle: projects.sweepIdle, stats, idleMs: IDLE_MS, idleInstanceMs: IDLE_INSTANCE_MS, log });
+lifecycle = startLifecycle({ endpointFile: ENDPOINT_FILE, pool, dispatchers, sweepIdle: projects.sweepIdle, stats, idleMs: IDLE_MS, idleInstanceMs: IDLE_INSTANCE_MS, log });

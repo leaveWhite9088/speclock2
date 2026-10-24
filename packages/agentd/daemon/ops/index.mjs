@@ -9,7 +9,7 @@ import { projectOps } from './projects.mjs';
 import { runOps } from './run.mjs';
 import { systemOps } from './system.mjs';
 
-/** @param {{ protocol: number, startedAt: string, idleInstanceMs: number }} ctx */
+/** @param {{ protocol: number, startedAt: string, idleInstanceMs: number, shutdown: (code: number) => Promise<void> }} ctx */
 export function buildOps(ctx) {
   const ops = {};
   for (const part of [executorOps(ctx), runOps(ctx), dispatcherOps(ctx), projectOps(ctx), systemOps(ctx)]) {

@@ -4,10 +4,11 @@
  */
 
 import { AGENTS, BASE_CWD, getAgent, pool } from '../../core/agent-pool.mjs';
+import { dispatchers } from '../dispatchers.mjs';
 import { EPOCH, RING_MAX, eventsSince, subscribe, unsubscribe } from '../events.mjs';
 import { readReceipts } from '../receipts.mjs';
 
-/** @param {{ protocol: number, startedAt: string, idleInstanceMs: number }} ctx */
+/** @param {{ protocol: number, startedAt: string, idleInstanceMs: number, shutdown: (code: number) => Promise<void> }} ctx */
 export function systemOps(ctx) {
   return {
     hello: () => ({
@@ -43,6 +44,21 @@ export function systemOps(ctx) {
     unsubscribe: ({ jobId }, sock) => {
       if (jobId) unsubscribe(sock, jobId);
       return { subscribed: null };
+    },
+
+    /**
+     * End the daemon, cleanly: the same shutdown as when it is idle or gets a signal. Refused while anything is working
+     * or waiting, so it never takes a person's task down. The next request starts a fresh daemon (new code, new state).
+     */
+    'daemon.shutdown': () => {
+      const busy = [
+        ...[...pool.values()].filter((a) => a.busy || a.inflight > 0).map((a) => a.name),
+        ...[...dispatchers].filter(([, d]) => d.busy || d.queue.length).map(([key]) => `${key || 'global'} dispatcher`),
+      ];
+      if (busy.length) throw new Error(`not stopping: still working on ${busy.join(', ')}`);
+      // After the answer has gone out.
+      setTimeout(() => void ctx.shutdown(0), 200);
+      return { stopping: true, pid: process.pid };
     },
   };
 }

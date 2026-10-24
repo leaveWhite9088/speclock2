@@ -311,6 +311,8 @@ agentd 操作：projects | project.create {id,name?,root,instances?} | project.a
 ## 运维
 
 ```powershell
+node packages/agentd/tools/restart-daemon.mjs   # 让守护进程用上新代码：正常退出再启动，有任务在跑就拒绝、什么都不改
+node packages/agentd/tools/run-isolated.mjs      # 在私有守护进程上跑整套测试（独立数据目录和管道，不碰你正在用的那个）
 npm test              # 七组回归
 npm run test:events   # 事件 id / 重放 / 重启检测
 npm run test:switch   # 会话切换 + 标签

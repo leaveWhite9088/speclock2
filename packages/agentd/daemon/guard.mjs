@@ -18,7 +18,7 @@ export const AGENT_ARG_OPS = new Set([
  * deletes one, and an executor's directory is fixed when it is created. The one way a dispatcher changes a
  * session is the confirmed handoff, which runs inside agentd and never goes through these ops.
  */
-export const DISPATCHER_DENIED = new Set(['use', 'new', 'rename', 'deleteSession', 'instance.remove', 'agent.recover', 'project.updateDispatcher', 'project.updateInstance', 'template.save', 'template.remove', 'handoff.generate', 'handoff.apply', 'handoff.cancel']);
+export const DISPATCHER_DENIED = new Set(['use', 'new', 'rename', 'deleteSession', 'instance.remove', 'agent.recover', 'project.updateDispatcher', 'project.updateInstance', 'template.save', 'template.remove', 'daemon.shutdown', 'handoff.generate', 'handoff.apply', 'handoff.cancel']);
 function checkCaller(op, args) {
   if (args?.caller !== 'dispatcher') return;
   const sessionArgs = op === 'run' && (args.reset || args.sessionId || args.cwd);

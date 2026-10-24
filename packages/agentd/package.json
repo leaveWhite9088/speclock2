@@ -8,7 +8,7 @@
     "daemon": "node daemon/agentd.mjs",
     "daemon:stop": "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='node.exe'\\\" | Where-Object { $_.CommandLine -like '*agentd.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }\"",
     "daemon:log": "powershell -NoProfile -Command \"Get-Content -Wait -Tail 40 data/agentd.log\"",
-    "test": "npm run test:daemon && npm run test:events && npm run test:switch && npm run test:models && npm run test:health && npm run test:stream && npm run test:cwd && npm run test:models-json && npm run test:instances && npm run test:transcript && npm run test:dispatcher && npm run test:projects && npm run test:start && npm run test:idle && npm run test:forced && npm run test:interrupted && npm run test:reply && npm run test:tasks && npm run test:handoff-prompts && npm run test:queue && npm run test:dispatcher-queue && npm run test:pi-rpc && npm run test:compaction && npm run test:dispatcher-compact",
+    "test": "npm run test:daemon && npm run test:events && npm run test:switch && npm run test:models && npm run test:health && npm run test:stream && npm run test:cwd && npm run test:models-json && npm run test:instances && npm run test:transcript && npm run test:dispatcher && npm run test:projects && npm run test:start && npm run test:idle && npm run test:forced && npm run test:interrupted && npm run test:reply && npm run test:tasks && npm run test:handoff-prompts && npm run test:queue && npm run test:dispatcher-queue && npm run test:pi-rpc && npm run test:compaction && npm run test:dispatcher-compact && npm run test:pieces",
     "test:daemon": "node tools/daemon-share-test.mjs dsh",
     "test:switch": "node tools/session-switch-test.mjs dsh",
     "test:models": "node tools/model-persist-test.mjs dsh",
@@ -34,6 +34,7 @@
     "test:pi-rpc": "node tools/pi-rpc-test.mjs",
     "test:pi-cancel": "node tools/pi-cancel-test.mjs",
     "test:compaction": "node tools/compaction-test.mjs",
-    "test:dispatcher-compact": "node tools/dispatcher-compact-test.mjs"
+    "test:dispatcher-compact": "node tools/dispatcher-compact-test.mjs",
+    "test:pieces": "node tools/pieces-test.mjs"
   }
 }

@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
-import { useLayoutEffect, useRef } from 'react';
+import { ArrowDown, X } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from '@/components/ui/toast';
 import { api, pq } from '@/lib/api';
 import { useSelectedMember } from '@/hooks/queries';
@@ -9,6 +9,7 @@ import type { Item } from '@/lib/types';
 import { Composer } from './Composer';
 import { DispatchLine } from './DispatchLine';
 import { ThoughtBlock } from './ThoughtBlock';
+import { TurnStatus } from './TurnStatus';
 import { Message } from './Message';
 import { ToolGroup } from './ToolGroup';
 
@@ -50,9 +51,10 @@ function Empty({ hasProject, isDispatcher, hasMembers }: { hasProject: boolean; 
 
 export function Chat() {
   const { project, sel, member, isDispatcher } = useSelectedMember();
-  const { items, loading, send } = useConversation(project?.id ?? '', sel, member);
+  const { items, loading, send, turn } = useConversation(project?.id ?? '', sel, member, Boolean(project?.dispatcher?.busy));
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [away, setAway] = useState(false); // scrolled up: offer the way back down
 
   // Follow the conversation only while the reader is at the bottom.
   useLayoutEffect(() => {
@@ -65,7 +67,16 @@ export function Chat() {
 
   const onScroll = () => {
     const s = scroller.current;
-    if (s) stick.current = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+    if (!s) return;
+    const far = s.scrollHeight - s.scrollTop - s.clientHeight;
+    stick.current = far < 80;
+    setAway(far > 160);
+  };
+  const jump = () => {
+    const s = scroller.current;
+    if (!s) return;
+    stick.current = true;
+    s.scrollTo({ top: s.scrollHeight, behavior: 'smooth' });
   };
 
   const list = blocks(items);
@@ -91,6 +102,7 @@ export function Chat() {
   }
   return (
     <>
+      <div className="relative flex min-h-0 min-w-0 flex-1">
       <div ref={scroller} onScroll={onScroll} tabIndex={-1} aria-live="polite" className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-1">
         {list.length === 0 ? (
           loading ? null : <Empty hasProject={Boolean(project)} isDispatcher={isDispatcher} hasMembers={Boolean(project?.instances.length)} />
@@ -114,6 +126,19 @@ export function Chat() {
             ))}
           </div>
         ) : null}
+        {turn ? <TurnStatus turn={turn} /> : null}
+      </div>
+      {away ? (
+        <button
+          type="button"
+          aria-label="回到最新"
+          title="回到最新"
+          onClick={jump}
+          className="absolute right-8 bottom-4 flex size-9 items-center justify-center rounded-full border border-line bg-raised text-ink-2 shadow-md hover:bg-hover hover:text-ink"
+        >
+          <ArrowDown className="size-4" />
+        </button>
+      ) : null}
       </div>
       {project ? (
         <Composer

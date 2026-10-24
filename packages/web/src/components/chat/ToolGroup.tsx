@@ -16,12 +16,12 @@ export function ToolGroup({ tools }: { tools: Tool[] }) {
   const failed = calls.filter((t) => t.state === 'fail').length;
   return (
     <details className="group -my-1 text-[12.5px] text-muted">
-      <summary className="flex w-fit max-w-full cursor-pointer list-none items-center gap-1.5 py-0.5 hover:text-ink [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-full min-w-0 cursor-pointer list-none items-center gap-1.5 py-0.5 whitespace-nowrap hover:text-ink [&::-webkit-details-marker]:hidden">
         <ChevronRight className="size-3 shrink-0 transition-transform group-open:rotate-90" />
-        <span>{calls.length || 1} 次工具调用</span>
-        {running ? <span className="text-accent">{running} 进行中</span> : null}
-        {failed ? <span className="text-danger">{failed} 失败</span> : null}
-        <span className="truncate font-mono text-[11.5px] opacity-80">{names.slice(0, 4).join('  ') + (names.length > 4 ? ' …' : '')}</span>
+        <span className="shrink-0">{calls.length || 1} 次工具调用</span>
+        {running ? <span className="shrink-0 text-accent">{running} 进行中</span> : null}
+        {failed ? <span className="shrink-0 text-danger">{failed} 失败</span> : null}
+        <span className="min-w-0 truncate font-mono text-[11.5px] opacity-80">{names.slice(0, 4).join('  ') + (names.length > 4 ? ' …' : '')}</span>
       </summary>
       <ul className="m-0 mt-0.5 ml-1 list-none border-l border-line-2 p-0 pl-2.5">
         {tools.map((t) => (

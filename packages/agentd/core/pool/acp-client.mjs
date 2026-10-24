@@ -320,6 +320,7 @@ export class AcpClient {
           run.tools.set(u.toolCallId, tool);
         }
         if (u.sessionUpdate === 'tool_call') {
+          this._flushPieces(run);
           appendEntry(this.name, run.sessionId, {
             role: 'tool',
             jobId: run.jobId,
@@ -353,6 +354,7 @@ export class AcpClient {
     const run = this.run;
     if (!run) return;
     if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
+    if (run.segAt == null) run.segAt = Date.now();
     run.text += text;
     run.chunks += 1;
 
@@ -386,11 +388,34 @@ export class AcpClient {
     });
   }
 
+  /**
+   * Write what the agent has said and thought since the last piece into the transcript, as pieces of their own. Done when
+   * a tool call starts and when the run ends, so text, reasoning and tool calls come out in the order they happened (the
+   * whole text used to be one entry at the very end, after every tool call).
+   */
+  _flushPieces(run, extra = {}) {
+    if (!run?.sessionId) return;
+    const iso = (ms) => (ms ? new Date(ms).toISOString() : undefined);
+    const thought = run.thought.slice(run.flushedThought).trim();
+    if (thought) {
+      appendEntry(this.name, run.sessionId, { role: 'thought', jobId: run.jobId, text: thought.slice(0, 12_000), chars: thought.length, startedAt: iso(run.thoughtAt) });
+    }
+    run.flushedThought = run.thought.length;
+    run.thoughtAt = null;
+    const text = run.text.slice(run.flushed).trim();
+    if (text) {
+      appendEntry(this.name, run.sessionId, { role: 'assistant', jobId: run.jobId, piece: true, text, startedAt: iso(run.segAt), ...extra });
+    }
+    run.flushed = run.text.length;
+    run.segAt = null;
+  }
+
   /** Reasoning text: counted for progress only, never returned as output. */
   _recordThought(text) {
     const run = this.run;
     if (!run) return;
     if (run.firstChunkAt == null) run.firstChunkAt = Date.now();
+    if (run.thoughtAt == null) run.thoughtAt = Date.now();
     run.thoughtChars += text.length;
     if (run.thought.length < 20_000) run.thought += text;
 
@@ -908,14 +933,18 @@ export class AcpClient {
 
         run.stopReason = res?.stopReason ?? null;
         noteSession(this.name, this.sessionId, { updatedAt: new Date().toISOString() });
-        if (run.thought.trim()) {
-          appendEntry(this.name, this.sessionId, { role: 'thought', jobId, ...meta, text: run.thought.trim().slice(0, 12_000), chars: run.thoughtChars });
+        // What is left after the last tool call. The final entry always exists (it carries how the run ended); it
+        // has no text when the run ended on a tool call.
+        const restThought = run.thought.slice(run.flushedThought).trim();
+        if (restThought) {
+          appendEntry(this.name, this.sessionId, { role: 'thought', jobId, ...meta, text: restThought.slice(0, 12_000), chars: restThought.length, startedAt: run.thoughtAt ? new Date(run.thoughtAt).toISOString() : undefined });
         }
         appendEntry(this.name, this.sessionId, {
           role: 'assistant',
           jobId,
           ...meta,
-          text: this.streamedText.trim(),
+          text: run.text.slice(run.flushed).trim(),
+          startedAt: run.segAt ? new Date(run.segAt).toISOString() : undefined,
           stopReason: run.stopReason,
           model: run.model,
         });
@@ -933,11 +962,12 @@ export class AcpClient {
         run.errorSource = err.source ?? 'agentd'; // 'cli': what the CLI reported; anything else is agentd's own
         run.forced = Boolean(err.forced);
         // Record the failure and any partial answer, so the transcript has no gap.
+        this._flushPieces(run);
         appendEntry(this.name, run.sessionId, {
           role: 'error',
           jobId,
           ...meta,
-          text: run.text.trim() || null,
+          text: null,
           error: err.message,
         });
         // Keep the metrics on the error: a crashed run still produces a receipt
@@ -972,6 +1002,11 @@ export class AcpClient {
       thoughtChars: 0,
       thought: '',
       tools: new Map(),
+      // How much of the text and reasoning already went into the transcript as pieces, and when the current piece began.
+      flushed: 0,
+      flushedThought: 0,
+      segAt: null,
+      thoughtAt: null,
       sessionId: this.sessionId,
       model: this.currentModel(),
       context: null,
@@ -1030,6 +1065,9 @@ export class AcpClient {
       chunks: run.chunks,
       thinkingChars: run.thoughtChars,
       text: run.text,
+      // What is not in the transcript yet: the page shows it as the live end of the conversation.
+      pendingText: run.text.slice(run.flushed),
+      pendingThought: run.thought.slice(run.flushedThought).slice(-3000),
       sessionId: run.sessionId,
       logFile: run.logFile,
       metrics: this._metrics(run),

@@ -24,6 +24,17 @@ export function when(iso?: string | null): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** The time of a message: the clock today ("10:26:59"), the date and the clock for an earlier day ("10/21 10:26"). */
+export function clock(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return `${hm}:${pad(d.getSeconds())}`;
+  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
 /** A duration for people: "0.8 秒", "12 秒", "2 分 5 秒". */
 export function took(ms: number): string {
   const s = ms / 1000;

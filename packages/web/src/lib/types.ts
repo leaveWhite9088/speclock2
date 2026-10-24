@@ -118,13 +118,22 @@ export interface TranscriptEntry {
   attempt?: number;
   /** error: the daemon stopped while this task ran (there is no real duration) */
   interrupted?: boolean;
+  /** assistant / thought: when this piece began; `piece`: said before a tool call, not the end of the run */
+  startedAt?: string;
+  piece?: boolean;
+}
+
+/** The turn that is running now: since when, and what it is doing. */
+export interface Turn {
+  startedAt: number;
+  phase: string;
 }
 
 /** What the conversation view draws, top to bottom. */
 export type Item =
-  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean; note?: string; tookMs?: number; tookLabel?: string }
+  | { id: string; kind: 'user' | 'assistant' | 'error'; text: string; who?: string; live?: boolean; note?: string; tookMs?: number; tookLabel?: string; at?: number; ack?: boolean }
   /** The reasoning an executor wrote before answering. */
-  | { id: string; kind: 'thought'; text: string; chars?: number }
+  | { id: string; kind: 'thought'; text: string; chars?: number; live?: boolean }
   /** A task the dispatcher handed to an executor (its agent_run call and result as one line). */
   | { id: string; kind: 'dispatch'; agent: string; prompt: string; state: 'run' | 'done' | 'fail'; toolCallId?: string; attempt?: number; maxAttempts?: number; reply?: string; startedAt?: number; tookMs?: number; queued?: boolean; ahead?: number }
   | { id: string; kind: 'tool'; name: string; detail: string; result: boolean; toolCallId?: string; state?: 'run' | 'done' | 'fail' };

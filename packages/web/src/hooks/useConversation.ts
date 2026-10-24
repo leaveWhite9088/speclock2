@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { api, enc, pq } from '@/lib/api';
 import { onLive } from '@/lib/events';
-import type { Item, Member, Session, TranscriptEntry } from '@/lib/types';
+import type { Item, Member, Session, TranscriptEntry, Turn } from '@/lib/types';
 import { DISPATCHER, useUi } from '@/store';
 
 const textOf = (c: unknown): string =>
@@ -55,11 +55,11 @@ function fromPi(messages: PiMessage[], turns: { at: number; tookMs: number }[], 
     if (msg.role === 'user') {
       closeTurn();
       turnTook = turns.find((t) => t.at === msg.timestamp)?.tookMs;
-      out.push({ id: next(), kind: 'user', text: textOf(msg.content) });
+      out.push({ id: next(), kind: 'user', text: textOf(msg.content), at: msg.timestamp });
     } else if (msg.role === 'assistant') {
       for (const c of (msg.content ?? []) as { type: string; text?: string; name?: string; id?: string; arguments?: unknown }[]) {
         if (c.type === 'text' && c.text?.trim()) {
-          out.push({ id: next(), kind: 'assistant', text: c.text, who: '调度器' });
+          out.push({ id: next(), kind: 'assistant', text: c.text, who: '调度器', at: msg.timestamp });
           lastSay = out.length - 1;
         } else if (c.type === 'toolCall' && c.name === 'agent_run') {
           const a = argOf(c.arguments);
@@ -84,11 +84,27 @@ function fromPi(messages: PiMessage[], turns: { at: number; tookMs: number }[], 
  * transcript (pulled while it works, since its tool calls and text only reach the disk).
  * Items are kept in a ref and copied to state on every change, so async callbacks never see a stale list.
  */
-export function useConversation(project: string, sel: string, member: Member | undefined) {
+export function useConversation(project: string, sel: string, member: Member | undefined, dispatcherBusy = false) {
   const qc = useQueryClient();
   const version = useUi((s) => s.conversationVersion);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  /** What is going on right now (shown under the conversation): since when, and what it is doing. */
+  const [turn, setTurn] = useState<Turn | null>(null);
+  const turnRef = useRef<Turn | null>(null);
+  const putTurn = (t: Turn | null) => {
+    turnRef.current = t;
+    setTurn(t);
+  };
+  const phaseOf = (phase: string) => {
+    if (turnRef.current && turnRef.current.phase !== phase) putTurn({ ...turnRef.current, phase });
+  };
+  const busyRef = useRef(dispatcherBusy);
+  busyRef.current = dispatcherBusy;
+  const settledAt = useRef(0);
+  /** `refreshLive` is a new function every render; `load` must not depend on it, or it would be re-created (and re-run) every time. */
+  const refreshLiveRef = useRef<() => Promise<void>>(async () => {});
+  const liveAt = useRef<number | null>(null); // when the live text began, kept across refreshes
 
   const itemsRef = useRef<Item[]>([]);
   const gen = useRef(0); // bumped on every reload; a late answer for an older one is dropped
@@ -106,7 +122,7 @@ export function useConversation(project: string, sel: string, member: Member | u
   const memberKey = member?.key;
 
   const dropLive = () => {
-    itemsRef.current = itemsRef.current.filter((i) => !(i.kind === 'assistant' && i.live));
+    itemsRef.current = itemsRef.current.filter((i) => !((i.kind === 'assistant' || i.kind === 'thought') && i.live));
   };
 
   const pull = useCallback(async () => {
@@ -116,7 +132,8 @@ export function useConversation(project: string, sel: string, member: Member | u
     const q = lastSeq.current ? `?afterSeq=${lastSeq.current}` : '';
     const r = await api<{ entries: TranscriptEntry[] }>('GET', `/api/agents/${enc(m.key)}/sessions/${enc(sessionId.current)}/transcript${q}`);
     if (g !== gen.current) return;
-    if (r.entries.some((e) => e.role === 'assistant' || e.role === 'error')) dropLive();
+    // What the live end of the conversation showed is now in the transcript: it is drawn again after this.
+    if (r.entries.some((e) => e.role === 'assistant' || e.role === 'thought' || e.role === 'error')) dropLive();
     for (const e of r.entries) {
       if (e.seq <= lastSeq.current) continue; // an overlapping pull already took it
       lastSeq.current = e.seq;
@@ -126,7 +143,7 @@ export function useConversation(project: string, sel: string, member: Member | u
       if (e.role === 'user') {
         const at = echoed.current.indexOf((e.text ?? '').trim());
         if (at >= 0) echoed.current.splice(at, 1); // typed here and already on screen
-        else itemsRef.current.push({ id: next(), kind: 'user', text: e.text ?? '', note: (e.attempt ?? 1) > 1 ? `第 ${e.attempt} 次尝试` : undefined });
+        else itemsRef.current.push({ id: next(), kind: 'user', text: e.text ?? '', at: at0, note: (e.attempt ?? 1) > 1 ? `第 ${e.attempt} 次尝试` : undefined });
       } else if (e.role === 'tool') {
         // A tool call is recorded when it starts and again when it ends; it is drawn once and marked when the end arrives.
         const done = e.status === 'completed' || e.status === 'failed';
@@ -142,7 +159,17 @@ export function useConversation(project: string, sel: string, member: Member | u
         } else if (e.title || !done) itemsRef.current.push({ id: next(), kind: 'tool', name: e.title || e.kind || '工具', detail: e.input ?? output, result: false, toolCallId: e.toolCallId, state });
       } else if (e.role === 'thought') itemsRef.current.push({ id: next(), kind: 'thought', text: e.text ?? '', chars: e.chars });
       else if (e.role === 'error') itemsRef.current.push({ id: next(), kind: 'error', text: e.error || e.text || '出错了', who: e.interrupted ? '被中断' : '出错', tookMs: e.interrupted ? undefined : tookMs });
-      else itemsRef.current.push({ id: next(), kind: 'assistant', text: e.text ?? '', who: m.id, tookMs });
+      else if (!(e.text ?? '').trim() && itemsRef.current.some((i) => i.kind === 'assistant')) {
+        // The run ended on a tool call: no text of its own, but it says how long the run took.
+        const idx = itemsRef.current.map((i) => i.kind).lastIndexOf('assistant');
+        const was = itemsRef.current[idx] as Extract<Item, { kind: 'user' | 'assistant' | 'error' }>;
+        itemsRef.current[idx] = { ...was, tookMs: was.tookMs ?? tookMs };
+      } else {
+        const began = e.startedAt ? Date.parse(e.startedAt) : NaN;
+        // Older entries have no start of their own: the run's start is the nearest thing.
+        const startAt = Number.isFinite(began) ? began : e.jobId ? starts.current.get(e.jobId) : undefined;
+        itemsRef.current.push({ id: next(), kind: 'assistant', text: e.text ?? '', who: m.id, tookMs: e.piece ? undefined : tookMs, at: startAt ?? at0 });
+      }
     }
     commit();
   }, []);
@@ -160,6 +187,11 @@ export function useConversation(project: string, sel: string, member: Member | u
         const r = await api<{ messages: PiMessage[]; turns?: { at: number; tookMs: number }[] }>('GET', `/api/dispatcher/messages${pq(project)}`);
         if (g !== gen.current) return;
         itemsRef.current = fromPi(r.messages, r.turns ?? [], next);
+        // A turn that is running now (the page was opened or reloaded in the middle of it): its clock starts at the message.
+        if (busyRef.current && Date.now() - settledAt.current > 3000) {
+          const lastUser = [...r.messages].reverse().find((m) => m.role === 'user');
+          if (!turnRef.current) putTurn({ startedAt: lastUser?.timestamp ?? Date.now(), phase: '处理中' });
+        }
         return commit();
       }
       const m = memberRef.current;
@@ -173,6 +205,11 @@ export function useConversation(project: string, sel: string, member: Member | u
       }
       if (!sessionId.current) return commit();
       await pull();
+      // Working now: show what it has said and thought so far at once, not after the first tick.
+      if (m.busy) {
+        if (!turnRef.current) putTurn({ startedAt: m.activity?.startedAt ?? Date.now(), phase: '处理中' });
+        await refreshLiveRef.current();
+      }
     } finally {
       if (g === gen.current) setLoading(false);
     }
@@ -184,31 +221,54 @@ export function useConversation(project: string, sel: string, member: Member | u
     load().catch(() => setLoading(false));
   }, [load, version, memberKey]);
 
-  // While an executor works: pull its transcript and the text written so far, every 1.5 s.
+  // While an executor works: its transcript, and the live end of the conversation (what it has said and thought that
+  // is not in the transcript yet). The live end is ONE place that is replaced every time: it used to be added again
+  // whenever a tool call had been put after it, which showed the whole text over and over.
   const busy = Boolean(member?.busy);
+  async function refreshLive() {
+    const key = memberRef.current?.key;
+    if (!key) return;
+    const g = gen.current;
+    await pull();
+    const tail = await api<{ running?: boolean; pendingText?: string; text?: string; pendingThought?: string }>('GET', `/api/agents/${enc(key)}/tail`);
+    if (g !== gen.current) return;
+    dropLive();
+    const thought = (tail.pendingThought ?? '').trim();
+    // `pendingText` is only what is not in the transcript yet; an older daemon has just `text`, the whole run.
+    const text = (tail.running ? (tail.pendingText ?? tail.text ?? '') : '').trim();
+    if (tail.running && thought) itemsRef.current.push({ id: next(), kind: 'thought', text: thought, live: true });
+    if (text) {
+      liveAt.current ??= Date.now();
+      itemsRef.current.push({ id: next(), kind: 'assistant', text, who: memberRef.current?.id, live: true, at: liveAt.current });
+    } else liveAt.current = null;
+    commit();
+  }
+  refreshLiveRef.current = refreshLive;
   useEffect(() => {
     if (isDispatcher || !busy || !memberKey) return;
-    const t = setInterval(async () => {
-      try {
-        await pull();
-        const tail = await api<{ running?: boolean; text?: string }>('GET', `/api/agents/${enc(memberKey)}/tail`);
-        if (!tail.running || !tail.text) return;
-        const last = itemsRef.current.at(-1);
-        if (last?.kind === 'assistant' && last.live) itemsRef.current[itemsRef.current.length - 1] = { ...last, text: tail.text };
-        else itemsRef.current.push({ id: next(), kind: 'assistant', text: tail.text, who: memberRef.current?.id, live: true });
-        commit();
-      } catch {
-        /* the next tick tries again */
-      }
-    }, 1500);
+    void refreshLive().catch(() => {});
+    const t = setInterval(() => void refreshLive().catch(() => {}), 1500);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDispatcher, busy, memberKey, pull]);
+
+  // The turn is over when the server says nobody is working any more (the events normally say so first).
+  useEffect(() => {
+    const t = turnRef.current;
+    if (!t || t.phase === '正在发送' || Date.now() - t.startedAt < 3000) return;
+    if (isDispatcher ? !dispatcherBusy : !busy) putTurn(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatcherBusy, busy, isDispatcher]);
 
   // Live events: the dispatcher's stream, and "an executor's job finished".
   useEffect(
     () =>
       onLive((ev) => {
-        if ((ev.name === 'job.done' || ev.name === 'job.interrupted') && ev.agent === sel && !isDispatcher) return void pull().catch(() => {});
+        if ((ev.name === 'job.started') && ev.agent === sel && !isDispatcher) return phaseOf('处理中');
+        if ((ev.name === 'job.done' || ev.name === 'job.interrupted') && ev.agent === sel && !isDispatcher) {
+          putTurn(null);
+          return void pull().catch(() => {});
+        }
         if (ev.name === 'job.started' && isDispatcher && ev.attempt && ev.agent?.startsWith(`${project}~`)) {
           // The attempt number is known as soon as the run starts: put it on the line that is waiting for it.
           const short = ev.agent.slice(project.length + 1);
@@ -231,10 +291,20 @@ export function useConversation(project: string, sel: string, member: Member | u
         }
         if (ev.name !== 'dispatcher.event' || !isDispatcher || ev.project !== project) return;
         const d = ev.data ?? {};
+        // What the dispatcher is doing, from what it reports: shown under the conversation with the time since the message.
+        if (d.type === 'agent_start' && !turnRef.current) putTurn({ startedAt: Date.now(), phase: '思考中' });
+        else if (d.type === 'agent_start' || d.type === 'turn_start' || d.type === 'message_start') phaseOf('思考中');
+        else if (d.type === 'message_update') phaseOf(d.kind === 'text_delta' ? '正在回复' : d.kind === 'thinking_delta' ? '思考中' : (turnRef.current?.phase ?? ''));
+        else if (d.type === 'tool_execution_start') phaseOf(d.toolName === 'agent_run' ? `等待 ${argOf(d.args).agent ?? '执行者'} 的结果` : `正在使用 ${d.toolName ?? '工具'}`);
+        else if (d.type === 'tool_execution_end') phaseOf('思考中');
+        else if (d.type === 'agent_settled' || d.type === 'dispatcher_exit') {
+          settledAt.current = Date.now();
+          putTurn(null);
+        }
         const last = itemsRef.current.at(-1);
         if (d.type === 'message_update' && d.kind === 'text_delta') {
           if (last?.kind === 'assistant' && last.live) itemsRef.current[itemsRef.current.length - 1] = { ...last, text: last.text + (d.delta ?? '') };
-          else itemsRef.current.push({ id: next(), kind: 'assistant', text: d.delta ?? '', who: '调度器', live: true });
+          else itemsRef.current.push({ id: next(), kind: 'assistant', text: d.delta ?? '', who: '调度器', live: true, at: Date.now() });
         } else if (d.type === 'tool_execution_start') {
           if (last?.kind === 'assistant') itemsRef.current[itemsRef.current.length - 1] = { ...last, live: false };
           if (d.toolName === 'agent_run') {
@@ -263,24 +333,41 @@ export function useConversation(project: string, sel: string, member: Member | u
   const send = useCallback(
     async (text: string) => {
       const mine = next();
-      itemsRef.current.push({ id: mine, kind: 'user', text });
+      itemsRef.current.push({ id: mine, kind: 'user', text, at: Date.now() });
       commit();
-      if (sel === DISPATCHER) {
-        const r = await api<{ disposition?: string }>('POST', `/api/dispatcher/prompt${pq(project)}`, { message: text });
-        if (r?.disposition === 'queued') {
-          // It waits behind the turn that is running: shown in the queue under the conversation, and in the
-          // conversation itself once its turn comes.
-          itemsRef.current = itemsRef.current.filter((i) => i.id !== mine);
-          commit();
+      const mark = (patch: Partial<Extract<Item, { kind: 'user' | 'assistant' | 'error' }>>) => {
+        itemsRef.current = itemsRef.current.map((i) => (i.id === mine ? ({ ...i, ...patch } as Item) : i));
+        commit();
+      };
+      // The clock starts when the message is sent; a turn that is already running keeps its own.
+      const startedHere = !turnRef.current;
+      if (startedHere) putTurn({ startedAt: Date.now(), phase: '正在发送' });
+      try {
+        if (sel === DISPATCHER) {
+          const r = await api<{ disposition?: string }>('POST', `/api/dispatcher/prompt${pq(project)}`, { message: text });
+          if (r?.disposition === 'queued') {
+            // It waits behind the turn that is running: shown in the queue under the conversation, and in the
+            // conversation itself once its turn comes.
+            itemsRef.current = itemsRef.current.filter((i) => i.id !== mine);
+            commit();
+          } else {
+            mark({ ack: true });
+            if (startedHere) phaseOf('已收到，开始处理');
+          }
+        } else {
+          echoed.current.push(text);
+          await api('POST', `/api/agents/${enc(sel)}/run`, { prompt: text, sessionId: sessionId.current || undefined });
+          mark({ ack: true });
+          if (startedHere) phaseOf('已收到，开始处理');
         }
-      } else {
-        echoed.current.push(text);
-        await api('POST', `/api/agents/${enc(sel)}/run`, { prompt: text, sessionId: sessionId.current || undefined });
+      } catch (e) {
+        if (startedHere) putTurn(null);
+        throw e;
       }
       await qc.invalidateQueries({ queryKey: ['projects'] });
     },
     [sel, project, qc],
   );
 
-  return { items, loading, send };
+  return { items, loading, send, turn };
 }

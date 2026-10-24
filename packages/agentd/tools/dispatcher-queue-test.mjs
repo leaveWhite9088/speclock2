@@ -25,7 +25,7 @@ const d = new Dispatcher({ cwd: dir, project: null, sessionDir: dir, onEvent: (e
 
 const sent = [];
 d.ensureStarted = async () => {};
-d.child = {}; // "running"
+Object.defineProperty(d, 'child', { get: () => ({}) }); // "running" (the process belongs to the pi client)
 d.command = async (type, params) => {
   if (type === 'prompt') {
     sent.push(params.message);
@@ -38,7 +38,7 @@ d.command = async (type, params) => {
 };
 const tick = () => new Promise((r) => setTimeout(r, 20));
 const settle = async () => {
-  d._onRecord(JSON.stringify({ type: 'agent_settled' }));
+  d._onRecord({ type: 'agent_settled' });
   await tick();
 };
 

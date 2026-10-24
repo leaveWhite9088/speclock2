@@ -14,9 +14,9 @@
  * `messages` method reads it from pi.
  */
 
+import { PiRpc } from './pi-rpc.mjs';
 import { dispatcherRules } from './rules.mjs';
 import { injectionFor } from './pool/system-prompt.mjs';
-import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { agentDir, usableProviders } from './pi-models.mjs';
@@ -85,23 +85,34 @@ export class Dispatcher {
     this.sessionDir = sessionDir;
     this.lastActive = Date.now();
     this.onEvent = onEvent ?? (() => {});
-    this.child = null;
-    this.buf = '';
-    this.nextId = 1;
-    this.pending = new Map();
+    /** The pi process and how to talk to it: the one shared client. */
+    this.pi = new PiRpc({ label: 'dispatcher', log });
+    this.pi.onClose = (code) => this._onClose(code);
+    this.pi.addListener((rec) => this._onRecord(rec));
     this.spawnCount = 0;
     this.streaming = false;
     /** Messages sent while a turn runs, in order. A turn that ends starts the next one. */
     this.queue = [];
     this.context = null;
-    this.lastError = null;
-    this.stderrTail = '';
     /** Session file to return to after a restart. */
     this.resumeFile = null;
   }
 
   get busy() {
     return this.streaming;
+  }
+
+  /** The process, while it runs. */
+  get child() {
+    return this.pi.child;
+  }
+
+  get lastError() {
+    return this.pi.lastError;
+  }
+
+  get stderrTail() {
+    return this.pi.stderrTail;
   }
 
   // -- process ------------------------------------------------------------
@@ -148,45 +159,7 @@ export class Dispatcher {
     const env = { ...process.env };
     if (this.project) env.AGENTD_PROJECT = this.project;
     else delete env.AGENTD_PROJECT;
-    const child = spawn(NODE_BIN, args, {
-      cwd: this.cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    this.child = child;
-    this.buf = '';
-
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      this.buf += chunk;
-      let i;
-      while ((i = this.buf.indexOf('\n')) !== -1) {
-        const line = this.buf.slice(0, i).trim();
-        this.buf = this.buf.slice(i + 1);
-        if (line) this._onRecord(line);
-      }
-    });
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => {
-      this.stderrTail = (this.stderrTail + d).slice(-2000);
-    });
-    child.on('error', (err) => {
-      this.lastError = err.message;
-    });
-    child.on('close', (code) => {
-      log(`pi exited (code=${code})`);
-      const wasStreaming = this.streaming;
-      this.child = null;
-      this.streaming = false;
-      if (this.queue.length) {
-        this.queue = []; // the process is gone: these messages cannot be delivered to the conversation they were meant for
-        this._queueChanged();
-      }
-      for (const { reject } of this.pending.values()) reject(new Error('dispatcher pi exited'));
-      this.pending.clear();
-      this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
-    });
+    this.pi.start({ cmd: NODE_BIN, args, cwd: this.cwd, env });
 
     // After a daemon restart nothing is remembered in memory: go back to the newest conversation.
     if (!this.resumeFile) this.resumeFile = this.sessions().sessions[0]?.file ?? null;
@@ -200,24 +173,10 @@ export class Dispatcher {
     this._refreshContext();
   }
 
-  _onRecord(line) {
-    let rec;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      return;
-    }
-
-    if (rec.type === 'response' && rec.id != null && this.pending.has(rec.id)) {
-      const { resolve } = this.pending.get(rec.id);
-      this.pending.delete(rec.id);
-      resolve(rec);
-      return;
-    }
-
+  _onRecord(rec) {
     if (rec.type === 'extension_ui_request') {
       if (DIALOG_METHODS.has(rec.method)) {
-        this._write({ type: 'extension_ui_response', id: rec.id, cancelled: true });
+        this.pi.write({ type: 'extension_ui_response', id: rec.id, cancelled: true });
       }
       return;
     }
@@ -232,48 +191,31 @@ export class Dispatcher {
     this.onEvent(compact(rec));
   }
 
+  /** The process ended (pi's client already failed what was pending). */
+  _onClose(code) {
+    const wasStreaming = this.streaming;
+    this.streaming = false;
+    if (this.queue.length) {
+      this.queue = []; // the process is gone: these messages cannot be delivered to the conversation they were meant for
+      this._queueChanged();
+    }
+    this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
+  }
+
   /** How full the conversation is, from pi's own session statistics. Never throws. */
   _refreshContext() {
-    this.command('get_session_stats')
-      .then((rec) => {
-        const c = rec?.contextUsage; // `command` already unwraps `data`
-        this.context = c && c.percent != null ? { used: c.tokens ?? null, size: c.contextWindow ?? null, percent: +c.percent.toFixed(1) } : null;
+    this.command('get_session_stats', {}, 30_000)
+      .then((stats) => {
+        this.context = PiRpc.contextOf(stats);
         // Kept on disk so the figure is still there when the process is idle-reaped or the daemon restarts.
         if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
       })
       .catch(() => {});
   }
 
-  _write(obj) {
-    try {
-      this.child?.stdin.write(JSON.stringify(obj) + '\n');
-    } catch (err) {
-      log('write failed:', err.message);
-    }
-  }
-
   async command(type, params = {}, timeoutMs = 60_000) {
-    if (!this.child) throw new Error('dispatcher is not running');
     this.lastActive = Date.now();
-    const id = `d-${this.nextId++}`;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`dispatcher ${type} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        resolve: (rec) => {
-          clearTimeout(timer);
-          if (!rec.success) reject(new Error(`dispatcher ${type} failed: ${rec.error ?? 'unknown error'}`));
-          else resolve(rec.data);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-      this._write({ id, type, ...params });
-    });
+    return this.pi.command(type, params, timeoutMs);
   }
 
   // -- state --------------------------------------------------------------

@@ -28,3 +28,18 @@ function load(name) {
 
 export const dispatcherRules = () => load('project.md');
 export const executorRules = () => load('executor.md');
+
+/** Read fresh every time: they are sent once per handoff, and an edit should apply to the next one without a restart. */
+function fresh(name) {
+  try {
+    return readFileSync(join(CONTEXTS, name), 'utf8').replace(/<!--[\s\S]*?-->/g, '').trim();
+  } catch {
+    throw new Error(`the handoff prompt contexts/${name} is missing`);
+  }
+}
+
+/** Step 1 of a handoff: ask the executor to write the document (as its reply). */
+export const handoffWritePrompt = () => fresh('handoff-write.md');
+
+/** Step 2: the first message of the new session, with the document in it. */
+export const handoffStartPrompt = (doc) => fresh('handoff-start.md').replace('{{doc}}', () => doc);

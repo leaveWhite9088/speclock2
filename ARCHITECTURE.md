@@ -394,7 +394,8 @@ pi 没有 ACP，官方集成方式是 `pi --mode rpc`。适配器负责翻译：
   （`/compact`；mcode、pi 支持，dsh 没有）。同一个会话内进行，不换会话。
 - **交接**：换新会话，和压缩是两回事，上下文占比本身不触发。调度器只能 `propose_handoff`；系统也会在客观信号
   （同一会话压缩 ≥3 次、连续失败 ≥3 次）出现时自动提出。之后必须由人：生成交接文档 → 查看并可修改 →
-  确认，才会开新会话。交接文档由执行者直接作为回复交出（提示词里写明格式，不再用 skill 文件，也不写进执行者目录），
+  确认，才会开新会话。交接文档由执行者直接作为回复交出（提示词在 `contexts/handoff-write.md`，开新会话那条在 `handoff-start.md`，
+  都只在交接那一步发出、每次现读；不再用 skill 文件，也不写进执行者目录），
   副本留在 `data/handoffs/`；新会话的第一条消息里带着这份文档。
 - **支持的 CLI**：mcode、dsh、pi、opencode（原生 ACP）、claude 和 codex（经官方适配器 `@agentclientprotocol/claude-agent-acp`、`codex-acp`，全局安装在 Node 目录）。注册表在 `core/pool/config.mjs`；claude 用 `CLAUDE.md`、技能放 `.claude/skills`，opencode 技能放 `.opencode/skills`，codex 与 dsh、pi 一样用 `.agents/skills`。opencode 的 `/compact` 虽不在 ACP 的命令列表里，但可用（实测占用 8512→806）。
 - **规则**：不写进项目（没有 AGENTS.md、CLAUDE.md、skills），通过各 CLI 的额外系统提示入口交：mcode 启动参数、pi 启动参数、

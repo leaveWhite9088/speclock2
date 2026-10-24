@@ -8,7 +8,7 @@
     "daemon": "node daemon/agentd.mjs",
     "daemon:stop": "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='node.exe'\\\" | Where-Object { $_.CommandLine -like '*agentd.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }\"",
     "daemon:log": "powershell -NoProfile -Command \"Get-Content -Wait -Tail 40 data/agentd.log\"",
-    "test": "npm run test:daemon && npm run test:events && npm run test:switch && npm run test:models && npm run test:health && npm run test:stream && npm run test:cwd && npm run test:models-json && npm run test:instances && npm run test:transcript && npm run test:dispatcher && npm run test:projects && npm run test:start && npm run test:idle && npm run test:forced && npm run test:interrupted && npm run test:reply && npm run test:tasks",
+    "test": "npm run test:daemon && npm run test:events && npm run test:switch && npm run test:models && npm run test:health && npm run test:stream && npm run test:cwd && npm run test:models-json && npm run test:instances && npm run test:transcript && npm run test:dispatcher && npm run test:projects && npm run test:start && npm run test:idle && npm run test:forced && npm run test:interrupted && npm run test:reply && npm run test:tasks && npm run test:handoff-prompts",
     "test:daemon": "node tools/daemon-share-test.mjs dsh",
     "test:switch": "node tools/session-switch-test.mjs dsh",
     "test:models": "node tools/model-persist-test.mjs dsh",
@@ -27,6 +27,7 @@
     "test:forced": "node tools/forced-stop-test.mjs",
     "test:interrupted": "node tools/interrupted-test.mjs",
     "test:reply": "node tools/reply-test.mjs",
-    "test:tasks": "node tools/tasks-test.mjs"
+    "test:tasks": "node tools/tasks-test.mjs",
+    "test:handoff-prompts": "node tools/handoff-prompts-test.mjs"
   }
 }

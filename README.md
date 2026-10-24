@@ -299,6 +299,8 @@ agentd 操作：projects | project.create {id,name?,root,instances?} | project.a
 - 项目里不再生成 `AGENTS.md`、`CLAUDE.md` 或技能目录。以前版本生成的文件（第一行有 `speclock:managed` 标记）还在，
   不影响使用，想清理可以自己删。
 - 交接不再用技能文件：执行者直接把交接文档作为回复交出来，agentd 保存副本在 `data/handoffs/`，项目里不留文件。
+  交接用的两条提示词也是 md：`contexts/handoff-write.md`（生成文档时发）、`contexts/handoff-start.md`（开新会话时发，`{{doc}}` 换成文档）。
+  它们**不是**启动时的规则，只在交接那一步发出；改了下次交接就生效，不用重启。
 
 ---
 

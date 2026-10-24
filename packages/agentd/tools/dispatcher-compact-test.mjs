@@ -123,7 +123,7 @@ handoffs.apply({ id: prop.id, text: 'THE HANDOFF DOCUMENT (edited)' });
 for (let i = 0; i < 60 && !states.includes('done'); i++) await tick(50);
 const after = handoffs.list({ project: 'proj' }).handoffs.find((h) => h.id === prop.id);
 check('after confirming, a new conversation is opened and handed the document', states.includes('done') && d.resumeFile === join(dir, 'two.jsonl') && /THE HANDOFF DOCUMENT \(edited\)/.test(prompts[1] ?? ''), JSON.stringify([states, after?.error]));
-check('the new conversation is named after the old one, readably', /^交接自 \S+$/.test(d._labels()['two.jsonl'] ?? '') && !/[\\/:]/.test(d._labels()['two.jsonl'] ?? ''), JSON.stringify(d._labels()['two.jsonl']));
+check('the new conversation is named after the old one, readably', /^交接自 \S+$/.test(d.store.labels()['two.jsonl'] ?? '') && !/[\\/:]/.test(d.store.labels()['two.jsonl'] ?? ''), JSON.stringify(d.store.labels()['two.jsonl']));
 check('the old conversation is still there, under its own name', oldSession === join(dir, 'three.jsonl') && oldSession !== d.resumeFile, oldSession);
 
 console.log(process.exitCode ? '\n=> ✗ DISPATCHER COMPACTION / HANDOFF BROKEN' : '\n=> ✓ DISPATCHER COMPACTION / HANDOFF OK');

@@ -10,6 +10,7 @@ import { StopHealth } from './health.mjs';
 import { AcpTransport } from './transport.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { RulesChannel } from './rules-channel.mjs';
+import { RunLog, refusedRun } from './runs.mjs';
 import { RunTracker } from './run-tracker.mjs';
 import { MAX_PROCESSES, START_ATTEMPTS, aliveCount, defaultModelFor, ownedByInstance, withStartLock } from '../registry.mjs';
 import { entry, noteSession, saveStore, saved, savedAll } from '../store.mjs';
@@ -70,14 +71,10 @@ export class AcpClient {
     this.configOptions = [];
 
     // -- streaming / metrics --
-    /** Active run: { jobId, startedAt, firstChunkAt, text, chunks, context, cost, tokens } */
-    this.run = null;
+    /** The runs: the one going on, the last thirty, how long they took. */
+    this.runs = new RunLog({ name });
     this.tracker = new RunTracker({ name, getRun: () => this.run });
-    /** Completed runs, newest last. Bounded. */
-    this.jobs = new Map();
 
-    /** Rolling run durations, used to flag abnormally slow runs. */
-    this.durationHistory = [];
     /** Called when the agent process exits unexpectedly. */
     this.onExit = null;
     /** How often this process had to be killed because it ignored a cancel; drives the `unstable` flag. */
@@ -227,6 +224,17 @@ export class AcpClient {
 
   _enqueue(task) {
     return this.line.enqueue(task);
+  }
+
+  // The run record, under the names the rest of the daemon and the tests use.
+  get run() {
+    return this.runs.run;
+  }
+  get jobs() {
+    return this.runs.jobs;
+  }
+  get durationHistory() {
+    return this.runs.durationHistory;
   }
 
   get openTools() {
@@ -547,180 +555,132 @@ export class AcpClient {
    */
   startPrompt(text, { timeoutMs = 300_000, cwd, reset, sessionId, meta = null, display = null } = {}) {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const cancelledErr = () => {
+    const { done, ahead } = this.line.submit(
+      jobId,
+      display ?? text,
+      () => this._runPrompt(jobId, text, { timeoutMs, cwd, reset, sessionId, meta, display }),
       // Cancelled while it waited: it never reaches the CLI.
-      const err = new Error('cancelled before it started');
-      err.kind = 'cancelled';
-      err.metrics = {
-        jobId,
-        error: err.message,
-        outcome: 'cancelled',
-        forced: false,
-        failureSource: 'agentd',
-        health: 'warn',
-        attention: [{ code: 'cancelled', severity: 'warn', source: 'system', text: 'the run was cancelled before it started' }],
-      };
-      return err;
-    };
-    const { done, ahead } = this.line.submit(jobId, display ?? text, async () => {
-      if (this.unstable) {
-        const err = new Error(
-          `${this.name} is marked unstable: its process had to be killed ${this.health.count} times in the last ${this.health.windowMinutes} min. ` +
-            'It gets no more tasks until a person has looked at it and recovered it.',
-        );
-        err.kind = 'unstable';
-        err.metrics = {
-          jobId,
-          error: err.message,
-          outcome: 'unstable',
-          forced: false,
-          failureSource: 'agentd',
-          health: 'error',
-          attention: [{ code: 'unstable', severity: 'error', source: 'system', text: err.message }],
-        };
-        throw err;
-      }
-      const run = this._beginRun(jobId);
-      try {
-        this.onRunStart?.({ jobId });
-        if (sessionId && sessionId !== this.sessionId) {
-          await this._init();
-          await this._attach(sessionId, cwd);
-        } else if (reset) {
-          this.sessionId = null;
-          this.preferSession = null;
-        }
-        await this.ensureReady(cwd);
-        if (this.modelDirty) {
-          this.modelDirty = false;
-          await this._applyPreferredModel();
-        }
-        this.tracker.streamedText = '';
-        run.sessionId = this.sessionId;
-        run.model = this.currentModel();
-        // Spawning is expected here; only a restart after this point is abnormal.
-        run.spawnsAtStart = this.spawnCount;
-
-        appendEntry(this.name, this.sessionId, {
-          role: 'user',
-          jobId,
-          ...meta,
-          text: display ?? text,
-          model: run.model,
-        });
-
-        const res = await this._request(
-          'session/prompt',
-          { sessionId: this.sessionId, prompt: [{ type: 'text', text: this._withRules(text) }] },
-          { timeoutMs: MAX_RUN_MS, idleMs: timeoutMs },
-        );
-
-        run.stopReason = res?.stopReason ?? null;
-        noteSession(this.name, this.sessionId, { updatedAt: new Date().toISOString() });
-        // What is left after the last tool call. The final entry always exists (it carries how the run ended); it
-        // has no text when the run ended on a tool call.
-        const restThought = run.thought.slice(run.flushedThought).trim();
-        if (restThought) {
-          appendEntry(this.name, this.sessionId, { role: 'thought', jobId, ...meta, text: restThought.slice(0, 12_000), chars: restThought.length, startedAt: run.thoughtAt ? new Date(run.thoughtAt).toISOString() : undefined });
-        }
-        appendEntry(this.name, this.sessionId, {
-          role: 'assistant',
-          jobId,
-          ...meta,
-          text: run.text.slice(run.flushed).trim(),
-          startedAt: run.segAt ? new Date(run.segAt).toISOString() : undefined,
-          stopReason: run.stopReason,
-          model: run.model,
-        });
-        const out = {
-          text: this.tracker.streamedText.trim(),
-          stopReason: res?.stopReason,
-          sessionId: this.sessionId,
-          metrics: this._finishRun(run),
-        };
-        if (text !== COMPACT_PROMPT[this.type]) setTimeout(() => void this._maybeCompact(), 0);
-        return out;
-      } catch (err) {
-        run.error = err.message;
-        run.errorKind = err.kind ?? null;
-        run.errorSource = err.source ?? 'agentd'; // 'cli': what the CLI reported; anything else is agentd's own
-        run.forced = Boolean(err.forced);
-        // Record the failure and any partial answer, so the transcript has no gap.
-        this.tracker.flushPieces(run);
-        appendEntry(this.name, run.sessionId, {
-          role: 'error',
-          jobId,
-          ...meta,
-          text: null,
-          error: err.message,
-        });
-        // Keep the metrics on the error: a crashed run still produces a receipt
-        // with duration, model and inferred attention.
-        err.metrics = this._finishRun(run);
-        err.sessionId = run.sessionId;
-        throw err;
-      } finally {
-        /* nothing to detach: the sink is per-agent */
-      }
-    }, cancelledErr);
-
+      () => refusedRun(jobId, 'cancelled', 'cancelled before it started', { health: 'warn', text: 'the run was cancelled before it started' }),
+    );
     return { jobId, done, ahead };
+  }
+
+  /** Its turn has come: refuse it when the process is unstable, else run it and record how it went. */
+  async _runPrompt(jobId, text, opts) {
+    if (this.unstable) {
+      const message =
+        `${this.name} is marked unstable: its process had to be killed ${this.health.count} times in the last ${this.health.windowMinutes} min. ` +
+        'It gets no more tasks until a person has looked at it and recovered it.';
+      throw refusedRun(jobId, 'unstable', message, { health: 'error', text: message });
+    }
+    const run = this._beginRun(jobId);
+    try {
+      this.onRunStart?.({ jobId });
+      await this._getReady(run, opts);
+      const res = await this._sendPrompt(run, text, opts);
+      return this._complete(run, text, res, opts.meta);
+    } catch (err) {
+      throw this._fail(run, err, opts.meta);
+    }
+  }
+
+  /** The process up, on the right session (the one asked for, a fresh one, or the remembered one), with its model. */
+  async _getReady(run, { sessionId, reset, cwd }) {
+    if (sessionId && sessionId !== this.sessionId) {
+      await this._init();
+      await this._attach(sessionId, cwd);
+    } else if (reset) {
+      this.sessionId = null;
+      this.preferSession = null;
+    }
+    await this.ensureReady(cwd);
+    if (this.modelDirty) {
+      this.modelDirty = false;
+      await this._applyPreferredModel();
+    }
+    this.tracker.streamedText = '';
+    run.sessionId = this.sessionId;
+    run.model = this.currentModel();
+    // Spawning is expected here; only a restart after this point is abnormal.
+    run.spawnsAtStart = this.spawnCount;
+  }
+
+  /** Write what was asked into the transcript, give it to the CLI and wait for the end of the turn. */
+  async _sendPrompt(run, text, { timeoutMs, meta, display }) {
+    appendEntry(this.name, this.sessionId, {
+      role: 'user',
+      jobId: run.jobId,
+      ...meta,
+      text: display ?? text,
+      model: run.model,
+    });
+    return this._request(
+      'session/prompt',
+      { sessionId: this.sessionId, prompt: [{ type: 'text', text: this._withRules(text) }] },
+      { timeoutMs: MAX_RUN_MS, idleMs: timeoutMs },
+    );
+  }
+
+  /** The turn ended well: what is left after the last tool call goes into the transcript, and the caller gets its answer. */
+  _complete(run, text, res, meta) {
+    const jobId = run.jobId;
+    run.stopReason = res?.stopReason ?? null;
+    noteSession(this.name, this.sessionId, { updatedAt: new Date().toISOString() });
+    // The final entry always exists (it carries how the run ended); it has no text when the run ended on a tool call.
+    const restThought = run.thought.slice(run.flushedThought).trim();
+    if (restThought) {
+      appendEntry(this.name, this.sessionId, { role: 'thought', jobId, ...meta, text: restThought.slice(0, 12_000), chars: restThought.length, startedAt: run.thoughtAt ? new Date(run.thoughtAt).toISOString() : undefined });
+    }
+    appendEntry(this.name, this.sessionId, {
+      role: 'assistant',
+      jobId,
+      ...meta,
+      text: run.text.slice(run.flushed).trim(),
+      startedAt: run.segAt ? new Date(run.segAt).toISOString() : undefined,
+      stopReason: run.stopReason,
+      model: run.model,
+    });
+    const out = {
+      text: this.tracker.streamedText.trim(),
+      stopReason: res?.stopReason,
+      sessionId: this.sessionId,
+      metrics: this._finishRun(run),
+    };
+    if (text !== COMPACT_PROMPT[this.type]) setTimeout(() => void this._maybeCompact(), 0);
+    return out;
+  }
+
+  /** The turn failed: what was said so far and the failure go into the transcript, and the error carries the run's metrics. */
+  _fail(run, err, meta) {
+    run.error = err.message;
+    run.errorKind = err.kind ?? null;
+    run.errorSource = err.source ?? 'agentd'; // 'cli': what the CLI reported; anything else is agentd's own
+    run.forced = Boolean(err.forced);
+    // Record the failure and any partial answer, so the transcript has no gap.
+    this.tracker.flushPieces(run);
+    appendEntry(this.name, run.sessionId, {
+      role: 'error',
+      jobId: run.jobId,
+      ...meta,
+      text: null,
+      error: err.message,
+    });
+    // Keep the metrics on the error: a crashed run still produces a receipt with duration, model and inferred attention.
+    err.metrics = this._finishRun(run);
+    err.sessionId = run.sessionId;
+    return err;
   }
 
   // -- runs / metrics -----------------------------------------------------
 
   _beginRun(jobId) {
-    const run = {
-      jobId,
-      agent: this.name,
-      startedAt: Date.now(),
-      firstChunkAt: null,
-      endedAt: null,
-      text: '',
-      chunks: 0,
-      thoughtChars: 0,
-      thought: '',
-      tools: new Map(),
-      // How much of the text and reasoning already went into the transcript as pieces, and when the current piece began.
-      flushed: 0,
-      flushedThought: 0,
-      segAt: null,
-      thoughtAt: null,
-      sessionId: this.sessionId,
-      model: this.currentModel(),
-      context: null,
-      cost: null,
-      tokens: null,
-      stopReason: null,
-      error: null,
-      spawnsAtStart: null, // set after the agent is ready
-      logFile: join(RUNS_DIR, `${jobId}.log`),
-    };
-    try {
-      mkdirSync(RUNS_DIR, { recursive: true });
-      writeFileSync(run.logFile, '', 'utf8');
-    } catch {
-      run.logFile = null;
-    }
-    this.run = run;
+    const run = this.runs.begin(jobId, { sessionId: this.sessionId, model: this.currentModel() });
     this.tracker.lastProgressAt = 0;
-    this.jobs.set(jobId, run);
-    // keep the map bounded
-    while (this.jobs.size > 30) this.jobs.delete(this.jobs.keys().next().value);
     return run;
   }
 
   _finishRun(run) {
-    run.endedAt = Date.now();
-    this.run = null;
-    const metrics = this._metrics(run);
-    // Feed the rolling window only once per finished run, so a run is never its
-    // own baseline and repeated metric reads do not skew it.
-    if (!run.error) {
-      this.durationHistory.push(metrics.durationMs);
-      while (this.durationHistory.length > 20) this.durationHistory.shift();
-    }
-    return metrics;
+    return this.runs.finish(run, (r) => this._metrics(r));
   }
 
   _metrics(run) {
@@ -733,24 +693,7 @@ export class AcpClient {
 
   /** Snapshot for `agent_tail`. */
   tail(jobId) {
-    const run = jobId ? this.jobs.get(jobId) : this.run ?? [...this.jobs.values()].pop();
-    if (!run) return null;
-    return {
-      jobId: run.jobId,
-      agent: run.agent,
-      running: !run.endedAt,
-      elapsedMs: (run.endedAt ?? Date.now()) - run.startedAt,
-      chars: run.text.length,
-      chunks: run.chunks,
-      thinkingChars: run.thoughtChars,
-      text: run.text,
-      // What is not in the transcript yet: the page shows it as the live end of the conversation.
-      pendingText: run.text.slice(run.flushed),
-      pendingThought: run.thought.slice(run.flushedThought).slice(-3000),
-      sessionId: run.sessionId,
-      logFile: run.logFile,
-      metrics: this._metrics(run),
-    };
+    return this.runs.tail(jobId, (r) => this._metrics(r));
   }
 
   /** `session/list`; merged with local labels. */

@@ -85,10 +85,15 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/pool/config.mjs` | 常量、CLI 注册表、`agentd.config.json` |
 | | `core/pool/store.mjs` | 会话旁路数据（标签、目录、模型、上下文、压缩次数） |
 | | `core/pool/registry.mjs` | 池 Map、进程数上限、同类型启动锁 |
-| | `core/pool/acp-client.mjs`、`core/pool/acp/client.mjs` | 前者只做再导出；一个常驻进程：会话、模型、规则注入，把下面三块组合起来，对外接口不变 |
+| | `core/pool/acp-client.mjs` | 只做再导出，导入路径不变；代码在 `core/pool/acp/` |
+| | `core/pool/acp/client.mjs` | 一个常驻进程：启动与关闭、把一条提示变成一次运行；把下面几块组合起来，对外接口不变 |
+| | `core/pool/acp/sessions.mjs` | 会话与模型：新建、续接、切换、命名、隐藏、列出；选模型并记住每个会话的配置；状态都归它，对 CLI 的请求通过传进来的函数发 |
 | | `core/pool/acp/transport.mjs` | 和 ACP 进程之间的线：启动、读行、应答（含自动批准权限）、带空闲/总超时的请求、放弃进程；不知道会话和运行 |
 | | `core/pool/acp/run-tracker.mjs` | 一次运行怎么从 `session/update` 变成状态和对话记录：文字、推理、工具调用（从开始跟到结束）、分段写入、进度；不知道进程 |
+| | `core/pool/acp/runs.mjs` | 运行的记账：正在跑的、最近三十次、用时窗口；被拒绝的运行（取消、不稳定）的错误 |
 | | `core/pool/acp/prompt-queue.mjs` | 一个执行者的排队：先进先出、按任务号取消排队中的、取消后立刻回复调用方；会话操作走同一条队 |
+| | `core/pool/acp/rules-channel.mjs` | 规则怎么交给 CLI：各自的通道，没有通道的放在每个会话第一条消息前 |
+| | `core/pool/acp/health.mjs` | 进程被强停的记录与"不稳定"的判断 |
 | | `core/pool/metrics.mjs` | 运行指标与推断的健康信号 |
 | | `core/pool/compaction.mjs` | 上下文占用与自动压缩 |
 | | `core/pool/instances.mjs` | 内置与自建实例 |
@@ -105,7 +110,7 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `core/handoff.mjs` | 交接：提案、生成文档、开新会话 |
 | 适配 | `server/pi-acp-adapter.mjs` | ACP ↔ pi RPC（含 `/compact`） |
 
-依赖方向是单向的：入口 → 客户端 → daemon → core（`core/pool/` 内：acp-client → transport/run-tracker/prompt-queue、registry/store/metrics/compaction → config；这三块互相不引用）。`core` 不知道 HTTP、MCP、pi 扩展、
+依赖方向是单向的：入口 → 客户端 → daemon → core（`core/pool/` 内：acp/client → acp/ 里的各块、registry/store/metrics/compaction → config；acp/ 里的各块互相不引用，只被 client 组合）。`core` 不知道 HTTP、MCP、pi 扩展、
 命名管道的存在，所以能被任何前端复用（测试脚本就通过同样的 socket 驱动它）。
 
 ---

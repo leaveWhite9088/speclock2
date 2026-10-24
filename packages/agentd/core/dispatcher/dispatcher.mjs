@@ -24,6 +24,7 @@ import { dirname, join } from 'node:path';
 import { agentDir, usableProviders } from '../pi-models.mjs';
 import { fileURLToPath } from 'node:url';
 import { SessionStore } from './sessions.mjs';
+import { TurnQueue } from './turn-queue.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const NODE_BIN = process.env.PI_NODE_BIN || process.env.MCODE_NODE_BIN || 'D:/Environment/nodejs/node.exe';
@@ -70,9 +71,12 @@ export class Dispatcher {
     this.pi.onClose = (code) => this._onClose(code);
     this.pi.addListener((rec) => this._onRecord(rec));
     this.spawnCount = 0;
-    this.streaming = false;
-    /** Messages sent while a turn runs, in order. A turn that ends starts the next one. */
-    this.queue = [];
+    /** Whether a turn runs and the messages that wait for it (see turn-queue.mjs). */
+    this.turns = new TurnQueue({
+      send: (message) => this.command('prompt', { message }, 120_000),
+      onChange: (queued) => this.onEvent({ type: 'dispatcher_queue', queued }),
+      log,
+    });
     this.context = null;
     /** Compact the conversation once it holds this many tokens (null: never), checked when a turn ends. */
     this.compactAt = compactAt;
@@ -84,7 +88,17 @@ export class Dispatcher {
   }
 
   get busy() {
-    return this.streaming;
+    return this.turns.busy;
+  }
+
+  /** The same, under the names the daemon and the tests use. */
+  get streaming() {
+    return this.turns.busy;
+  }
+
+  /** Messages waiting for the turn to end, oldest first. */
+  get queue() {
+    return this.turns.items;
   }
 
   /** The process, while it runs. */
@@ -166,11 +180,10 @@ export class Dispatcher {
       return;
     }
 
-    if (rec.type === 'agent_start') this.streaming = true;
+    if (rec.type === 'agent_start') this.turns.began();
     if (rec.type === 'agent_settled') {
-      this.streaming = false;
       this._refreshContext();
-      this._drain();
+      this.turns.settled();
     }
 
     this.onEvent(compact(rec));
@@ -178,12 +191,8 @@ export class Dispatcher {
 
   /** The process ended (pi's client already failed what was pending). */
   _onClose(code) {
-    const wasStreaming = this.streaming;
-    this.streaming = false;
-    if (this.queue.length) {
-      this.queue = []; // the process is gone: these messages cannot be delivered to the conversation they were meant for
-      this._queueChanged();
-    }
+    const wasStreaming = this.turns.busy;
+    this.turns.closed();
     this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
   }
 
@@ -206,7 +215,7 @@ export class Dispatcher {
 
   /** Past the set size, between turns: pi compacts the conversation. Messages that arrive meanwhile wait their turn. */
   async _maybeCompact() {
-    if (!this.compactAt || this.streaming || !this.pi.running) return;
+    if (!this.compactAt || this.turns.busy || !this.pi.running) return;
     let sessionKey = null;
     try {
       const st = await this.command('get_state');
@@ -219,18 +228,10 @@ export class Dispatcher {
       name: this.recordName,
       owner: this,
       compactAt: this.compactAt,
-      busy: this.streaming,
+      busy: this.turns.busy,
       sessionKey,
       context: () => this.context,
-      compact: async () => {
-        this.streaming = true; // busy: what is sent now waits
-        try {
-          await this.command('compact', {}, 600_000);
-        } finally {
-          this.streaming = false;
-          this._drain();
-        }
-      },
+      compact: () => this.turns.hold(() => this.command('compact', {}, 600_000)), // what is sent meanwhile waits
       contextAfter: async () => {
         try {
           this.context = PiRpc.contextOf(await this.command('get_session_stats', {}, 30_000));
@@ -258,7 +259,7 @@ export class Dispatcher {
     return {
       name: this.recordName,
       get busy() {
-        return d.streaming;
+        return d.turns.busy;
       },
       get cwd() {
         return d.cwd;
@@ -285,7 +286,7 @@ export class Dispatcher {
       await this.ensureStarted();
       const settled = this.pi.waitSettled(timeoutMs);
       settled.catch(() => {});
-      const r = await this._send(text);
+      const r = await this.turns.start(text);
       if (r.disposition !== 'handled') await settled;
       const msgs = (await this.command('get_messages', {}, 60_000))?.messages ?? [];
       const last = [...msgs].reverse().find((m) => m.role === 'assistant');
@@ -341,7 +342,7 @@ export class Dispatcher {
 
   async models() {
     // A provider added to pi outside agentd shows up here: restart (when idle) so pi reloads its files.
-    if (this._configChanged() && !this.streaming) {
+    if (this._configChanged() && !this.turns.busy) {
       log('pi config changed since start, restarting the dispatcher to pick it up');
       await this.restart().catch((err) => log(`restart for new config failed: ${err.message}`));
     }
@@ -398,61 +399,18 @@ export class Dispatcher {
     await this.ensureStarted();
     if (typeof message !== 'string' || !message.trim()) throw new Error('message is required');
     // A turn is running: the message waits its turn (first come, first served).
-    if (this.streaming) {
-      this.queue.push(message);
-      this._queueChanged();
-      return { disposition: 'queued', position: this.queue.length };
-    }
-    return this._send(message);
-  }
-
-  async _send(message) {
-    this.streaming = true; // a prompt is on its way: a message that arrives now waits
-    try {
-      const r = await this.command('prompt', { message }, 120_000);
-      // Handled without a turn (a command): nothing will settle, so the next message may go.
-      if (r?.disposition === 'handled') this.streaming = false;
-      return { disposition: r?.disposition ?? null };
-    } catch (err) {
-      this.streaming = false;
-      throw err;
-    }
-  }
-
-  /** The turn ended: send the next message that waited. */
-  _drain() {
-    if (this.streaming || !this.queue.length) return;
-    const next = this.queue.shift();
-    this._queueChanged();
-    this._send(next).then(
-      () => this._drain(),
-      (err) => {
-        log(`could not send a queued message: ${err.message}`);
-        this._drain();
-      },
-    );
-  }
-
-  _queueChanged() {
-    this.onEvent({ type: 'dispatcher_queue', queued: this.queue.length });
+    return this.turns.submit(message);
   }
 
   /** Take a waiting message back (a person changed their mind). */
   dequeue(index) {
-    const i = Number(index);
-    if (!Number.isInteger(i) || i < 0 || i >= this.queue.length) return { removed: false };
-    this.queue.splice(i, 1);
-    this._queueChanged();
-    return { removed: true };
+    return this.turns.take(index);
   }
 
   async abort() {
     if (!this.child) return { aborted: false, reason: 'not running' };
     // Stop means stop: what was waiting behind the turn is dropped too.
-    if (this.queue.length) {
-      this.queue = [];
-      this._queueChanged();
-    }
+    this.turns.clear();
     await this.command('abort');
     return { aborted: true };
   }
@@ -481,7 +439,7 @@ export class Dispatcher {
   async _turns() {
     try {
       const file = (await this.state())?.sessionFile;
-      return this.store.turns(file, { running: this.streaming });
+      return this.store.turns(file, { running: this.turns.busy });
     } catch {
       return [];
     }
@@ -507,7 +465,7 @@ export class Dispatcher {
    * file when it starts. The conversation returns through the session file.
    */
   async restart() {
-    if (this.streaming) throw new Error('dispatcher is working on a prompt; abort it first');
+    if (this.turns.busy) throw new Error('dispatcher is working on a prompt; abort it first');
     if (this.child) {
       try {
         const st = await this.command('get_state');

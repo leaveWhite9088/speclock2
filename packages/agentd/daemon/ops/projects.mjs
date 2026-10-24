@@ -9,6 +9,7 @@ import { savedContext } from '../../core/dispatcher.mjs';
 import * as projects from '../../core/projects.mjs';
 import { listTemplates, removeTemplate, saveTemplate } from '../../core/templates.mjs';
 import { dispatchers, wireAgent } from '../dispatchers.mjs';
+import { withInterrupted } from '../startup.mjs';
 
 /** Refuse while something of the project runs (unless forced), then stop its dispatcher. */
 async function stopProjectProcesses(project, force) {
@@ -30,6 +31,7 @@ export function projectOps(ctx) {
     projects: () => ({
       projects: projects.listProjects().map((p) => ({
         ...p,
+        instances: withInterrupted(p.instances, (i) => i.key),
         dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), compactAt: projects.dispatcherCompactAt(p.id), compactions: dispatchers.get(p.id)?.compactions() ?? 0, queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(DATA_DIR, 'dispatcher-sessions', p.id)) },
       })),
       limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: ctx.idleInstanceMs / 60_000 },

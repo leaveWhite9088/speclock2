@@ -82,7 +82,9 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | | `daemon/guard.mjs` | 谁能调哪些操作（调度器的限制）、项目内名字解析 |
 | | `daemon/receipts.mjs` | 回执（`receipts.jsonl`） |
 | 核心 | `core/agent-pool.mjs` | 只做再导出，保持一个导入路径 |
-| | `core/pool/config.mjs` | 常量、CLI 注册表、`agentd.config.json` |
+| | `core/data-dir.mjs` | 数据放哪（`AGENTD_DATA_DIR` 可改，私有测试守护进程靠它）；没有任何依赖 |
+| | `core/app-config.mjs` | 读 `agentd.config.json`（全局设置；各部分读自己的那一段）；没有任何依赖 |
+| | `core/pool/config.mjs` | 执行者池自己的：CLI 注册表、各 CLI 的默认目录、超时、强停阈值 |
 | | `core/pool/store.mjs` | 会话旁路数据（标签、目录、模型、上下文、压缩次数） |
 | | `core/pool/registry.mjs` | 池 Map、进程数上限、同类型启动锁 |
 | | `core/pool/acp-client.mjs` | 只做再导出，导入路径不变；代码在 `core/pool/acp/` |
@@ -112,6 +114,13 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 
 依赖方向是单向的：入口 → 客户端 → daemon → core（`core/pool/` 内：acp/client → acp/ 里的各块、registry/store/metrics/compaction → config；acp/ 里的各块互相不引用，只被 client 组合）。`core` 不知道 HTTP、MCP、pi 扩展、
 命名管道的存在，所以能被任何前端复用（测试脚本就通过同样的 socket 驱动它）。
+
+**层次由测试守着**（`tools/layers-test.mjs`，直接读源码里的 import，不启动任何东西）：
+
+- 叶子（`data-dir`、`app-config`、`transcripts`、`rules`、`reply`、`pi-rpc`、`pi-models`、`session-disk`、`journal`、`tasks`）只引用叶子。
+- `core/pool/` 只引用池里的文件，加上只管数据和文件的 `data-dir`、`app-config`、`transcripts`。
+- `core/` 不引用 `daemon/`、`client/`、`extension/`、`server/`；池外面的只经 `core/agent-pool.mjs`（或调度器共用的 `compaction`、`store`、`system-prompt`）进池；`daemon/` 里的 `ops/` 文件互不引用。
+- 例如"上次被中断的任务"（`interrupted`）不在池的实例列表里，是守护进程在返回前加上的（`daemon/startup.mjs` 的 `withInterrupted`），因为那是启动对账的信息，不是池的事实。
 
 ---
 

@@ -6,7 +6,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { AcpClient } from './acp-client.mjs';
-import { interruptedOf } from '../journal.mjs';
 import { canCompact, contextOf } from './compaction.mjs';
 import { AGENTS, DATA_DIR, log } from './config.mjs';
 import { pool } from './registry.mjs';
@@ -119,8 +118,6 @@ export function listInstances() {
     /** The same prompts one by one, so each can be cancelled: [{ jobId, text, at }]. */
     waitingJobs: a.waitingJobs(),
     unstable: a.unstable,
-    /** Its last task was cut off by a daemon shutdown (until it gets new work): { jobId, startedAt, prompt }. */
-    interrupted: interruptedOf(a.name),
     lastError: a.child ? null : (a.lastError ?? null),
     context: contextOf(a),
     compactAt: a.compactAt,

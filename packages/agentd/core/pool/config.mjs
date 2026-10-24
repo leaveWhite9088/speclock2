@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONFIG } from '../app-config.mjs';
 import { DATA_DIR } from '../data-dir.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -99,8 +100,7 @@ export const log = (...a) => process.stderr.write(`[agent-pool] ${a.join(' ')}\n
 export const DEFAULT_AGENT = process.env.AGENTD_DEFAULT_AGENT || 'mcode';
 
 /**
- * Optional per-agent startup configuration: `agentd.config.json` next to this
- * lab, or AGENTD_CONFIG to point elsewhere.
+ * Optional per-agent startup configuration, from `agentd.config.json` (see core/app-config.mjs).
  *
  *   { "agents": { "mcode": { "cwd": "D:/work/project-a" },
  *                 "dsh":   { "cwd": "D:/work/project-b" } } }
@@ -108,20 +108,10 @@ export const DEFAULT_AGENT = process.env.AGENTD_DEFAULT_AGENT || 'mcode';
  * Precedence: explicit cwd on the request > AGENTD_CWD_<AGENT> env > this file >
  * the agent's built-in default > BASE_CWD.
  */
-const CONFIG_FILE =
-  process.env.AGENTD_CONFIG || join(ROOT, 'agentd.config.json');
-
-/** Parsed `agentd.config.json`; the dispatcher reads its own section from it. */
-export let CONFIG = {};
+export { CONFIG };
 
 (function applyConfig() {
-  let cfg = {};
-  try {
-    if (existsSync(CONFIG_FILE)) cfg = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) ?? {};
-  } catch (err) {
-    log('agentd.config.json unreadable, ignoring:', err.message);
-  }
-  CONFIG = cfg;
+  const cfg = CONFIG;
   for (const [name, spec] of Object.entries(AGENTS)) {
     spec.type = name;
     const fromEnv = process.env[`AGENTD_CWD_${name.toUpperCase()}`];

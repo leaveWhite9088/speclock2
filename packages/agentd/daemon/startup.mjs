@@ -4,7 +4,7 @@
  * daemon announces them once its socket is up.
  */
 
-import { reconcileJournal } from '../core/journal.mjs';
+import { interruptedOf, reconcileJournal } from '../core/journal.mjs';
 import { endRun } from '../core/tasks.mjs';
 import { appendEntry, findJobSession } from '../core/transcripts.mjs';
 import { appendReceipt } from './receipts.mjs';
@@ -37,3 +37,9 @@ export function recordInterruptedJobs() {
   }
   return lostJobs;
 }
+
+/**
+ * Executor rows with what the last shutdown cut off: `interrupted: { jobId, startedAt, prompt }` while it has had no
+ * new work since, else null. `keyOf(row)` is the executor's key in the pool.
+ */
+export const withInterrupted = (rows, keyOf = (r) => r.id) => rows.map((r) => ({ ...r, interrupted: interruptedOf(keyOf(r)) }));

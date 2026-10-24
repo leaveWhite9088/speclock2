@@ -12,7 +12,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA_DIR } from './pool/config.mjs';
+import { DATA_DIR } from './data-dir.mjs';
 import { handoffStartPrompt, handoffWritePrompt } from './rules.mjs';
 
 const COPIES_DIR = join(DATA_DIR, 'handoffs');

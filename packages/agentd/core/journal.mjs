@@ -10,7 +10,9 @@
 
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DATA_DIR, log } from './pool/config.mjs';
+import { DATA_DIR } from './data-dir.mjs';
+
+const log = (...a) => process.stderr.write(`[journal] ${a.join(' ')}\n`);
 
 const FILE = process.env.AGENTD_JOURNAL_FILE || join(DATA_DIR, 'journal.jsonl');
 const INTERRUPTED_FILE = `${FILE}.interrupted.json`;

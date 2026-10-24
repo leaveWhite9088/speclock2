@@ -14,7 +14,10 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { CONFIG, DATA_DIR, log } from './pool/config.mjs';
+import { CONFIG } from './app-config.mjs';
+import { DATA_DIR } from './data-dir.mjs';
+
+const log = (...a) => process.stderr.write(`[tasks] ${a.join(' ')}\n`);
 
 const FILE = process.env.AGENTD_TASKS_FILE || join(DATA_DIR, 'tasks.json');
 /** The same prompt counts as a resend for this long after a failure. */

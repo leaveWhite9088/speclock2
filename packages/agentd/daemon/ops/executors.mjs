@@ -8,6 +8,7 @@ import * as projects from '../../core/projects.mjs';
 import { wireAgent } from '../dispatchers.mjs';
 import { allocEvent, publish } from '../events.mjs';
 import { viewRows } from '../guard.mjs';
+import { withInterrupted } from '../startup.mjs';
 
 /** @param {{ protocol: number, startedAt: string, idleInstanceMs: number }} ctx */
 export function executorOps(ctx) {
@@ -32,7 +33,7 @@ export function executorOps(ctx) {
     }),
 
     instances: ({ project, short } = {}) => ({
-      instances: viewRows(listInstances(), project, short),
+      instances: viewRows(withInterrupted(listInstances()), project, short),
       types: Object.keys(AGENTS),
     }),
 

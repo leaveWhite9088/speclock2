@@ -70,7 +70,12 @@ SSE 把 `subscribe('*')` 收到的事件原样转发。业务规则只在 agentd
 | --- | --- | --- |
 | 入口 | `extension/agent-router.ts` | 调度器的工具（`agent_run`、`propose_handoff` 等）+ 渲染 |
 | 客户端 | `client/agentd-client.mjs` | 连接 + 订阅 + 续传 |
-| 服务 | `daemon/agentd.mjs` | 操作表 + socket 协议 + 空闲回收 |
+| 服务 | `daemon/agentd.mjs` | 只做组装：把下面几块接起来并启动 |
+| | `daemon/ops/` | 客户端能调的 61 个操作，按领域分五个文件：`executors`、`run`、`dispatcher`（含交接）、`projects`（含模板）、`system`；`index.mjs` 合并，重名直接报错 |
+| | `daemon/dispatchers.mjs` | 执行者的事件接线、每个项目一个调度器的注册表、交接提议和连续失败计数 |
+| | `daemon/startup.mjs` | 启动时处理上一个守护进程没跑完的任务 |
+| | `daemon/server.mjs` | socket 协议、端点文件、监听 |
+| | `daemon/lifecycle.mjs` | 空闲回收、空闲退出、关闭 |
 | | `daemon/events.mjs` | 事件身份（epoch/seq）、环形缓冲、投递 |
 | | `daemon/guard.mjs` | 谁能调哪些操作（调度器的限制）、项目内名字解析 |
 | | `daemon/receipts.mjs` | 回执（`receipts.jsonl`） |

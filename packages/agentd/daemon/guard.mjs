@@ -9,7 +9,7 @@ import * as projects from '../core/projects.mjs';
  * Requests from a project's dispatcher carry `project`. Everything it names is
  * resolved inside that project, and a name that already points elsewhere is refused.
  */
-const AGENT_ARG_OPS = new Set([
+export const AGENT_ARG_OPS = new Set([
   'status', 'sessions', 'use', 'new', 'rename', 'models', 'setModel', 'run', 'tail', 'wait', 'cancel', 'transcript',
 ]);
 

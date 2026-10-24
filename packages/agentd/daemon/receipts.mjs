@@ -20,6 +20,7 @@ export function appendReceipt(agent, result, prompt, eventId = null, task = {}) 
     sessionId: result?.sessionId ?? null,
     status: m.outcome ?? (m.error ? 'failed' : m.stopReason === 'cancelled' ? 'cancelled' : 'done'),
     forced: Boolean(m.forced),
+    failureSource: m.failureSource ?? null,
     stopReason: m.stopReason ?? null,
     durationMs: m.durationMs ?? null,
     health: m.health ?? 'ok',

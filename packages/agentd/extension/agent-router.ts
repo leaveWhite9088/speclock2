@@ -165,7 +165,7 @@ const runTool = defineTool({
 			Type.String({
 				description:
 					"When you send a task again because an earlier attempt failed, the task id or job id of that attempt (printed at the end of every result and error). " +
-					"A task is not sent more than 3 times in total; after that, stop and tell the user.",
+					"Only when the user has asked for a retry. A task is not sent more than 3 times in total; after that, stop and tell the user.",
 			}),
 		),
 	}),
@@ -187,7 +187,16 @@ const runTool = defineTool({
 		});
 		// Printed after every result and error, so a retry can name what it retries.
 		const tag = `[task ${started.taskId}, attempt ${started.attempt} of ${started.maxAttempts}, job ${started.jobId}]`;
-		const failure = (message: string) => new Error(`${message}\n${tag}`);
+		// Say where a failure comes from, and that it is for the user to decide what happens next.
+		const failure = (message: string, source?: string) => {
+			const from =
+				source === "cli"
+					? "The executor's own CLI reported this error (forwarded as it came):\n"
+					: source === "agentd"
+						? "agentd reports this (it is not an error message from the CLI):\n"
+						: "";
+			return new Error(`${from}${message}\n${tag}\nTell the user and wait for their decision. Do not retry or reassign this on your own.`);
+		};
 
 		const off = c.on("progress", (ev: any) => {
 			if (ev.jobId !== started.jobId) return;
@@ -206,7 +215,8 @@ const runTool = defineTool({
 		});
 
 		const onAbort = () => {
-			c.call("cancel", { agent }).catch(() => {});
+			// This task only (running or still waiting), not whatever else the executor happens to be running.
+			c.call("cancel", { agent, jobId: started.jobId }).catch(() => {});
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -222,12 +232,12 @@ const runTool = defineTool({
 					} catch {
 						const snap = await c.call("tail", { agent, jobId: started.jobId }).catch(() => null);
 						if (snap && !snap.running) {
-							if (snap.metrics?.error) throw failure(snap.metrics.error);
+							if (snap.metrics?.error) throw failure(snap.metrics.error, snap.metrics.failureSource);
 							result = { text: snap.text, sessionId: snap.sessionId, stopReason: "end_turn", metrics: snap.metrics };
-						} else if (Date.now() > deadline) throw failure("agent_run is still waiting after 3 hours");
+						} else if (Date.now() > deadline) throw failure("agent_run is still waiting after 3 hours", "agentd");
 						continue;
 					}
-					if (ev.error) throw failure(ev.error);
+					if (ev.error) throw failure(ev.error, ev.metrics?.failureSource);
 					result = ev.result;
 				}
 
@@ -526,8 +536,8 @@ ${roster}
 					"You are the dispatcher. Hands-on work (writing files, code, drawings, running commands) goes to the executor whose role fits it, through agent_run; " +
 					"do it yourself only when no executor fits, and say so. Pick by role and directory from the list above. " +
 					"This list is newer than anything agent_instances returned earlier in the conversation. " +
-					"If a task fails you may send it again, passing retry_of (the task id printed with the failure). A task is sent at most 3 times in total: " +
-					"after that, tell the user what happened instead of trying again.",
+					"If a task fails, tell the user the reason exactly as reported and wait for their decision; do not retry or give it to another executor on your own. " +
+					"Send it again only when the user asks (pass retry_of, the task id printed with the failure; a task is sent at most 3 times in total).",
 			};
 		});
 	}

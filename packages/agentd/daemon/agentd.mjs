@@ -271,6 +271,7 @@ const OPS = {
   'dispatcher.setThinking': ({ project, level }) => getDispatcher(project).setThinking(level),
   'dispatcher.prompt': ({ project, message }) => getDispatcher(project).prompt(message),
   'dispatcher.abort': ({ project } = {}) => getDispatcher(project).abort(),
+  'dispatcher.dequeue': ({ project, index }) => getDispatcher(project).dequeue(index),
   'dispatcher.new': ({ project } = {}) => getDispatcher(project).newSession(),
   'dispatcher.sessions': ({ project } = {}) => getDispatcher(project).sessions(),
   'dispatcher.deleteSession': ({ project, sessionFile }) => getDispatcher(project).deleteSession(sessionFile),
@@ -305,7 +306,7 @@ const OPS = {
   projects: () => ({
     projects: projects.listProjects().map((p) => ({
       ...p,
-      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
+      dispatcher: { alive: Boolean(dispatchers.get(p.id)?.child), busy: Boolean(dispatchers.get(p.id)?.busy), queued: (dispatchers.get(p.id)?.queue ?? []).map((m) => m.slice(0, 300)), context: (dispatchers.get(p.id)?.child ? dispatchers.get(p.id)?.context : null) ?? savedContext(join(ROOT, 'data', 'dispatcher-sessions', p.id)) },
     })),
     limits: { maxProcesses: MAX_PROCESSES, alive: aliveCount(), global: aliveCount((a) => !a.project), idleMinutes: IDLE_INSTANCE_MS / 60_000 },
   }),
@@ -438,7 +439,7 @@ const OPS = {
         task,
       );
       publish(ev);
-      const failed = !!error || !!result?.metrics?.error;
+      const failed = (!!error || !!result?.metrics?.error) && error?.metrics?.outcome !== 'cancelled';
       const streak = failed ? (failStreak.get(a.name) ?? 0) + 1 : 0;
       failStreak.set(a.name, streak);
       suggestHandoff(a, `连续 ${streak} 次任务失败`, `最近 ${streak} 次运行都失败了：${error?.message ?? result?.metrics?.error ?? ''}`, streak >= FAILURES_BEFORE_HANDOFF);
@@ -478,7 +479,8 @@ const OPS = {
   tail: ({ agent, jobId }) => getAgent(agent).tail(jobId),
   wait: ({ agent, jobId }) => getAgent(agent).tail(jobId),
 
-  cancel: ({ agent }) => getAgent(agent).cancel(),
+  /** With a `jobId`: that run only (waiting or running); without: whatever the executor is running now. */
+  cancel: ({ agent, jobId }) => getAgent(agent).cancel(jobId),
 
   /** A person has looked at an executor marked unstable: let it take work again. */
   'agent.recover': ({ agent }) => {

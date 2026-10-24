@@ -36,6 +36,8 @@ export interface Member {
 export interface DispatcherInfo {
   alive: boolean;
   busy: boolean;
+  /** Messages sent while a turn runs, waiting their turn (oldest first). */
+  queued?: string[];
   context?: Context | null;
 }
 

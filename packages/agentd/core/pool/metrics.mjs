@@ -35,6 +35,8 @@ export function runMetrics(agent, run) {
     error: run.error,
     // How the run ended: done, failed, timeout, cancelled. `forced`: the process had to be killed to end it.
     outcome: outcomeOf(run),
+    // Who the failure comes from: 'cli' (its own error, forwarded as it came) or 'agentd' (we report it).
+    failureSource: run.error ? (run.errorSource ?? 'agentd') : null,
     forced: Boolean(run.forced),
   };
 

@@ -1,4 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { useLayoutEffect, useRef } from 'react';
+import { toast } from '@/components/ui/toast';
+import { api, pq } from '@/lib/api';
 import { useSelectedMember } from '@/hooks/queries';
 import { useConversation } from '@/hooks/useConversation';
 import type { Item } from '@/lib/types';
@@ -65,6 +69,16 @@ export function Chat() {
   };
 
   const list = blocks(items);
+  const qc = useQueryClient();
+  const waitingMsgs = isDispatcher ? (project?.dispatcher?.queued ?? []) : [];
+  const dequeue = async (index: number) => {
+    try {
+      await api('POST', `/api/dispatcher/dequeue${pq(project?.id ?? '')}`, { index });
+    } catch (e) {
+      toast((e as Error).message);
+    }
+    await qc.invalidateQueries({ queryKey: ['projects'] });
+  };
   // Which dispatched tasks wait behind another: an executor works on one thing at a time, in order, so of its
   // unfinished dispatches the newest `waiting` ones are the queued ones (the server counts them).
   const queued = new Set<string>();
@@ -87,6 +101,19 @@ export function Chat() {
             )}
           </div>
         )}
+        {waitingMsgs.length ? (
+          <div className="mx-auto grid max-w-[740px] gap-2 px-6 pb-16">
+            {waitingMsgs.map((m, i) => (
+              <div key={`${i}-${m.slice(0, 20)}`} className="flex items-center justify-end gap-2 text-[12.5px] text-muted">
+                <span className="shrink-0">排队中</span>
+                <span className="max-w-[70%] truncate rounded-lg bg-bubble px-3 py-[7px] text-sm text-ink opacity-70">{m}</span>
+                <button type="button" aria-label="取消排队" title="取消排队" className="shrink-0 rounded p-1 hover:bg-hover hover:text-ink" onClick={() => void dequeue(i)}>
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
       {project ? (
         <Composer

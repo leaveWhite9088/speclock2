@@ -262,10 +262,18 @@ export function useConversation(project: string, sel: string, member: Member | u
 
   const send = useCallback(
     async (text: string) => {
-      itemsRef.current.push({ id: next(), kind: 'user', text });
+      const mine = next();
+      itemsRef.current.push({ id: mine, kind: 'user', text });
       commit();
-      if (sel === DISPATCHER) await api('POST', `/api/dispatcher/prompt${pq(project)}`, { message: text });
-      else {
+      if (sel === DISPATCHER) {
+        const r = await api<{ disposition?: string }>('POST', `/api/dispatcher/prompt${pq(project)}`, { message: text });
+        if (r?.disposition === 'queued') {
+          // It waits behind the turn that is running: shown in the queue under the conversation, and in the
+          // conversation itself once its turn comes.
+          itemsRef.current = itemsRef.current.filter((i) => i.id !== mine);
+          commit();
+        }
+      } else {
         echoed.current.push(text);
         await api('POST', `/api/agents/${enc(sel)}/run`, { prompt: text, sessionId: sessionId.current || undefined });
       }

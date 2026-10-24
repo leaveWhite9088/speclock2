@@ -91,6 +91,8 @@ export class Dispatcher {
     this.pending = new Map();
     this.spawnCount = 0;
     this.streaming = false;
+    /** Messages sent while a turn runs, in order. A turn that ends starts the next one. */
+    this.queue = [];
     this.context = null;
     this.lastError = null;
     this.stderrTail = '';
@@ -177,6 +179,10 @@ export class Dispatcher {
       const wasStreaming = this.streaming;
       this.child = null;
       this.streaming = false;
+      if (this.queue.length) {
+        this.queue = []; // the process is gone: these messages cannot be delivered to the conversation they were meant for
+        this._queueChanged();
+      }
       for (const { reject } of this.pending.values()) reject(new Error('dispatcher pi exited'));
       this.pending.clear();
       this.onEvent({ type: 'dispatcher_exit', code, wasStreaming, spawns: this.spawnCount });
@@ -220,6 +226,7 @@ export class Dispatcher {
     if (rec.type === 'agent_settled') {
       this.streaming = false;
       this._refreshContext();
+      this._drain();
     }
 
     this.onEvent(compact(rec));
@@ -229,7 +236,7 @@ export class Dispatcher {
   _refreshContext() {
     this.command('get_session_stats')
       .then((rec) => {
-        const c = rec?.data?.contextUsage;
+        const c = rec?.contextUsage; // `command` already unwraps `data`
         this.context = c && c.percent != null ? { used: c.tokens ?? null, size: c.contextWindow ?? null, percent: +c.percent.toFixed(1) } : null;
         // Kept on disk so the figure is still there when the process is idle-reaped or the daemon restarts.
         if (this.context) writeFileSync(join(this.sessionDir, 'context.json'), JSON.stringify(this.context));
@@ -365,14 +372,63 @@ export class Dispatcher {
   /** Start a turn. Returns at once; progress arrives through onEvent. */
   async prompt(message) {
     await this.ensureStarted();
-    if (this.streaming) throw new Error('dispatcher is already working on a prompt');
     if (typeof message !== 'string' || !message.trim()) throw new Error('message is required');
-    const r = await this.command('prompt', { message }, 120_000);
-    return { disposition: r?.disposition ?? null };
+    // A turn is running: the message waits its turn (first come, first served).
+    if (this.streaming) {
+      this.queue.push(message);
+      this._queueChanged();
+      return { disposition: 'queued', position: this.queue.length };
+    }
+    return this._send(message);
+  }
+
+  async _send(message) {
+    this.streaming = true; // a prompt is on its way: a message that arrives now waits
+    try {
+      const r = await this.command('prompt', { message }, 120_000);
+      // Handled without a turn (a command): nothing will settle, so the next message may go.
+      if (r?.disposition === 'handled') this.streaming = false;
+      return { disposition: r?.disposition ?? null };
+    } catch (err) {
+      this.streaming = false;
+      throw err;
+    }
+  }
+
+  /** The turn ended: send the next message that waited. */
+  _drain() {
+    if (this.streaming || !this.queue.length) return;
+    const next = this.queue.shift();
+    this._queueChanged();
+    this._send(next).then(
+      () => this._drain(),
+      (err) => {
+        log(`could not send a queued message: ${err.message}`);
+        this._drain();
+      },
+    );
+  }
+
+  _queueChanged() {
+    this.onEvent({ type: 'dispatcher_queue', queued: this.queue.length });
+  }
+
+  /** Take a waiting message back (a person changed their mind). */
+  dequeue(index) {
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= this.queue.length) return { removed: false };
+    this.queue.splice(i, 1);
+    this._queueChanged();
+    return { removed: true };
   }
 
   async abort() {
     if (!this.child) return { aborted: false, reason: 'not running' };
+    // Stop means stop: what was waiting behind the turn is dropped too.
+    if (this.queue.length) {
+      this.queue = [];
+      this._queueChanged();
+    }
     await this.command('abort');
     return { aborted: true };
   }

@@ -98,6 +98,9 @@ export class AcpClient {
     this.inflight = 0;
     /** Called when a prompt really starts, after any that were ahead of it. */
     this.onRunStart = null;
+    /** Runs waiting their turn, and those among them cancelled before it came. */
+    this.queuedJobs = new Set();
+    this.cancelledJobs = new Set();
     /** Rules this agent must follow, given to it through its CLI's own channel (see system-prompt.mjs). */
     this.rules = spec.systemPrompt ?? null;
     this._injection = null;
@@ -224,7 +227,13 @@ export class AcpClient {
     if (msg.id != null && this.pending.has(msg.id)) {
       const { resolve, reject } = this.pending.get(msg.id);
       this.pending.delete(msg.id);
-      if (msg.error) reject(new Error(msg.error.message ?? JSON.stringify(msg.error)));
+      if (msg.error) {
+        // The CLI itself answered with an error: that is its message, and it is passed on as it came.
+        const err = new Error(msg.error.message ?? JSON.stringify(msg.error));
+        err.source = 'cli';
+        err.code = msg.error.code;
+        reject(err);
+      }
       else resolve(msg.result);
       return;
     }
@@ -484,7 +493,12 @@ export class AcpClient {
     this.initPromise = null;
     this.sessionId = null;
     this.live.clear();
-    for (const { reject } of this.pending.values()) reject(new Error(`${this.name} process was stopped`));
+    for (const { reject } of this.pending.values()) {
+      const err = new Error(`${this.name} process was stopped`);
+      err.forced = true;
+      if (this.run?.cancelRequested) err.kind = 'cancelled'; // a person asked it to stop and it did not
+      reject(err);
+    }
     this.pending.clear();
     killTree(child);
     const now = Date.now();
@@ -822,7 +836,24 @@ export class AcpClient {
     const jobId = `${this.name}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const ahead = this.inflight;
     this.inflight += 1;
+    this.queuedJobs.add(jobId);
     const done = this._enqueue(async () => {
+      this.queuedJobs.delete(jobId);
+      if (this.cancelledJobs.delete(jobId)) {
+        // Cancelled while it waited: it never reaches the CLI.
+        const err = new Error('cancelled before it started');
+        err.kind = 'cancelled';
+        err.metrics = {
+          jobId,
+          error: err.message,
+          outcome: 'cancelled',
+          forced: false,
+          failureSource: 'agentd',
+          health: 'warn',
+          attention: [{ code: 'cancelled', severity: 'warn', source: 'system', text: 'the run was cancelled before it started' }],
+        };
+        throw err;
+      }
       if (this.unstable) {
         const err = new Error(
           `${this.name} is marked unstable: its process had to be killed ${this.forcedStops.length} times in the last ${Math.round(FORCED_STOP_WINDOW_MS / 60_000)} min. ` +
@@ -834,6 +865,7 @@ export class AcpClient {
           error: err.message,
           outcome: 'unstable',
           forced: false,
+          failureSource: 'agentd',
           health: 'error',
           attention: [{ code: 'unstable', severity: 'error', source: 'system', text: err.message }],
         };
@@ -898,6 +930,7 @@ export class AcpClient {
       } catch (err) {
         run.error = err.message;
         run.errorKind = err.kind ?? null;
+        run.errorSource = err.source ?? 'agentd'; // 'cli': what the CLI reported; anything else is agentd's own
         run.forced = Boolean(err.forced);
         // Record the failure and any partial answer, so the transcript has no gap.
         appendEntry(this.name, run.sessionId, {
@@ -1135,11 +1168,29 @@ export class AcpClient {
     };
   }
 
-  /** Ask the agent to stop the in-flight prompt. ACP sends this as a notification. */
-  cancel() {
+  /**
+   * Stop a prompt. With a `jobId`, that one only: a run still waiting is dropped before it starts, the running one
+   * is asked to stop, one that is already over is left alone. Without, whatever runs now (ACP sends this as a
+   * notification).
+   */
+  cancel(jobId = null) {
+    if (jobId) {
+      if (this.queuedJobs.has(jobId)) {
+        this.cancelledJobs.add(jobId);
+        return { cancelled: true, jobId, queued: true };
+      }
+      if (this.run?.jobId !== jobId) return { cancelled: false, jobId, reason: 'not running: it is over, or unknown' };
+    }
     if (!this.sessionId) return { cancelled: false, reason: 'no active session' };
     this._write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: this.sessionId } });
-    if (this.run) this.run.cancelRequested = true;
+    const run = this.run;
+    if (run) {
+      run.cancelRequested = true;
+      const t = setTimeout(() => {
+        if (this.run === run) this._forceStop(`no answer ${CANCEL_GRACE_MS / 1000}s after the cancel`);
+      }, CANCEL_GRACE_MS);
+      t.unref?.();
+    }
     return { cancelled: true, sessionId: this.sessionId };
   }
 

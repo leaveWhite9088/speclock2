@@ -397,6 +397,9 @@ async function ensureSession(sessionId) {
   saveMap();
 }
 
+/** Sessions whose running prompt was asked to stop, so it ends as `cancelled` and not as a normal end. */
+const cancelling = new Set();
+
 async function handle(method, params, id) {
   switch (method) {
     case 'initialize':
@@ -446,8 +449,16 @@ async function handle(method, params, id) {
       return;
     }
 
+    case 'session/cancel': {
+      // A notification: no reply. pi stops the turn (and its running tool); the prompt then ends as cancelled.
+      cancelling.add(params?.sessionId);
+      await rpc.command('abort', {}, 30_000).catch((err) => log(`abort failed: ${err.message}`));
+      return;
+    }
+
     case 'session/prompt': {
       const sid = params.sessionId;
+      cancelling.delete(sid);
       const text = (params.prompt ?? [])
         .map((p) => p.text ?? '')
         .join('')
@@ -512,7 +523,7 @@ async function handle(method, params, id) {
           log(`stats unavailable: ${err.message}`);
         }
 
-        reply(id, { stopReason: 'end_turn' });
+        reply(id, { stopReason: cancelling.delete(sid) ? 'cancelled' : 'end_turn' });
       } finally {
         const i = rpc.textListeners.indexOf(onText);
         if (i >= 0) rpc.textListeners.splice(i, 1);

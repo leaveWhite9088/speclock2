@@ -138,6 +138,7 @@ const routes = [
   ['POST', '/api/dispatcher/thinking', ({ query, body }) => call('dispatcher.setThinking', { project: query.project, level: body.level })],
   ['POST', '/api/dispatcher/prompt', ({ query, body }) => call('dispatcher.prompt', { project: query.project, message: body.message })],
   ['POST', '/api/dispatcher/abort', ({ query }) => call('dispatcher.abort', { project: query.project })],
+  ['POST', '/api/dispatcher/dequeue', ({ query, body }) => call('dispatcher.dequeue', { project: query.project, index: body.index })],
   ['POST', '/api/dispatcher/rename', ({ query, body }) => call('dispatcher.renameSession', { project: query.project, sessionFile: body.sessionFile, label: body.label })],
   ['DELETE', '/api/agents/:id/sessions/:sid', ({ params }) => call('deleteSession', { agent: params.id, sessionId: params.sid })],
   ['DELETE', '/api/dispatcher/sessions', ({ query }) => call('dispatcher.deleteSession', { project: query.project, sessionFile: query.file })],

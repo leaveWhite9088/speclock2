@@ -5,7 +5,7 @@
  * extension does the same thing with rendering attached.
  */
 
-import { connect } from '../../client/agentd-client.mjs';
+import { connect, ENDPOINT_FILE } from '../../client/agentd-client.mjs';
 
 export class Scheduler {
   constructor(client) {
@@ -136,19 +136,31 @@ export async function stopDaemon({ force = process.env.AGENTD_FORCE_STOP === '1'
     }
     if (busy.length) throw new Error(`not stopping agentd: it is still working on ${busy.join(', ')}. Stop it yourself, or set AGENTD_FORCE_STOP=1.`);
   }
+  // Only the daemon this client talks to (the one in the endpoint file of this data directory): a private test daemon
+  // must not take the person's own daemon down with it.
   const { execFileSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  let pid = null;
   try {
-    execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-Command',
-        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*agentd.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
-      ],
-      { stdio: 'ignore', timeout: 20_000 },
-    );
+    pid = Number(JSON.parse(readFileSync(ENDPOINT_FILE, 'utf8')).pid) || null;
   } catch {
-    /* nothing running */
+    /* no endpoint file */
+  }
+  const where = pid ? `$_.ProcessId -eq ${pid}` : process.env.AGENTD_DATA_DIR ? null : '$true';
+  if (where) {
+    try {
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*agentd.mjs*' -and (${where}) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`,
+        ],
+        { stdio: 'ignore', timeout: 20_000 },
+      );
+    } catch {
+      /* nothing running */
+    }
   }
   await new Promise((r) => setTimeout(r, 800));
 }

@@ -7,10 +7,10 @@
  */
 
 import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { DATA_DIR } from './data-dir.mjs';
 
-const RESULTS_DIR = process.env.AGENTD_RESULTS_DIR || join(dirname(dirname(fileURLToPath(import.meta.url))), 'data', 'results');
+const RESULTS_DIR = process.env.AGENTD_RESULTS_DIR || join(DATA_DIR, 'results');
 export const REPLY_LIMIT = Number(process.env.AGENTD_REPLY_CHARS) || 6000;
 const KEEP_FILES = 200;
 

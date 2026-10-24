@@ -40,7 +40,7 @@ const PI_CLI =
 
 const SESSION_DIR =
   process.env.PI_SESSION_DIR ||
-  join(dirname(dirname(fileURLToPath(import.meta.url))), 'data', 'pi-sessions');
+  join(process.env.AGENTD_DATA_DIR || join(dirname(dirname(fileURLToPath(import.meta.url))), 'data'), 'pi-sessions');
 
 const MAP_FILE = join(SESSION_DIR, 'acp-session-map.json');
 const DEFAULT_CWD = process.env.AGENTD_BASE_CWD || 'D:/Project2/code-261013-speclock2/speclock2';

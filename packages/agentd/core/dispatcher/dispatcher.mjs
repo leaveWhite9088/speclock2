@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { agentDir, usableProviders } from '../pi-models.mjs';
 import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from '../data-dir.mjs';
 import { ContextTracker } from './context.mjs';
 import { SessionStore } from './sessions.mjs';
 import { TurnQueue } from './turn-queue.mjs';
@@ -31,7 +32,7 @@ const PI_CLI =
   process.env.PI_CLI ||
   'D:/Environment/nodejs/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';
 const EXTENSION = process.env.DISPATCHER_EXTENSION || join(ROOT, 'extension', 'agent-router.ts');
-const SESSION_DIR = process.env.DISPATCHER_SESSION_DIR || join(ROOT, 'data', 'dispatcher-sessions');
+const SESSION_DIR = process.env.DISPATCHER_SESSION_DIR || join(DATA_DIR, 'dispatcher-sessions');
 
 const log = (...a) => process.stderr.write(`[dispatcher] ${a.join(' ')}\n`);
 

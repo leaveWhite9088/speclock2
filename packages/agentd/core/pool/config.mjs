@@ -4,12 +4,13 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from '../data-dir.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** packages/agentd */
 const ROOT = join(HERE, '..', '..');
 
-export const DATA_DIR = join(ROOT, 'data');
+export { DATA_DIR };
 
 export const NODE_BIN = process.env.MCODE_NODE_BIN || 'D:/Environment/nodejs/node.exe';
 const NODE_MODULES = 'D:/Environment/nodejs/node_modules';

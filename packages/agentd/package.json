@@ -43,6 +43,7 @@
     "test:dispatcher-compact": "node tools/dispatcher-compact-test.mjs",
     "test:pieces": "node tools/pieces-test.mjs",
     "test:rules": "node tools/rules-test.mjs",
+    "test:isolated": "node tools/run-isolated.mjs",
     "test:templates": "node tools/templates-test.mjs"
   }
 }

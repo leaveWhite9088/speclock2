@@ -48,6 +48,7 @@ import {
   seedContexts,
 } from '../core/agent-pool.mjs';
 import { Dispatcher, savedContext } from '../core/dispatcher.mjs';
+import { DATA_DIR } from '../core/data-dir.mjs';
 import { createHandoffs } from '../core/handoff.mjs';
 import { listTemplates, removeTemplate, saveTemplate } from '../core/templates.mjs';
 import * as projects from '../core/projects.mjs';
@@ -63,7 +64,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const PIPE_NAME = process.env.AGENTD_PIPE || '\\\\.\\pipe\\pi-agentd';
 const PORT = process.env.AGENTD_PORT ? Number(process.env.AGENTD_PORT) : null;
-const ENDPOINT_FILE = join(ROOT, 'data', 'agentd.endpoint.json');
+const ENDPOINT_FILE = join(DATA_DIR, 'agentd.endpoint.json');
 const IDLE_MS = Number(process.env.AGENTD_IDLE_MIN || 30) * 60_000;
 const PROTOCOL = 3;
 /** Project instances and dispatchers idle for this long are stopped. */
@@ -134,7 +135,7 @@ function getDispatcher(project = null) {
     d = new Dispatcher({
       cwd: projects.projectRoot(project),
       project,
-      sessionDir: join(ROOT, 'data', 'dispatcher-sessions', project),
+      sessionDir: join(DATA_DIR, 'dispatcher-sessions', project),
       onEvent: (ev) => publishLive('dispatcher.event', { project, data: ev }),
       compactAt: projects.dispatcherCompactAt(project),
     });

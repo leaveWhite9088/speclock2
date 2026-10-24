@@ -17,10 +17,9 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './data-dir.mjs';
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const DIR = process.env.AGENTD_TRANSCRIPTS_DIR || join(ROOT, 'data', 'transcripts');
+const DIR = process.env.AGENTD_TRANSCRIPTS_DIR || join(DATA_DIR, 'transcripts');
 
 const safe = (s) => String(s).replace(/[^A-Za-z0-9._~-]/g, '_');
 const fileFor = (instance, sessionId) => join(DIR, safe(instance), `${safe(sessionId)}.jsonl`);
